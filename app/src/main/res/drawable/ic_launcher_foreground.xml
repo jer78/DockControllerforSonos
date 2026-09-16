@@ -1,0 +1,24 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer Sonos Circle -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4" />
+
+    <!-- Central Music Note -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M65,30 L45,30 L45,65 C45,70.52 40.52,75 35,75 C29.48,75 25,70.52 25,65 C25,59.48 29.48,55 35,55 C37.11,55 39.05,55.65 40.67,56.76 L40.67,40 L65,40 L65,30 Z" />
+
+    <!-- Dock/Sync Indicator Lines -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,85 L58,85 L58,95 L50,95 Z M65,85 L73,85 L73,95 L65,95 Z M35,85 L43,85 L43,95 L35,95 Z" />
+
+</vector>
