@@ -72,9 +72,17 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                 val haState by manager.haState.collectAsState()
                 val isTvMode by manager.isTvMode.collectAsState()
                 val currentVolume by manager.currentVolume.collectAsState()
+                val audioSettings by manager.audioSettings.collectAsState()
                 val albumHistory by manager.albumHistory.collectAsState()
                 val speakerGroups by manager.speakerGroups.collectAsState()
                 val showSpectrumAnalyzer by settingsManager.showSpectrumAnalyzer.collectAsState(initial = false)
+                val spectrumColorScheme by settingsManager.spectrumColorScheme.collectAsState(initial = SpectrumColorScheme.RAINBOW)
+                val spectrumHeightPercent by settingsManager.spectrumHeightPercent.collectAsState(initial = 1f)
+                val spectrumConfineToAlbumArt by settingsManager.spectrumConfineToAlbumArt.collectAsState(initial = false)
+                val use24HourClock by settingsManager.use24HourClock.collectAsState(initial = true)
+                val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
+                    initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
+                )
                 // A dream is the wrong place to prompt for a runtime permission - only
                 // shown here if it was already granted from the main app's Settings.
                 val micPermissionGranted = remember {
@@ -85,6 +93,22 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
 
                 var isAmbientMode by remember { mutableStateOf(false) }
                 var isTvAmbientMode by remember { mutableStateOf(false) }
+
+                // Dims the screen in a dark room instead of always running
+                // at full system brightness (see AmbientBrightnessController)
+                // - matters even more here than in MainActivity, since a
+                // screensaver runs for hours unattended overnight.
+                val ambientBrightnessController = remember { AmbientBrightnessController(this@SonosDreamService) }
+                DisposableEffect(Unit) {
+                    ambientBrightnessController.start()
+                    onDispose { ambientBrightnessController.stop() }
+                }
+                val ambientBrightness by ambientBrightnessController.brightness.collectAsState()
+                LaunchedEffect(ambientBrightness) {
+                    val attributes = window.attributes
+                    attributes.screenBrightness = ambientBrightness
+                    window.attributes = attributes
+                }
 
                 var lastIsPlaying by remember { mutableStateOf(trackState.isPlaying) }
                 var lastIsTvMode by remember { mutableStateOf(isTvMode) }
@@ -137,15 +161,22 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     }
                 }
 
-                LaunchedEffect(isTvMode, trackState.isPlaying) {
+                LaunchedEffect(isTvMode, trackState.isPlaying, tvScreensaverDelaySeconds) {
                     if (isTvMode && trackState.isPlaying) {
-                        delay(20_000) // 20s of TV actively playing triggers the screensaver
+                        delay(tvScreensaverDelaySeconds * 1000L) // user-configurable TV screensaver delay
                         isTvAmbientMode = true
                     } else {
                         // Not in TV mode, or TV mode but paused - go back to (or stay on)
                         // the now-playing screen instead of the screensaver.
                         isTvAmbientMode = false
                     }
+                }
+
+                // Cover Flow / TV Ambient run most of the time here - back
+                // off polling while idle there instead of polling Sonos/HA
+                // every couple seconds around the clock.
+                LaunchedEffect(isAmbientMode, isTvAmbientMode) {
+                    manager.setIdleScreen(isAmbientMode || isTvAmbientMode)
                 }
 
                 Box(Modifier.fillMaxSize()) {
@@ -177,7 +208,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         manager.playAlbum(album)
                                     },
                                     onRemoveAlbum = { manager.removeAlbumFromHistory(it) },
-                                    onWakeUp = { isAmbientMode = false }
+                                    onWakeUp = { isAmbientMode = false },
+                                    use24HourClock = use24HourClock
                                 )
                             }
                             DockScreen.NOW_PLAYING -> {
@@ -205,7 +237,17 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                     onSetLightColorRgb = { r, g, b -> manager.setLightColorRgb(r, g, b) },
                                     onSetLightColorTemp = { manager.setLightColorTempKelvin(it) },
                                     showSpectrumAnalyzer = showSpectrumAnalyzer,
-                                    micPermissionGranted = micPermissionGranted
+                                    micPermissionGranted = micPermissionGranted,
+                                    spectrumColorScheme = spectrumColorScheme,
+                                    spectrumHeightPercent = spectrumHeightPercent,
+                                    spectrumConfineToAlbumArt = spectrumConfineToAlbumArt,
+                                    audioSettings = audioSettings,
+                                    onToggleNightMode = { manager.toggleNightMode() },
+                                    onToggleDialogMode = { manager.toggleDialogMode() },
+                                    onSetBass = { manager.setBass(it) },
+                                    onSetTreble = { manager.setTreble(it) },
+                                    onSetLoudness = { manager.setLoudness(it) },
+                                    onToggleSubEnabled = { manager.toggleSubEnabled() }
                                 )
                             }
                         }

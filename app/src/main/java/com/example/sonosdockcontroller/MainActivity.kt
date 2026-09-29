@@ -73,14 +73,36 @@ class MainActivity : ComponentActivity() {
             val haState by manager.haState.collectAsState()
             val isTvMode by manager.isTvMode.collectAsState()
             val currentVolume by manager.currentVolume.collectAsState()
+            val audioSettings by manager.audioSettings.collectAsState()
             val discoveredSpeakers by manager.discoveredSpeakers.collectAsState()
             val albumHistory by manager.albumHistory.collectAsState()
             val speakerGroups by manager.speakerGroups.collectAsState()
             val showSpectrumAnalyzer by settingsManager.showSpectrumAnalyzer.collectAsState(initial = false)
-            
+            val spectrumColorScheme by settingsManager.spectrumColorScheme.collectAsState(initial = SpectrumColorScheme.RAINBOW)
+            val spectrumHeightPercent by settingsManager.spectrumHeightPercent.collectAsState(initial = 1f)
+            val spectrumConfineToAlbumArt by settingsManager.spectrumConfineToAlbumArt.collectAsState(initial = false)
+            val use24HourClock by settingsManager.use24HourClock.collectAsState(initial = true)
+            val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
+                initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
+            )
+
             var showSettings by remember { mutableStateOf(false) }
             var isAmbientMode by remember { mutableStateOf(false) }
             var isTvAmbientMode by remember { mutableStateOf(false) }
+
+            // Dims the screen in a dark room instead of always running at
+            // full system brightness (see AmbientBrightnessController).
+            val ambientBrightnessController = remember { AmbientBrightnessController(this@MainActivity) }
+            DisposableEffect(Unit) {
+                ambientBrightnessController.start()
+                onDispose { ambientBrightnessController.stop() }
+            }
+            val ambientBrightness by ambientBrightnessController.brightness.collectAsState()
+            LaunchedEffect(ambientBrightness) {
+                val attributes = window.attributes
+                attributes.screenBrightness = ambientBrightness
+                window.attributes = attributes
+            }
             
             var lastIsPlaying by remember { mutableStateOf(trackState.isPlaying) }
             var lastIsTvMode by remember { mutableStateOf(isTvMode) }
@@ -148,9 +170,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            LaunchedEffect(isTvMode, trackState.isPlaying) {
+            LaunchedEffect(isTvMode, trackState.isPlaying, tvScreensaverDelaySeconds) {
                 if (isTvMode && trackState.isPlaying) {
-                    delay(20_000) // 20s of TV actively playing triggers the screensaver
+                    delay(tvScreensaverDelaySeconds * 1000L) // user-configurable TV screensaver delay
                     isTvAmbientMode = true
                 } else {
                     // Not in TV mode, or TV mode but paused - go back to (or stay on)
@@ -165,6 +187,10 @@ class MainActivity : ComponentActivity() {
                 } else {
                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
+                // Cover Flow / TV Ambient run most of the time on a
+                // screensaver - back off polling while idle there instead of
+                // polling Sonos/HA every couple seconds around the clock.
+                manager.setIdleScreen(isAmbientMode || isTvAmbientMode)
             }
 
             LaunchedEffect(Unit) {
@@ -210,7 +236,8 @@ class MainActivity : ComponentActivity() {
                                 onWakeUp = {
                                     isAmbientMode = false
                                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                                }
+                                },
+                                use24HourClock = use24HourClock
                             )
                         }
                         DockScreen.NOW_PLAYING -> {
@@ -245,7 +272,17 @@ class MainActivity : ComponentActivity() {
                                 onSetLightColorRgb = { r, g, b -> manager.setLightColorRgb(r, g, b) },
                                 onSetLightColorTemp = { manager.setLightColorTempKelvin(it) },
                                 showSpectrumAnalyzer = showSpectrumAnalyzer,
-                                micPermissionGranted = micPermissionGranted
+                                micPermissionGranted = micPermissionGranted,
+                                spectrumColorScheme = spectrumColorScheme,
+                                spectrumHeightPercent = spectrumHeightPercent,
+                                spectrumConfineToAlbumArt = spectrumConfineToAlbumArt,
+                                audioSettings = audioSettings,
+                                onToggleNightMode = { manager.toggleNightMode() },
+                                onToggleDialogMode = { manager.toggleDialogMode() },
+                                onSetBass = { manager.setBass(it) },
+                                onSetTreble = { manager.setTreble(it) },
+                                onSetLoudness = { manager.setLoudness(it) },
+                                onToggleSubEnabled = { manager.toggleSubEnabled() }
                             )
                         }
                     }

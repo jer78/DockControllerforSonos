@@ -18,7 +18,12 @@ data class TrackState(
     val nextArtUrl: String = "",
     val rawMetadata: String = "",
     val lastCommandSent: String = "",
-    val groupMembers: List<GroupMemberVolume> = emptyList()
+    val groupMembers: List<GroupMemberVolume> = emptyList(),
+    // Elapsed/total playback position, in seconds, as of the last poll (see
+    // parseSonosTime in SonosDashboardManager.kt) - 0/0 for radio/live
+    // streams and anything SoCo can't report a real position for.
+    val positionSeconds: Int = 0,
+    val durationSeconds: Int = 0
 )
 
 data class GroupMemberVolume(
@@ -41,6 +46,22 @@ data class SonosSpeakerGroup(
     val isJoined: Boolean,
     val ip: String,
     val model: String = ""
+)
+
+// Speaker-hardware audio EQ/features, as opposed to TrackState's per-track
+// info - these barely ever change, so they're polled far less often. A
+// null field means the coordinator doesn't support/report that feature
+// (e.g. Night Sound/Speech Enhancement only exist on soundbars) - the UI
+// hides the corresponding control rather than showing a dead toggle.
+data class SonosAudioSettings(
+    val isSoundbar: Boolean = false,
+    val hasSubwoofer: Boolean = false,
+    val nightMode: Boolean? = null,
+    val dialogMode: Boolean? = null,
+    val bass: Int? = null,
+    val treble: Int? = null,
+    val loudness: Boolean? = null,
+    val subEnabled: Boolean? = null
 )
 
 data class HAState(

@@ -3,6 +3,8 @@ package com.example.sonosdockcontroller
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -31,12 +33,31 @@ class SettingsManager(private val context: Context) {
 
         // Mic-based spectrum analyzer shown behind Now Playing (see SpectrumAnalyzer.kt)
         val SHOW_SPECTRUM_ANALYZER = booleanPreferencesKey("show_spectrum_analyzer")
+        // Stores a SpectrumColorScheme's name (see DashboardUI.kt)
+        val SPECTRUM_COLOR_SCHEME = stringPreferencesKey("spectrum_color_scheme")
+        // Fraction (0-1) of the screen height, measured from the bottom, the
+        // visualizer occupies when it's not confined to the album art.
+        val SPECTRUM_HEIGHT_PERCENT = floatPreferencesKey("spectrum_height_percent")
+        // When true, bars are drawn only over the Now Playing album art
+        // square instead of spanning the full screen.
+        val SPECTRUM_CONFINE_TO_ALBUM_ART = booleanPreferencesKey("spectrum_confine_to_album_art")
+
+        // Cover Flow's ambient clock: true = 24-hour ("14:30"), false = 12-hour ("2:30 PM").
+        val USE_24_HOUR_CLOCK = booleanPreferencesKey("use_24_hour_clock")
+
+        // How long TV mode sits on the Now Playing screen (actively playing)
+        // before dropping into the TV Ambient screensaver, in seconds.
+        val TV_SCREENSAVER_DELAY_SECONDS = intPreferencesKey("tv_screensaver_delay_seconds")
 
         // Sonos never reports a real artist for album favorites (only
         // title/resource/class), so this caches artist names learned by
         // observing a favorited album actually play, keyed by the
         // favorite's playUri - backfilled into the Favorites display.
         val FAVORITE_ARTIST_CACHE_JSON = stringPreferencesKey("favorite_artist_cache_json")
+
+        const val TV_SCREENSAVER_DELAY_MIN_SECONDS = 30
+        const val TV_SCREENSAVER_DELAY_MAX_SECONDS = 1800
+        const val TV_SCREENSAVER_DELAY_DEFAULT_SECONDS = 30
     }
 
     val sonosSpeaker: Flow<String> = context.dataStore.data.map { it[SELECTED_SONOS_SPEAKER] ?: "" }
@@ -55,6 +76,47 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setShowSpectrumAnalyzer(enabled: Boolean) {
         context.dataStore.edit { it[SHOW_SPECTRUM_ANALYZER] = enabled }
+    }
+
+    // Stored as the enum's name; falls back to RAINBOW if unset or stale
+    // (e.g. a scheme that no longer exists after an update).
+    val spectrumColorScheme: Flow<SpectrumColorScheme> = context.dataStore.data.map { prefs ->
+        val name = prefs[SPECTRUM_COLOR_SCHEME]
+        SpectrumColorScheme.entries.find { it.name == name } ?: SpectrumColorScheme.RAINBOW
+    }
+
+    suspend fun setSpectrumColorScheme(scheme: SpectrumColorScheme) {
+        context.dataStore.edit { it[SPECTRUM_COLOR_SCHEME] = scheme.name }
+    }
+
+    val spectrumHeightPercent: Flow<Float> = context.dataStore.data.map { it[SPECTRUM_HEIGHT_PERCENT] ?: 1f }
+
+    suspend fun setSpectrumHeightPercent(percent: Float) {
+        context.dataStore.edit { it[SPECTRUM_HEIGHT_PERCENT] = percent }
+    }
+
+    val spectrumConfineToAlbumArt: Flow<Boolean> =
+        context.dataStore.data.map { it[SPECTRUM_CONFINE_TO_ALBUM_ART] ?: false }
+
+    suspend fun setSpectrumConfineToAlbumArt(enabled: Boolean) {
+        context.dataStore.edit { it[SPECTRUM_CONFINE_TO_ALBUM_ART] = enabled }
+    }
+
+    val use24HourClock: Flow<Boolean> = context.dataStore.data.map { it[USE_24_HOUR_CLOCK] ?: true }
+
+    suspend fun setUse24HourClock(enabled: Boolean) {
+        context.dataStore.edit { it[USE_24_HOUR_CLOCK] = enabled }
+    }
+
+    val tvScreensaverDelaySeconds: Flow<Int> = context.dataStore.data.map {
+        it[TV_SCREENSAVER_DELAY_SECONDS] ?: TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
+    }
+
+    suspend fun setTvScreensaverDelaySeconds(seconds: Int) {
+        context.dataStore.edit {
+            it[TV_SCREENSAVER_DELAY_SECONDS] =
+                seconds.coerceIn(TV_SCREENSAVER_DELAY_MIN_SECONDS, TV_SCREENSAVER_DELAY_MAX_SECONDS)
+        }
     }
 
     val albumHistory: Flow<List<AlbumHistoryItem>> = context.dataStore.data.map { prefs ->

@@ -2,6 +2,8 @@ package com.example.sonosdockcontroller
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import android.content.Context
+import android.graphics.drawable.BitmapDrawable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -42,6 +44,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -49,21 +53,31 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.palette.graphics.Palette
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.ImageRequest
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.abs
@@ -115,7 +129,12 @@ fun MetadataDebuggerOverlay(
                 Text("TITLE: ${trackState.title}", color = Color.Black)
                 Text("ARTIST: ${trackState.artist}", color = Color.Black)
                 Text("ALBUM: ${trackState.album}", color = Color.Black)
-                
+                Text(
+                    "POSITION: ${trackState.positionSeconds}s / DURATION: ${trackState.durationSeconds}s" +
+                        if (trackState.durationSeconds <= 0) "  (no duration reported - progress bar stays hidden)" else "",
+                    color = Color.Black
+                )
+
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color.Black.copy(alpha = 0.2f))
                 
                 Text("SYSTEM METADATA (XML):", color = Color.DarkGray, fontWeight = FontWeight.Bold)
@@ -137,11 +156,32 @@ fun MetadataDebuggerOverlay(
 // Matches the green Sonos itself uses to indicate a muted speaker.
 private val SonosMuteGreen = Color(0xFF4CAF50)
 
+// A long-press timeout (~500ms) is easy to trigger by accident just
+// resting a finger on the screen - the metadata debugger only means to be
+// reachable deliberately, so it needs a real hold instead.
+private const val DEBUG_TOGGLE_HOLD_MS = 10_000L
+
+private fun Modifier.debugToggleHoldGesture(onTrigger: () -> Unit): Modifier = pointerInput(Unit) {
+    detectTapGestures(
+        onPress = {
+            try {
+                withTimeout(DEBUG_TOGGLE_HOLD_MS) { tryAwaitRelease() }
+            } catch (e: TimeoutCancellationException) {
+                // Still held after the full timeout, rather than released early.
+                onTrigger()
+            }
+        }
+    )
+}
+
 @Composable
 fun LargeVolumeSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
     isMuted: Boolean = false,
+    fillColor: Color = Color.White,
+    height: Dp = 80.dp,
+    fontSize: TextUnit = 24.sp,
     modifier: Modifier = Modifier
 ) {
     var width by remember { mutableIntStateOf(0) }
@@ -160,25 +200,32 @@ fun LargeVolumeSlider(
         label = "volumeAnim"
     )
 
-    val muteFlashTransition = rememberInfiniteTransition(label = "volumeMuteFlash")
-    val muteFlashAlpha by muteFlashTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.25f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(500, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "muteFlashAlpha"
-    )
-    val fillColor = if (isMuted) SonosMuteGreen.copy(alpha = muteFlashAlpha) else Color.White
+    // Only running the infinite pulse animation while actually muted lets
+    // Compose's frame clock go idle the rest of the time - unconditionally
+    // starting it (even if the resulting alpha went unused while not muted)
+    // would keep this composable redrawing every frame forever.
+    val muteFlashAlpha = if (isMuted) {
+        val muteFlashTransition = rememberInfiniteTransition(label = "volumeMuteFlash")
+        val alpha by muteFlashTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = 0.25f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(500, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "muteFlashAlpha"
+        )
+        alpha
+    } else 1f
+    val effectiveFillColor = if (isMuted) SonosMuteGreen.copy(alpha = muteFlashAlpha) else fillColor
     val labelColorOnFill = if (isMuted) Color.White else Color.Black
-    val labelColorOnTrack = if (isMuted) SonosMuteGreen.copy(alpha = muteFlashAlpha) else Color.White
+    val labelColorOnTrack = if (isMuted) SonosMuteGreen.copy(alpha = muteFlashAlpha) else fillColor
 
     Box(
         modifier = modifier
-            .height(80.dp)
+            .height(height)
             .fillMaxWidth()
-            .clip(RoundedCornerShape(40.dp))
+            .clip(RoundedCornerShape(height / 2))
             .background(Color.White.copy(alpha = 0.15f))
             .onSizeChanged { width = it.width }
             .pointerInput(Unit) {
@@ -193,7 +240,7 @@ fun LargeVolumeSlider(
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { isDragging = true },
-                    onDragEnd = { 
+                    onDragEnd = {
                         isDragging = false
                         onValueChange(localValue)
                     },
@@ -211,7 +258,7 @@ fun LargeVolumeSlider(
             modifier = Modifier
                 .fillMaxHeight()
                 .fillMaxWidth(animatedValue / 100f)
-                .background(fillColor)
+                .background(effectiveFillColor)
         )
 
         // The label sits across the fill boundary, so a single color is
@@ -228,7 +275,7 @@ fun LargeVolumeSlider(
                 text = "${localValue.roundToInt()}%",
                 color = labelColorOnFill,
                 fontWeight = FontWeight.Black,
-                fontSize = 24.sp,
+                fontSize = fontSize,
                 modifier = Modifier.align(Alignment.Center)
             )
         }
@@ -241,7 +288,7 @@ fun LargeVolumeSlider(
                 text = "${localValue.roundToInt()}%",
                 color = labelColorOnTrack,
                 fontWeight = FontWeight.Black,
-                fontSize = 24.sp,
+                fontSize = fontSize,
                 modifier = Modifier.align(Alignment.Center)
             )
         }
@@ -338,43 +385,101 @@ fun SmallVolumeSlider(
     }
 }
 
-// How long a peak mark sits still after being set, and how long it then
-// takes to fade out - both purely cosmetic, tuned by eye.
-private const val PEAK_HOLD_MS = 1200L
-private const val PEAK_FADE_MS = 900L
+// Standard graphic-EQ peak-hold ballistics: the cap sits still for a beat,
+// then falls back down under accelerating "gravity" until it merges back
+// into the bar (rather than fading out in place) - both tuned by eye.
+private const val PEAK_HOLD_MS = 1000L
+private const val PEAK_GRAVITY = 6f // fraction-of-height per second^2
+
+enum class SpectrumColorScheme(val label: String) {
+    RAINBOW("Rainbow"),
+    FIRE("Fire"),
+    OCEAN("Ocean"),
+    NEON("Neon"),
+    MONO("Green"),
+    ALBUM_ART("Album Art")
+}
+
+private fun spectrumBarColor(
+    scheme: SpectrumColorScheme,
+    bandIndex: Int,
+    bandCount: Int,
+    albumPalette: List<Color> = emptyList()
+): Color {
+    val t = bandIndex.toFloat() / (bandCount - 1).coerceAtLeast(1)
+    return when (scheme) {
+        // Bass=red to treble=violet, full sweep.
+        SpectrumColorScheme.RAINBOW -> Color.hsv(t * 300f, 0.9f, 1f)
+        // Deep red at bass climbing to bright yellow at treble, like flame licking upward.
+        SpectrumColorScheme.FIRE -> Color.hsv(t * 55f, 1f, 1f)
+        // Blue through cyan into violet - a cool, watery gradient.
+        SpectrumColorScheme.OCEAN -> Color.hsv(200f + t * 80f, 0.85f, 1f)
+        // Hot pink through purple into electric cyan - high-contrast/cyberpunk.
+        SpectrumColorScheme.NEON -> Color.hsv(320f - t * 130f, 1f, 1f)
+        // Single brand accent, no per-band variation.
+        SpectrumColorScheme.MONO -> SonosMuteGreen
+        // Sweep across the swatches pulled from the current album art (see
+        // extractAlbumPalette), falling back to the brand accent if none
+        // could be extracted (no art, load failure, monochrome art, etc.).
+        SpectrumColorScheme.ALBUM_ART -> albumPaletteColorAt(t, albumPalette)
+    }
+}
+
+private fun albumPaletteColorAt(t: Float, palette: List<Color>): Color {
+    if (palette.isEmpty()) return SonosMuteGreen
+    if (palette.size == 1) return palette[0]
+    val pos = t * (palette.size - 1)
+    val lo = pos.toInt().coerceIn(0, palette.size - 1)
+    val hi = (lo + 1).coerceAtMost(palette.size - 1)
+    return lerp(palette[lo], palette[hi], pos - lo)
+}
 
 @Composable
 fun SpectrumAnalyzerView(
     bands: FloatArray,
     frequencyLabels: List<Int>,
+    colorScheme: SpectrumColorScheme = SpectrumColorScheme.RAINBOW,
+    albumPalette: List<Color> = emptyList(),
+    showFrequencyLabels: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val bandCount = bands.size
     if (bandCount == 0) return
 
-    // Bar heights: fast attack, slower decay so it doesn't look jittery.
+    // Bar heights: instant attack, quick decay so it visibly jumps with the beat.
     val smoothed = remember(bandCount) { FloatArray(bandCount) }
-    // Per-band peak-hold: the height it's marking, and when it was last set.
+    // Per-band peak-hold: the height it's marking, when it was last set, and
+    // its current fall speed once gravity kicks in after the hold period.
     val peakHeights = remember(bandCount) { FloatArray(bandCount) }
     val peakSetAt = remember(bandCount) { LongArray(bandCount) }
+    val peakVelocities = remember(bandCount) { FloatArray(bandCount) }
     var frameTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    // LaunchedEffect below only restarts when bandCount changes, so it must
+    // read bands through a holder that's updated every recomposition -
+    // otherwise its coroutine keeps closing over the array reference from
+    // whichever composition first launched it, and bars freeze on that frame.
+    val latestBands by rememberUpdatedState(bands)
 
     LaunchedEffect(bandCount) {
+        var lastTick = System.currentTimeMillis()
         while (isActive) {
             val now = System.currentTimeMillis()
+            val dt = (now - lastTick).coerceAtLeast(1) / 1000f
+            lastTick = now
             for (i in 0 until bandCount) {
-                val target = bands.getOrElse(i) { 0f }.coerceIn(0f, 1f)
-                smoothed[i] = if (target > smoothed[i]) target else smoothed[i] * 0.80f + target * 0.20f
+                val target = latestBands.getOrElse(i) { 0f }.coerceIn(0f, 1f)
+                smoothed[i] = if (target > smoothed[i]) target else smoothed[i] * 0.55f + target * 0.45f
                 if (smoothed[i] >= peakHeights[i]) {
                     peakHeights[i] = smoothed[i]
                     peakSetAt[i] = now
+                    peakVelocities[i] = 0f
                 } else if (now - peakSetAt[i] > PEAK_HOLD_MS) {
-                    // Peak mark has sat long enough - let it drift back down.
-                    peakHeights[i] = (peakHeights[i] - 0.03f).coerceAtLeast(smoothed[i])
+                    peakVelocities[i] += PEAK_GRAVITY * dt
+                    peakHeights[i] = (peakHeights[i] - peakVelocities[i] * dt).coerceAtLeast(smoothed[i])
                 }
             }
             frameTime = now
-            delay(33) // ~30fps, independent of the mic capture's own frame rate
+            delay(33) // ~30fps - a screensaver visualizer doesn't need 60, and this halves the redraw cost
         }
     }
 
@@ -382,8 +487,12 @@ fun SpectrumAnalyzerView(
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
+                .let { if (showFrequencyLabels) it.weight(1f) else it.fillMaxHeight() }
         ) {
+            // smoothed/peakHeights are plain arrays mutated in place (not Compose
+            // State), so reading frameTime here is what makes this redraw every
+            // tick - dropping it would freeze the canvas even as the data updates.
+            frameTime
             val gap = 4.dp.toPx()
             val barWidth = (size.width - gap * (bandCount - 1)) / bandCount
             val peakMarkHeight = 2.dp.toPx()
@@ -391,22 +500,23 @@ fun SpectrumAnalyzerView(
             for (i in 0 until bandCount) {
                 val x = i * (barWidth + gap)
                 val barH = smoothed[i] * size.height
+                val barColor = spectrumBarColor(colorScheme, i, bandCount, albumPalette)
                 drawRect(
-                    color = Color.Cyan.copy(alpha = 0.55f),
+                    brush = Brush.verticalGradient(
+                        colors = listOf(barColor.copy(alpha = 0.55f), barColor.copy(alpha = 0.25f)),
+                        startY = size.height - barH,
+                        endY = size.height
+                    ),
                     topLeft = Offset(x, size.height - barH),
                     size = Size(barWidth, barH)
                 )
 
-                val age = frameTime - peakSetAt[i]
-                val fadeAlpha = if (age <= PEAK_HOLD_MS) {
-                    1f
-                } else {
-                    (1f - (age - PEAK_HOLD_MS).toFloat() / PEAK_FADE_MS).coerceIn(0f, 1f)
-                }
-                if (fadeAlpha > 0f) {
+                // No fade - the cap just holds, then falls under gravity until it
+                // merges back into the bar, like a standard hardware/software EQ.
+                if (peakHeights[i] > 0.01f) {
                     val peakY = size.height - (peakHeights[i] * size.height)
                     drawRect(
-                        color = Color.White.copy(alpha = fadeAlpha),
+                        color = Color.White,
                         topLeft = Offset(x, (peakY - peakMarkHeight).coerceAtLeast(0f)),
                         size = Size(barWidth, peakMarkHeight)
                     )
@@ -414,18 +524,20 @@ fun SpectrumAnalyzerView(
             }
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
+        if (showFrequencyLabels) {
+            Spacer(modifier = Modifier.height(4.dp))
 
-        Row(modifier = Modifier.fillMaxWidth()) {
-            frequencyLabels.forEach { freq ->
-                Text(
-                    text = formatFrequencyLabel(freq),
-                    fontSize = 8.sp,
-                    color = Color.White.copy(alpha = 0.45f),
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f)
-                )
+            Row(modifier = Modifier.fillMaxWidth()) {
+                frequencyLabels.forEach { freq ->
+                    Text(
+                        text = formatFrequencyLabel(freq),
+                        fontSize = 8.sp,
+                        color = Color.White.copy(alpha = 0.45f),
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
     }
@@ -435,6 +547,86 @@ private fun formatFrequencyLabel(freqHz: Int): String {
     if (freqHz < 1000) return "$freqHz"
     val k = freqHz / 1000f
     return if (k == k.toInt().toFloat()) "${k.toInt()}k" else String.format(Locale.getDefault(), "%.1fk", k)
+}
+
+private fun formatScreensaverDelay(totalSeconds: Int): String {
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return when {
+        minutes == 0 -> "${seconds}s"
+        seconds == 0 -> "${minutes}m"
+        else -> "${minutes}m ${seconds}s"
+    }
+}
+
+private fun formatTrackTime(totalSeconds: Int): String {
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(Locale.getDefault(), "%d:%02d", minutes, seconds)
+    }
+}
+
+// The 2s poll only updates positionSeconds in discrete jumps, which would
+// make the displayed clock visibly stutter - resync to the polled value on
+// every change, then tick up locally once a second in between polls so it
+// reads like a smooth, live counter.
+@Composable
+private fun rememberInterpolatedPosition(trackState: TrackState): Int {
+    var displayedSeconds by remember { mutableIntStateOf(trackState.positionSeconds) }
+    LaunchedEffect(trackState.positionSeconds, trackState.isPlaying, trackState.durationSeconds) {
+        displayedSeconds = trackState.positionSeconds
+        if (trackState.isPlaying) {
+            while (isActive) {
+                delay(1000)
+                displayedSeconds = (displayedSeconds + 1).coerceAtMost(trackState.durationSeconds)
+            }
+        }
+    }
+    return displayedSeconds
+}
+
+/**
+ * Pulls a handful of representative swatches out of the current album art
+ * for the "Album Art" spectrum color scheme. Downscaled before decoding
+ * since Palette only needs a rough color read, not full resolution, and
+ * `allowHardware(false)` is required - Palette reads pixels back off the
+ * bitmap, which a GPU-backed hardware bitmap won't allow.
+ */
+private suspend fun extractAlbumPalette(context: Context, imageUrl: String): List<Color> {
+    if (imageUrl.isBlank()) return emptyList()
+    return withContext(Dispatchers.IO) {
+        try {
+            val request = ImageRequest.Builder(context)
+                .data(imageUrl)
+                .size(120, 120)
+                .allowHardware(false)
+                .build()
+            val bitmap = (context.imageLoader.execute(request).drawable as? BitmapDrawable)?.bitmap
+                ?: return@withContext emptyList()
+            val palette = Palette.from(bitmap).generate()
+            val swatches = listOfNotNull(
+                palette.vibrantSwatch,
+                palette.lightVibrantSwatch,
+                palette.darkVibrantSwatch,
+                palette.mutedSwatch,
+                palette.lightMutedSwatch,
+                palette.darkMutedSwatch
+            )
+            // Order bass-to-treble by hue, like the other schemes' sweeps, so
+            // the palette reads as a gradient instead of a random shuffle.
+            swatches.map { Color(it.rgb) }.sortedBy { color ->
+                val hsv = FloatArray(3)
+                android.graphics.Color.colorToHSV(color.toArgb(), hsv)
+                hsv[0]
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
 }
 
 @Composable
@@ -486,12 +678,23 @@ fun DockDashboardUI(
     onSetLightColorRgb: (Int, Int, Int) -> Unit = { _, _, _ -> },
     onSetLightColorTemp: (Int) -> Unit = {},
     showSpectrumAnalyzer: Boolean = false,
-    micPermissionGranted: Boolean = false
+    micPermissionGranted: Boolean = false,
+    spectrumColorScheme: SpectrumColorScheme = SpectrumColorScheme.RAINBOW,
+    spectrumHeightPercent: Float = 1f,
+    spectrumConfineToAlbumArt: Boolean = false,
+    audioSettings: SonosAudioSettings = SonosAudioSettings(),
+    onToggleNightMode: () -> Unit = {},
+    onToggleDialogMode: () -> Unit = {},
+    onSetBass: (Int) -> Unit = {},
+    onSetTreble: (Int) -> Unit = {},
+    onSetLoudness: (Boolean) -> Unit = {},
+    onToggleSubEnabled: () -> Unit = {}
 ) {
     var showDebugInfo by remember { mutableStateOf(false) }
     var showGroupingModal by remember { mutableStateOf(false) }
     var showThermostat by remember { mutableStateOf(false) }
     var showLightDialog by remember { mutableStateOf(false) }
+    var showSoundSettings by remember { mutableStateOf(false) }
 
     val spectrumAnalyzer = remember { SpectrumAnalyzer() }
     val spectrumBands by spectrumAnalyzer.bands.collectAsState()
@@ -506,15 +709,21 @@ fun DockDashboardUI(
         }
     }
 
+    val context = LocalContext.current
+    var albumPalette by remember { mutableStateOf<List<Color>>(emptyList()) }
+    LaunchedEffect(trackState.albumArtUrl, spectrumColorScheme, showSpectrumAnalyzer) {
+        albumPalette = if (showSpectrumAnalyzer && spectrumColorScheme == SpectrumColorScheme.ALBUM_ART) {
+            extractAlbumPalette(context, trackState.albumArtUrl)
+        } else {
+            emptyList()
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onLongPress = { showDebugInfo = !showDebugInfo }
-                )
-            }
+            .debugToggleHoldGesture { showDebugInfo = !showDebugInfo }
             .pointerInput(Unit) {
                 // Swipe down anywhere on the background to jump to Cover
                 // Flow, same as the button below - a descendant control
@@ -539,19 +748,26 @@ fun DockDashboardUI(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .blur(60.dp)
-                    .alpha(0.35f)
+                    .blur(40.dp)
+                    .alpha(0.55f)
             )
         }
 
-        if (showSpectrumAnalyzer && micPermissionGranted && trackState.isPlaying) {
+        if (showSpectrumAnalyzer && micPermissionGranted && trackState.isPlaying && !spectrumConfineToAlbumArt) {
+            // Sits above the blurred background but below everything else in
+            // this Box (top bar, album art, text, controls) purely by
+            // composition order - later children draw on top. Anchored to
+            // the bottom so spectrumHeightPercent < 1 shrinks it up from the
+            // bottom edge rather than from the top.
             SpectrumAnalyzerView(
                 bands = spectrumBands,
                 frequencyLabels = spectrumAnalyzer.bandFrequencies,
+                colorScheme = spectrumColorScheme,
+                albumPalette = albumPalette,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .fillMaxHeight(0.32f)
+                    .fillMaxHeight(spectrumHeightPercent.coerceIn(0.1f, 1f))
                     .padding(horizontal = 32.dp, vertical = 16.dp)
             )
         }
@@ -652,35 +868,86 @@ fun DockDashboardUI(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                elevation = CardDefaults.cardElevation(16.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .aspectRatio(1f)
-                    .onGloballyPositioned { onAlbumArtPositioned(it.boundsInWindow()) }
-            ) {
-                if (trackState.albumArtUrl.isNotBlank()) {
-                    AsyncImage(
-                        model = trackState.albumArtUrl,
-                        contentDescription = "Album Cover",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color.DarkGray),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.MusicNote,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(64.dp)
-                        )
+            Column(modifier = Modifier.weight(1f)) {
+                Card(
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .onGloballyPositioned { onAlbumArtPositioned(it.boundsInWindow()) }
+                ) {
+                    // Wrapped in a Box (rather than leaving Card's default Column
+                    // content scope) so the confine-to-album-art spectrum overlay
+                    // below can stack on top of the art instead of being laid out
+                    // as a second, height-starved Column child underneath it.
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        if (trackState.albumArtUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = trackState.albumArtUrl,
+                                contentDescription = "Album Cover",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.DarkGray),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.MusicNote,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(64.dp)
+                                )
+                            }
+                        }
+
+                        if (showSpectrumAnalyzer && micPermissionGranted && trackState.isPlaying && spectrumConfineToAlbumArt) {
+                            // Card clips its content to its shape, so this is
+                            // automatically cropped to the same rounded square.
+                            SpectrumAnalyzerView(
+                                bands = spectrumBands,
+                                frequencyLabels = spectrumAnalyzer.bandFrequencies,
+                                colorScheme = spectrumColorScheme,
+                                albumPalette = albumPalette,
+                                showFrequencyLabels = false,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(8.dp)
+                            )
+                        }
                     }
+                }
+
+                // TV's HA-sourced media player only gives us a point-in-time
+                // duration/position, not a track list - "time left" reads more
+                // naturally here than an elapsed/total pair. Sized large and
+                // centered under the artwork so it reads from across a room.
+                if (isTvMode && trackState.durationSeconds > 0) {
+                    val displayedSeconds = rememberInterpolatedPosition(trackState)
+                    val remainingSeconds = (trackState.durationSeconds - displayedSeconds).coerceAtLeast(0)
+                    Spacer(modifier = Modifier.height(20.dp))
+                    LinearProgressIndicator(
+                        progress = { (displayedSeconds.toFloat() / trackState.durationSeconds).coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = Color.White.copy(alpha = 0.8f),
+                        trackColor = Color.White.copy(alpha = 0.2f)
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "${formatTrackTime(remainingSeconds)} remaining",
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White.copy(alpha = 0.85f),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
 
@@ -690,27 +957,7 @@ fun DockDashboardUI(
                 modifier = Modifier.weight(1.2f),
                 verticalArrangement = Arrangement.Center
             ) {
-                if (isTvMode) {
-                    Surface(
-                        color = Color(0xFFE53935).copy(alpha = 0.8f),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Tv, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "TV Input Active • HA Media Player",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                } else {
+                if (!isTvMode) {
                     if (trackState.prevTrack != "None") {
                         Surface(
                             color = Color.White.copy(alpha = 0.15f),
@@ -764,6 +1011,20 @@ fun DockDashboardUI(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
+
+                // Radio/live streams (and anything else the source can't
+                // time) report a 0 duration - skip the row rather than show
+                // a stuck or meaningless "0:00 / 0:00". TV mode gets its own
+                // progress bar centered under the artwork instead (above).
+                if (!isTvMode && trackState.durationSeconds > 0) {
+                    val displayedSeconds = rememberInterpolatedPosition(trackState)
+                    Text(
+                        text = "${formatTrackTime(displayedSeconds)} / ${formatTrackTime(trackState.durationSeconds)}",
+                        fontSize = 14.sp,
+                        color = Color.White.copy(alpha = 0.55f),
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                 }
 
@@ -837,6 +1098,18 @@ fun DockDashboardUI(
                     }
                 }
 
+                // Speaker-hardware features rather than playback controls -
+                // the settings button (below, next to volume) only shows up
+                // once the coordinator reports support for at least one of
+                // these (e.g. Night Sound/Speech Enhancement are soundbar-
+                // only), instead of a dead button on speakers with none of it.
+                val hasSoundSettings = audioSettings.nightMode != null ||
+                    audioSettings.dialogMode != null ||
+                    audioSettings.bass != null ||
+                    audioSettings.treble != null ||
+                    audioSettings.loudness != null ||
+                    audioSettings.subEnabled != null
+
                 Spacer(modifier = Modifier.height(30.dp))
 
                 val joinedMembers = trackState.groupMembers.filter { !it.isCoordinator }
@@ -866,16 +1139,22 @@ fun DockDashboardUI(
                             )
                         }
                         
-                        val muteIconFlash = rememberInfiniteTransition(label = "muteIconFlash")
-                        val muteIconAlpha by muteIconFlash.animateFloat(
-                            initialValue = 1f,
-                            targetValue = 0.25f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(500, easing = LinearEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "muteIconAlpha"
-                        )
+                        // Same reasoning as LargeVolumeSlider's muteFlashAlpha - only
+                        // animate while actually muted so this stops keeping the
+                        // frame clock alive the rest of the time.
+                        val muteIconAlpha = if (trackState.isMuted) {
+                            val muteIconFlash = rememberInfiniteTransition(label = "muteIconFlash")
+                            val alpha by muteIconFlash.animateFloat(
+                                initialValue = 1f,
+                                targetValue = 0.25f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(500, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "muteIconAlpha"
+                            )
+                            alpha
+                        } else 1f
                         Icon(
                             imageVector = if (trackState.isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeDown,
                             contentDescription = "Mute Toggle",
@@ -906,6 +1185,19 @@ fun DockDashboardUI(
                             contentDescription = "Volume High",
                             tint = Color.White
                         )
+
+                        if (hasSoundSettings) {
+                            Spacer(modifier = Modifier.width(16.dp))
+
+                            IconButton(
+                                onClick = { showSoundSettings = true },
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                            ) {
+                                Icon(Icons.Default.Tune, contentDescription = "Sound Settings", tint = Color.White)
+                            }
+                        }
                     }
 
                     joinedMembers.forEach { member ->
@@ -970,11 +1262,25 @@ fun DockDashboardUI(
         if (showLightDialog) {
             LightDialog(
                 haState = haState,
+                albumArtUrl = trackState.albumArtUrl,
                 onSetOn = onSetLightOn,
                 onSetBrightness = onBrightnessChange,
                 onSetColorRgb = onSetLightColorRgb,
                 onSetColorTemp = onSetLightColorTemp,
                 onDismiss = { showLightDialog = false }
+            )
+        }
+
+        if (showSoundSettings) {
+            SoundSettingsDialog(
+                audioSettings = audioSettings,
+                onToggleNightMode = onToggleNightMode,
+                onToggleDialogMode = onToggleDialogMode,
+                onSetBass = onSetBass,
+                onSetTreble = onSetTreble,
+                onSetLoudness = onSetLoudness,
+                onToggleSubEnabled = onToggleSubEnabled,
+                onDismiss = { showSoundSettings = false }
             )
         }
     }
@@ -1422,6 +1728,7 @@ private val LIGHT_PRESET_COLORS = listOf(
 @Composable
 fun LightDialog(
     haState: HAState,
+    albumArtUrl: String = "",
     onSetOn: (Boolean) -> Unit,
     onSetBrightness: (Int) -> Unit,
     onSetColorRgb: (Int, Int, Int) -> Unit,
@@ -1458,141 +1765,374 @@ fun LightDialog(
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
+            color = Color.Black,
+            shape = RoundedCornerShape(28.dp),
+            modifier = Modifier.width(380.dp)
+        ) {
+            Box {
+                // Same blurred-album-art backdrop as the Now Playing screen,
+                // so this dialog reads as part of that screen rather than a
+                // generic system sheet dropped on top of it.
+                if (albumArtUrl.isNotBlank()) {
+                    AsyncImage(
+                        model = albumArtUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .matchParentSize()
+                            .blur(60.dp)
+                            .alpha(0.35f)
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(Color.Black.copy(alpha = 0.55f))
+                )
+
+                Column(
+                    modifier = Modifier
+                        .padding(24.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Light", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                        }
+                    }
+
+                    // Glass pill sections, matching the translucent black
+                    // surfaces (LabeledIconButton, top status pills) used
+                    // throughout the Now Playing screen.
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.4f),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(if (haState.lightOn) "On" else "Off", color = Color.White, fontSize = 16.sp)
+                            Switch(
+                                checked = haState.lightOn,
+                                onCheckedChange = onSetOn,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.Yellow,
+                                    checkedTrackColor = Color.Yellow.copy(alpha = 0.5f)
+                                )
+                            )
+                        }
+                    }
+
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.4f),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text("Brightness", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(10.dp))
+                            LargeVolumeSlider(
+                                value = localBrightness / 255f * 100f,
+                                onValueChange = {
+                                    val brightness = (it / 100f * 255f).roundToInt()
+                                    localBrightness = brightness.toFloat()
+                                    scheduleBrightness(brightness)
+                                },
+                                fillColor = Color(0xFFFFD54F),
+                                height = 64.dp,
+                                fontSize = 20.sp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .alpha(if (haState.lightOn) 1f else 0.4f)
+                            )
+                        }
+                    }
+
+                    if (supportsRgb) {
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text("Color", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Spacer(Modifier.height(10.dp))
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    LIGHT_PRESET_COLORS.forEach { (name, rgb) ->
+                                        val (r, g, b) = rgb
+                                        // Lights that store color natively as xy/hs (most
+                                        // Hue-style bulbs) round-trip an exact rgb_color
+                                        // we send into a fairly different value once
+                                        // clipped to their gamut, so match loosely by
+                                        // total distance rather than per-channel equality.
+                                        val isSelected = haState.lightRgbColor?.let {
+                                            it.size == 3 &&
+                                                (kotlin.math.abs(it[0] - r) + kotlin.math.abs(it[1] - g) + kotlin.math.abs(it[2] - b)) < 150
+                                        } ?: false
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(r, g, b))
+                                                .border(
+                                                    width = if (isSelected) 3.dp else 1.dp,
+                                                    color = if (isSelected) Color.White else Color.White.copy(alpha = 0.3f),
+                                                    shape = CircleShape
+                                                )
+                                                .clickable { onSetColorRgb(r, g, b) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else if (supportsColorTemp) {
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text("Color Temperature", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Spacer(Modifier.height(10.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Warm", color = Color(0xFFFFB74D), fontSize = 11.sp)
+                                    Slider(
+                                        value = localKelvin,
+                                        onValueChange = {
+                                            localKelvin = it
+                                            scheduleTemp(it.toInt())
+                                        },
+                                        valueRange = haState.lightMinColorTempKelvin.toFloat()..haState.lightMaxColorTempKelvin.toFloat(),
+                                        enabled = haState.lightOn,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(horizontal = 8.dp),
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = Color.White,
+                                            activeTrackColor = Color.White.copy(alpha = 0.6f),
+                                            inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                                        )
+                                    )
+                                    Text("Cool", color = Color(0xFF64B5F6), fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SoundSettingsDialog(
+    audioSettings: SonosAudioSettings,
+    onToggleNightMode: () -> Unit,
+    onToggleDialogMode: () -> Unit,
+    onSetBass: (Int) -> Unit,
+    onSetTreble: (Int) -> Unit,
+    onSetLoudness: (Boolean) -> Unit,
+    onToggleSubEnabled: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+
+    var localBass by remember(audioSettings.bass) { mutableFloatStateOf((audioSettings.bass ?: 0).toFloat()) }
+    var pendingBass by remember { mutableStateOf<Job?>(null) }
+    fun scheduleBass(value: Int) {
+        pendingBass?.cancel()
+        pendingBass = scope.launch {
+            delay(300)
+            onSetBass(value)
+        }
+    }
+
+    var localTreble by remember(audioSettings.treble) { mutableFloatStateOf((audioSettings.treble ?: 0).toFloat()) }
+    var pendingTreble by remember { mutableStateOf<Job?>(null) }
+    fun scheduleTreble(value: Int) {
+        pendingTreble?.cancel()
+        pendingTreble = scope.launch {
+            delay(300)
+            onSetTreble(value)
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
             color = Color(0xFF161616),
             shape = RoundedCornerShape(28.dp),
             modifier = Modifier.width(380.dp)
         ) {
-            Column(modifier = Modifier.padding(24.dp)) {
+            Column(
+                modifier = Modifier
+                    .padding(24.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Light", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("Sound Settings", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(if (haState.lightOn) "On" else "Off", color = Color.White, fontSize = 16.sp)
-                    Switch(
-                        checked = haState.lightOn,
-                        onCheckedChange = onSetOn,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.Yellow,
-                            checkedTrackColor = Color.Yellow.copy(alpha = 0.5f)
-                        )
-                    )
-                }
-
-                Spacer(Modifier.height(16.dp))
-
-                Text("Brightness", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.Brightness4,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.6f),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Slider(
-                        value = localBrightness,
-                        onValueChange = {
-                            localBrightness = it
-                            scheduleBrightness(it.toInt())
-                        },
-                        valueRange = 0f..255f,
-                        enabled = haState.lightOn,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp),
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.Yellow,
-                            activeTrackColor = Color.Yellow,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.2f)
-                        )
-                    )
-                    Icon(
-                        Icons.Default.Brightness7,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.6f),
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                Text(
-                    "${(localBrightness / 255f * 100).roundToInt()}%",
-                    color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 12.sp,
-                    modifier = Modifier.align(Alignment.End)
-                )
-
-                if (supportsRgb) {
-                    Spacer(Modifier.height(16.dp))
-                    Text("Color", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(10.dp))
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                if (audioSettings.bass != null) {
+                    Surface(
+                        color = Color.White.copy(alpha = 0.08f),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        LIGHT_PRESET_COLORS.forEach { (name, rgb) ->
-                            val (r, g, b) = rgb
-                            // Lights that store color natively as xy/hs (most
-                            // Hue-style bulbs) round-trip an exact rgb_color
-                            // we send into a fairly different value once
-                            // clipped to their gamut, so match loosely by
-                            // total distance rather than per-channel equality.
-                            val isSelected = haState.lightRgbColor?.let {
-                                it.size == 3 &&
-                                    (kotlin.math.abs(it[0] - r) + kotlin.math.abs(it[1] - g) + kotlin.math.abs(it[2] - b)) < 150
-                            } ?: false
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(r, g, b))
-                                    .border(
-                                        width = if (isSelected) 3.dp else 1.dp,
-                                        color = if (isSelected) Color.White else Color.White.copy(alpha = 0.3f),
-                                        shape = CircleShape
-                                    )
-                                    .clickable { onSetColorRgb(r, g, b) }
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                            Text("Bass: ${localBass.roundToInt()}", color = Color.White, fontSize = 16.sp)
+                            Slider(
+                                value = localBass,
+                                onValueChange = {
+                                    localBass = it
+                                    scheduleBass(it.roundToInt())
+                                },
+                                valueRange = -10f..10f,
+                                steps = 19,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color.White,
+                                    activeTrackColor = Color.White.copy(alpha = 0.6f),
+                                    inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                                )
                             )
                         }
                     }
-                } else if (supportsColorTemp) {
-                    Spacer(Modifier.height(16.dp))
-                    Text("Color Temperature", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Warm", color = Color(0xFFFFB74D), fontSize = 11.sp)
-                        Slider(
-                            value = localKelvin,
-                            onValueChange = {
-                                localKelvin = it
-                                scheduleTemp(it.toInt())
-                            },
-                            valueRange = haState.lightMinColorTempKelvin.toFloat()..haState.lightMaxColorTempKelvin.toFloat(),
-                            enabled = haState.lightOn,
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 8.dp),
-                            colors = SliderDefaults.colors(
-                                thumbColor = Color.White,
-                                activeTrackColor = Color.White.copy(alpha = 0.6f),
-                                inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                }
+
+                if (audioSettings.treble != null) {
+                    Surface(
+                        color = Color.White.copy(alpha = 0.08f),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                            Text("Treble: ${localTreble.roundToInt()}", color = Color.White, fontSize = 16.sp)
+                            Slider(
+                                value = localTreble,
+                                onValueChange = {
+                                    localTreble = it
+                                    scheduleTreble(it.roundToInt())
+                                },
+                                valueRange = -10f..10f,
+                                steps = 19,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color.White,
+                                    activeTrackColor = Color.White.copy(alpha = 0.6f),
+                                    inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                                )
                             )
-                        )
-                        Text("Cool", color = Color(0xFF64B5F6), fontSize = 11.sp)
+                        }
+                    }
+                }
+
+                val hasNightMode = audioSettings.nightMode != null
+                val hasDialogMode = audioSettings.dialogMode != null
+                val hasLoudness = audioSettings.loudness != null
+                val hasSubToggle = audioSettings.subEnabled != null
+
+                if (hasNightMode || hasDialogMode || hasLoudness || hasSubToggle) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (hasNightMode) {
+                            val active = audioSettings.nightMode == true
+                            SoundToggleButton(
+                                icon = Icons.Default.Bedtime,
+                                contentDescription = "Night Sound",
+                                active = active,
+                                activeColor = Color(0xFF6C63FF),
+                                activeIconTint = Color(0xFFD0CBFF),
+                                onClick = onToggleNightMode
+                            )
+                        }
+
+                        if (hasDialogMode) {
+                            val active = audioSettings.dialogMode == true
+                            SoundToggleButton(
+                                icon = Icons.Default.RecordVoiceOver,
+                                contentDescription = "Speech Enhancement",
+                                active = active,
+                                activeColor = SonosMuteGreen,
+                                activeIconTint = Color(0xFFB9F6B4),
+                                onClick = onToggleDialogMode
+                            )
+                        }
+
+                        if (hasLoudness) {
+                            val active = audioSettings.loudness == true
+                            SoundToggleButton(
+                                icon = Icons.Default.GraphicEq,
+                                contentDescription = "Loudness",
+                                active = active,
+                                activeColor = Color(0xFFFFA726),
+                                activeIconTint = Color(0xFFFFE0B2),
+                                onClick = { onSetLoudness(!active) }
+                            )
+                        }
+
+                        if (hasSubToggle) {
+                            val active = audioSettings.subEnabled == true
+                            SoundToggleButton(
+                                icon = Icons.Default.Speaker,
+                                contentDescription = "Subwoofer",
+                                active = active,
+                                activeColor = Color(0xFFEF5350),
+                                activeIconTint = Color(0xFFFFCDD2),
+                                onClick = onToggleSubEnabled
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SoundToggleButton(
+    icon: ImageVector,
+    contentDescription: String,
+    active: Boolean,
+    activeColor: Color,
+    activeIconTint: Color,
+    onClick: () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier
+                .size(60.dp)
+                .background(
+                    if (active) activeColor.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.08f),
+                    CircleShape
+                )
+        ) {
+            Icon(icon, contentDescription = contentDescription, tint = if (active) activeIconTint else Color.White)
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(contentDescription, color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp)
     }
 }
 
@@ -1668,7 +2208,14 @@ fun SettingsModal(
     var selectedClimate by remember { mutableStateOf("") }
     var selectedHaMediaPlayer by remember { mutableStateOf("") }
     var coverFlowMode by remember { mutableStateOf("history") }
+    var use24HourClock by remember { mutableStateOf(true) }
+    var tvScreensaverDelaySeconds by remember { mutableIntStateOf(SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS) }
+    var pendingScreensaverDelay by remember { mutableStateOf<Job?>(null) }
     var showSpectrumAnalyzer by remember { mutableStateOf(false) }
+    var spectrumColorScheme by remember { mutableStateOf(SpectrumColorScheme.RAINBOW) }
+    var spectrumHeightPercent by remember { mutableFloatStateOf(1f) }
+    var spectrumConfineToAlbumArt by remember { mutableStateOf(false) }
+    var pendingSpectrumHeight by remember { mutableStateOf<Job?>(null) }
 
     var fAlbums by remember { mutableStateOf(true) }
     var fPlaylists by remember { mutableStateOf(true) }
@@ -1689,10 +2236,15 @@ fun SettingsModal(
         selectedClimate = settingsManager.selectedClimate.first()
         selectedHaMediaPlayer = settingsManager.selectedHaMediaPlayer.first()
         coverFlowMode = settingsManager.coverFlowMode.first()
+        use24HourClock = settingsManager.use24HourClock.first()
+        tvScreensaverDelaySeconds = settingsManager.tvScreensaverDelaySeconds.first()
         fAlbums = settingsManager.filterAlbums.first()
         fPlaylists = settingsManager.filterPlaylists.first()
         fRadio = settingsManager.filterRadio.first()
         showSpectrumAnalyzer = settingsManager.showSpectrumAnalyzer.first()
+        spectrumColorScheme = settingsManager.spectrumColorScheme.first()
+        spectrumHeightPercent = settingsManager.spectrumHeightPercent.first()
+        spectrumConfineToAlbumArt = settingsManager.spectrumConfineToAlbumArt.first()
 
         // Pull every light/climate/media_player entity HA knows about, once
         // a connection is available, so the fields below can autocomplete.
@@ -1776,6 +2328,64 @@ fun SettingsModal(
                         )
                     }
 
+                    if (showSpectrumAnalyzer) {
+                        Text("Color Scheme:", fontSize = 12.sp, color = Color.Gray)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SpectrumColorScheme.entries.forEach { scheme ->
+                                FilterChip(
+                                    selected = (spectrumColorScheme == scheme),
+                                    onClick = {
+                                        spectrumColorScheme = scheme
+                                        scope.launch { settingsManager.setSpectrumColorScheme(scheme) }
+                                    },
+                                    label = { Text(scheme.label) }
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Confine to Album Art", fontSize = 12.sp, color = Color.Gray)
+                                Text(
+                                    "Draw bars only over the album art instead of the full screen.",
+                                    fontSize = 10.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                            Switch(
+                                checked = spectrumConfineToAlbumArt,
+                                onCheckedChange = { checked ->
+                                    spectrumConfineToAlbumArt = checked
+                                    scope.launch { settingsManager.setSpectrumConfineToAlbumArt(checked) }
+                                }
+                            )
+                        }
+
+                        if (!spectrumConfineToAlbumArt) {
+                            Text(
+                                "Height from bottom: ${(spectrumHeightPercent * 100).roundToInt()}%",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                            Slider(
+                                value = spectrumHeightPercent,
+                                onValueChange = {
+                                    spectrumHeightPercent = it
+                                    pendingSpectrumHeight?.cancel()
+                                    pendingSpectrumHeight = scope.launch {
+                                        delay(300)
+                                        settingsManager.setSpectrumHeightPercent(it)
+                                    }
+                                },
+                                valueRange = 0.1f..1f
+                            )
+                        }
+                    }
+
                     HorizontalDivider()
 
                     Text("Cover Flow Mode:", fontWeight = FontWeight.SemiBold)
@@ -1788,6 +2398,51 @@ fun SettingsModal(
                             )
                         }
                     }
+
+                    Text("Clock Format:", fontSize = 12.sp, color = Color.Gray)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !use24HourClock,
+                            onClick = {
+                                use24HourClock = false
+                                scope.launch { settingsManager.setUse24HourClock(false) }
+                            },
+                            label = { Text("12-Hour") }
+                        )
+                        FilterChip(
+                            selected = use24HourClock,
+                            onClick = {
+                                use24HourClock = true
+                                scope.launch { settingsManager.setUse24HourClock(true) }
+                            },
+                            label = { Text("24-Hour") }
+                        )
+                    }
+
+                    HorizontalDivider()
+
+                    Text("TV Screensaver Delay:", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "How long TV mode stays on the Now Playing screen before dropping into the screensaver: ${formatScreensaverDelay(tvScreensaverDelaySeconds)}",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+                    Slider(
+                        value = tvScreensaverDelaySeconds.toFloat(),
+                        onValueChange = {
+                            tvScreensaverDelaySeconds = (it.roundToInt() / 30) * 30
+                            pendingScreensaverDelay?.cancel()
+                            pendingScreensaverDelay = scope.launch {
+                                delay(300)
+                                settingsManager.setTvScreensaverDelaySeconds(tvScreensaverDelaySeconds)
+                            }
+                        },
+                        valueRange = SettingsManager.TV_SCREENSAVER_DELAY_MIN_SECONDS.toFloat()..
+                            SettingsManager.TV_SCREENSAVER_DELAY_MAX_SECONDS.toFloat(),
+                        // One tick per 30s step between the endpoints.
+                        steps = (SettingsManager.TV_SCREENSAVER_DELAY_MAX_SECONDS -
+                            SettingsManager.TV_SCREENSAVER_DELAY_MIN_SECONDS) / 30 - 1
+                    )
 
                     if (coverFlowMode == "history") {
                         Text(
@@ -1965,7 +2620,8 @@ fun AmbientClockScreen(
     trackState: TrackState,
     onPlayAlbum: (AlbumHistoryItem, Rect) -> Unit,
     onRemoveAlbum: (String) -> Unit,
-    onWakeUp: () -> Unit
+    onWakeUp: () -> Unit,
+    use24HourClock: Boolean = true
 ) {
     var isFadingOut by remember { mutableStateOf(false) }
     val fadeAlpha by animateFloatAsState(
@@ -2058,7 +2714,14 @@ fun AmbientClockScreen(
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { onWakeUp() },
-                    onLongPress = { showDebugInfo = !showDebugInfo }
+                    onPress = {
+                        try {
+                            withTimeout(DEBUG_TOGGLE_HOLD_MS) { tryAwaitRelease() }
+                        } catch (e: TimeoutCancellationException) {
+                            // Still held after the full timeout, rather than released early.
+                            showDebugInfo = !showDebugInfo
+                        }
+                    }
                 )
             }
     ) {
@@ -2365,7 +3028,13 @@ fun AmbientClockScreen(
                     }
                 ) {
                     Text(
-                        text = String.format(Locale.getDefault(), "%02d:%02d", currentTime.get(Calendar.HOUR_OF_DAY), currentTime.get(Calendar.MINUTE)),
+                        text = if (use24HourClock) {
+                            String.format(Locale.getDefault(), "%02d:%02d", currentTime.get(Calendar.HOUR_OF_DAY), currentTime.get(Calendar.MINUTE))
+                        } else {
+                            val hour12 = currentTime.get(Calendar.HOUR).let { if (it == 0) 12 else it }
+                            val amPm = if (currentTime.get(Calendar.AM_PM) == Calendar.AM) "AM" else "PM"
+                            String.format(Locale.getDefault(), "%d:%02d %s", hour12, currentTime.get(Calendar.MINUTE), amPm)
+                        },
                         fontSize = 90.sp, fontWeight = FontWeight.ExtraLight, color = Color.White.copy(alpha = 0.5f)
                     )
                     Text(
@@ -2452,6 +3121,30 @@ fun TvAmbientScreen(
                     fontSize = 22.sp,
                     textAlign = TextAlign.Center
                 )
+
+                // Radio/live streams and anything the source can't time
+                // report a 0 duration - skip the bar entirely rather than
+                // show a stuck or meaningless one.
+                if (trackState.durationSeconds > 0) {
+                    val displayedSeconds = rememberInterpolatedPosition(trackState)
+                    val remainingSeconds = (trackState.durationSeconds - displayedSeconds).coerceAtLeast(0)
+                    Spacer(modifier = Modifier.height(20.dp))
+                    LinearProgressIndicator(
+                        progress = { (displayedSeconds.toFloat() / trackState.durationSeconds).coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .width(280.dp)
+                            .height(3.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = Color.White.copy(alpha = 0.6f),
+                        trackColor = Color.White.copy(alpha = 0.15f)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "-${formatTrackTime(remainingSeconds)}",
+                        color = Color.White.copy(alpha = 0.4f),
+                        fontSize = 14.sp
+                    )
+                }
             }
         }
     }

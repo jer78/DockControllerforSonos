@@ -7,6 +7,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.time.OffsetDateTime
+import java.time.temporal.ChronoUnit
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -92,12 +94,32 @@ class HomeAssistantManager {
 
                         Log.e("HAManager", "Parsed HA State: $state, Art: $albumArtUrl")
 
+                        val isPlaying = state == "playing"
+                        val duration = attrs.optDouble("media_duration", 0.0)
+                        var position = attrs.optDouble("media_position", 0.0)
+                        if (isPlaying) {
+                            // HA reports media_position as of media_position_updated_at,
+                            // not "right now" - add on however long has elapsed since so a
+                            // one-shot fetch (no local playback clock to tick from) still
+                            // lands close to the real position.
+                            val updatedAt = attrs.optString("media_position_updated_at", "")
+                            try {
+                                val updatedAtInstant = OffsetDateTime.parse(updatedAt).toInstant()
+                                val elapsedSeconds = ChronoUnit.MILLIS.between(updatedAtInstant, java.time.Instant.now()) / 1000.0
+                                if (elapsedSeconds > 0) position += elapsedSeconds
+                            } catch (e: Exception) {
+                                // Missing/unparseable timestamp - fall back to the raw value.
+                            }
+                        }
+
                         val track = TrackState(
                             title = attrs.optString("media_title", "TV Mode"),
                             artist = attrs.optString("media_artist", "Home Assistant"),
                             album = attrs.optString("media_album_name", ""),
                             albumArtUrl = albumArtUrl,
-                            isPlaying = state == "playing"
+                            isPlaying = isPlaying,
+                            positionSeconds = position.coerceIn(0.0, duration).toInt(),
+                            durationSeconds = duration.toInt()
                         )
                         callback(track)
                         return
@@ -107,6 +129,33 @@ class HomeAssistantManager {
                 }
                 callback(TrackState())
             }
+        })
+    }
+
+    // Maps the same play/pause/next/previous action strings DockDashboardUI's
+    // transport buttons already send for Sonos onto the equivalent HA
+    // media_player service, for TV mode's HA-sourced source.
+    fun sendMediaPlayerCommand(url: String, token: String, entityId: String, action: String) {
+        if (entityId.isBlank()) return
+        val service = when (action) {
+            "play" -> "media_play"
+            "pause" -> "media_pause"
+            "next" -> "media_next_track"
+            "previous" -> "media_previous_track"
+            else -> return
+        }
+        val fullUrl = getFullUrl(url, "/api/services/media_player/$service")
+        val json = JSONObject().put("entity_id", entityId)
+        val body = json.toString().toRequestBody("application/json".toMediaType())
+        val request = Request.Builder()
+            .url(fullUrl)
+            .post(body)
+            .addHeader("Authorization", "Bearer $token")
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {}
+            override fun onResponse(call: Call, response: Response) {}
         })
     }
 

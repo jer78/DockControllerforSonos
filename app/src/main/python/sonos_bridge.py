@@ -179,7 +179,13 @@ def get_now_playing(speaker_name=None):
             "volume": device.volume,
             "mute": bool(device.mute),
             "group_members": group_members,
-            "is_tv": is_tv
+            "is_tv": is_tv,
+            # "H:MM:SS" - live streams/radio report "NOT_IMPLEMENTED" or
+            # "0:00:00" for one or both, so these are left as raw strings
+            # for the Kotlin side to parse defensively rather than assumed
+            # always-valid here.
+            "position": info.get('position', ''),
+            "duration": info.get('duration', '')
         }
     except Exception as e:
         return {"error": str(e)}
@@ -331,6 +337,116 @@ def set_mute(muted, speaker_name=None):
         if not device: device = get_speaker_instance(speaker_name)
         if not device: return False
         device.mute = bool(muted)
+        return True
+    except: return False
+
+def get_audio_settings(speaker_name=None):
+    """
+    Speaker-hardware EQ/features (Night Sound, Speech Enhancement, Bass,
+    Treble, Loudness, subwoofer presence). Night Sound/Speech Enhancement
+    are soundbar-only in SoCo (night_mode/dialog_mode return None on
+    anything else) - each field is left None whenever the coordinator
+    doesn't support it, rather than guessing a default.
+    """
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return {"error": "No Sonos device found"}
+        master = device.group.coordinator
+
+        result = {
+            "is_soundbar": bool(master.is_soundbar),
+            "has_subwoofer": False,
+            "night_mode": None,
+            "dialog_mode": None,
+            "bass": None,
+            "treble": None,
+            "loudness": None,
+            "sub_enabled": None
+        }
+
+        try:
+            result["has_subwoofer"] = bool(master.has_subwoofer)
+        except Exception:
+            pass
+
+        if result["has_subwoofer"]:
+            try:
+                result["sub_enabled"] = bool(master.sub_enabled)
+            except Exception:
+                pass
+
+        if result["is_soundbar"]:
+            try:
+                result["night_mode"] = bool(master.night_mode)
+            except Exception:
+                pass
+            try:
+                result["dialog_mode"] = bool(master.dialog_mode)
+            except Exception:
+                pass
+
+        try:
+            result["bass"] = int(master.bass)
+        except Exception:
+            pass
+        try:
+            result["treble"] = int(master.treble)
+        except Exception:
+            pass
+        try:
+            result["loudness"] = bool(master.loudness)
+        except Exception:
+            pass
+
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+def set_night_mode(enabled, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        device.group.coordinator.night_mode = bool(enabled)
+        return True
+    except: return False
+
+def set_dialog_mode(enabled, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        device.group.coordinator.dialog_mode = bool(enabled)
+        return True
+    except: return False
+
+def set_bass(value, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        device.group.coordinator.bass = int(value)
+        return True
+    except: return False
+
+def set_treble(value, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        device.group.coordinator.treble = int(value)
+        return True
+    except: return False
+
+def set_loudness(enabled, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        device.group.coordinator.loudness = bool(enabled)
+        return True
+    except: return False
+
+def set_sub_enabled(enabled, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        device.group.coordinator.sub_enabled = bool(enabled)
         return True
     except: return False
 

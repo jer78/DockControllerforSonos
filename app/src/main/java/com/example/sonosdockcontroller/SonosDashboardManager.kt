@@ -24,6 +24,9 @@ class SonosDashboardManager private constructor(context: Context) {
     private val _currentVolume = MutableStateFlow(30f)
     val currentVolume: StateFlow<Float> = _currentVolume.asStateFlow()
 
+    private val _audioSettings = MutableStateFlow(SonosAudioSettings())
+    val audioSettings: StateFlow<SonosAudioSettings> = _audioSettings.asStateFlow()
+
     private val _albumHistory = MutableStateFlow<List<AlbumHistoryItem>>(emptyList())
     val albumHistory: StateFlow<List<AlbumHistoryItem>> = _albumHistory.asStateFlow()
 
@@ -54,7 +57,20 @@ class SonosDashboardManager private constructor(context: Context) {
 
     private var pollingJob: Job? = null
 
+    // Set by whichever host (MainActivity / SonosDreamService) is currently
+    // showing an ambient screen (Cover Flow or TV Ambient) - those run most
+    // of the time on a screensaver, so polling backs off while idle there
+    // and speeds back up on Now Playing, where snappy updates actually matter.
+    private val _isIdleScreen = MutableStateFlow(false)
+    fun setIdleScreen(idle: Boolean) {
+        _isIdleScreen.value = idle
+    }
+
     companion object {
+        private const val ACTIVE_POLL_INTERVAL_MS = 2000L
+        private const val IDLE_POLL_INTERVAL_MS = 6000L
+        private const val ACTIVE_HA_POLL_INTERVAL_MS = 5000L
+        private const val IDLE_HA_POLL_INTERVAL_MS = 15000L
         @Volatile
         private var instance: SonosDashboardManager? = null
 
@@ -93,7 +109,18 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
+    // This manager is a singleton shared by MainActivity and SonosDreamService
+    // (the screensaver), each with its own independent lifecycle calling
+    // start/stopPolling. Reference-counted so one host detaching (e.g. the
+    // screensaver dismissing, which happens routinely) doesn't kill the
+    // shared poll loop out from under the other host - previously it did,
+    // permanently freezing the Now Playing screen until the app was killed
+    // and relaunched, since MainActivity only calls startPolling() once, in
+    // onCreate, never again on resume.
+    private var activeHostCount = 0
+
     fun startPolling() {
+        activeHostCount++
         if (pollingJob != null) return
         scope.launch {
             _coverFlowMode.value = settingsManager.coverFlowMode.first()
@@ -111,6 +138,8 @@ class SonosDashboardManager private constructor(context: Context) {
     }
 
     fun stopPolling() {
+        activeHostCount = (activeHostCount - 1).coerceAtLeast(0)
+        if (activeHostCount > 0) return
         pollingJob?.cancel()
         pollingJob = null
     }
@@ -153,6 +182,111 @@ class SonosDashboardManager private constructor(context: Context) {
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
+            }
+        }
+    }
+
+    // Speaker-hardware EQ/features rarely change, so this piggybacks on
+    // refreshSpeakerGroups()'s cadence (every 5th poll cycle) rather than
+    // hitting the speaker with extra UPnP calls every 2s.
+    fun refreshAudioSettings() {
+        scope.launch {
+            val py = Python.getInstance()
+            val speaker = settingsManager.sonosSpeaker.first()
+            if (speaker.isNotBlank()) {
+                try {
+                    val map = py.getModule("sonos_bridge")
+                        .callAttr("get_audio_settings", speaker)
+                        .asMap()
+                    if (!map.containsKey(PyObject.fromJava("error"))) {
+                        // night_mode/dialog_mode/bass/treble/loudness come back as
+                        // Python None on speakers that don't support them -
+                        // toJava(the boxed type) is the Chaquopy-documented way to
+                        // get a real Kotlin null out of that, rather than toBoolean()/
+                        // toInt() which throw trying to convert None.
+                        _audioSettings.value = SonosAudioSettings(
+                            isSoundbar = map[PyObject.fromJava("is_soundbar")]?.toBoolean() ?: false,
+                            hasSubwoofer = map[PyObject.fromJava("has_subwoofer")]?.toBoolean() ?: false,
+                            nightMode = map[PyObject.fromJava("night_mode")]?.toJava(Boolean::class.javaObjectType),
+                            dialogMode = map[PyObject.fromJava("dialog_mode")]?.toJava(Boolean::class.javaObjectType),
+                            bass = map[PyObject.fromJava("bass")]?.toJava(Int::class.javaObjectType),
+                            treble = map[PyObject.fromJava("treble")]?.toJava(Int::class.javaObjectType),
+                            loudness = map[PyObject.fromJava("loudness")]?.toJava(Boolean::class.javaObjectType),
+                            subEnabled = map[PyObject.fromJava("sub_enabled")]?.toJava(Boolean::class.javaObjectType)
+                        )
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+    fun toggleNightMode() {
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            if (speaker.isNotBlank()) {
+                val newValue = !(_audioSettings.value.nightMode ?: false)
+                val py = Python.getInstance()
+                val ok = py.getModule("sonos_bridge").callAttr("set_night_mode", newValue, speaker).toBoolean()
+                if (ok) _audioSettings.update { it.copy(nightMode = newValue) }
+            }
+        }
+    }
+
+    fun toggleDialogMode() {
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            if (speaker.isNotBlank()) {
+                val newValue = !(_audioSettings.value.dialogMode ?: false)
+                val py = Python.getInstance()
+                val ok = py.getModule("sonos_bridge").callAttr("set_dialog_mode", newValue, speaker).toBoolean()
+                if (ok) _audioSettings.update { it.copy(dialogMode = newValue) }
+            }
+        }
+    }
+
+    fun setBass(value: Int) {
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            if (speaker.isNotBlank()) {
+                val py = Python.getInstance()
+                val ok = py.getModule("sonos_bridge").callAttr("set_bass", value, speaker).toBoolean()
+                if (ok) _audioSettings.update { it.copy(bass = value) }
+            }
+        }
+    }
+
+    fun setTreble(value: Int) {
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            if (speaker.isNotBlank()) {
+                val py = Python.getInstance()
+                val ok = py.getModule("sonos_bridge").callAttr("set_treble", value, speaker).toBoolean()
+                if (ok) _audioSettings.update { it.copy(treble = value) }
+            }
+        }
+    }
+
+    fun setLoudness(enabled: Boolean) {
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            if (speaker.isNotBlank()) {
+                val py = Python.getInstance()
+                val ok = py.getModule("sonos_bridge").callAttr("set_loudness", enabled, speaker).toBoolean()
+                if (ok) _audioSettings.update { it.copy(loudness = enabled) }
+            }
+        }
+    }
+
+    fun toggleSubEnabled() {
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            if (speaker.isNotBlank()) {
+                val newValue = !(_audioSettings.value.subEnabled ?: false)
+                val py = Python.getInstance()
+                val ok = py.getModule("sonos_bridge").callAttr("set_sub_enabled", newValue, speaker).toBoolean()
+                if (ok) _audioSettings.update { it.copy(subEnabled = newValue) }
             }
         }
     }
@@ -275,6 +409,18 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
+    // SoCo reports position/duration as "H:MM:SS" - live streams/radio (and
+    // anything else it can't time) come back as "NOT_IMPLEMENTED" or blank,
+    // which just falls through to 0 here rather than a parse crash.
+    private fun parseSonosTime(raw: String?): Int {
+        val parts = raw?.split(":") ?: return 0
+        if (parts.size != 3) return 0
+        val hours = parts[0].toIntOrNull() ?: return 0
+        val minutes = parts[1].toIntOrNull() ?: return 0
+        val seconds = parts[2].toIntOrNull() ?: return 0
+        return hours * 3600 + minutes * 60 + seconds
+    }
+
     private suspend fun pollSonos() {
         val py = Python.getInstance()
         val pyModule = py.getModule("sonos_bridge")
@@ -319,6 +465,7 @@ class SonosDashboardManager private constructor(context: Context) {
 
                     if (favoritePollCounter % 5 == 0) {
                         refreshSpeakerGroups()
+                        refreshAudioSettings()
                     }
 
                     val pyDict = pyModule.callAttr("get_now_playing", speaker).asMap()
@@ -358,7 +505,9 @@ class SonosDashboardManager private constructor(context: Context) {
                                         isPlaying = haTrack.isPlaying,
                                         prevTrack = "None",
                                         nextTrack = "None",
-                                        groupMembers = memberVolumes
+                                        groupMembers = memberVolumes,
+                                        positionSeconds = haTrack.positionSeconds,
+                                        durationSeconds = haTrack.durationSeconds
                                     )}
                                 }
                             } else {
@@ -367,7 +516,9 @@ class SonosDashboardManager private constructor(context: Context) {
                                     artist = "Select HA Entity",
                                     albumArtUrl = "",
                                     isPlaying = true,
-                                    groupMembers = memberVolumes
+                                    groupMembers = memberVolumes,
+                                    positionSeconds = 0,
+                                    durationSeconds = 0
                                 )}
                             }
                         } else {
@@ -376,6 +527,8 @@ class SonosDashboardManager private constructor(context: Context) {
                             val album = pyDict[PyObject.fromJava("album")]?.toString() ?: ""
                             val art = pyDict[PyObject.fromJava("album_art")]?.toString() ?: ""
                             val state = pyDict[PyObject.fromJava("state")]?.toString() ?: "STOPPED"
+                            val position = parseSonosTime(pyDict[PyObject.fromJava("position")]?.toString())
+                            val duration = parseSonosTime(pyDict[PyObject.fromJava("duration")]?.toString())
 
                             _trackState.update { it.copy(
                                 title = title,
@@ -383,7 +536,9 @@ class SonosDashboardManager private constructor(context: Context) {
                                 album = album,
                                 albumArtUrl = art,
                                 isPlaying = state == "PLAYING",
-                                groupMembers = memberVolumes
+                                groupMembers = memberVolumes,
+                                positionSeconds = position,
+                                durationSeconds = duration
                             )}
 
                             if (artist.isNotBlank() && album.isNotBlank()) {
@@ -441,7 +596,7 @@ class SonosDashboardManager private constructor(context: Context) {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-            delay(2000)
+            delay(if (_isIdleScreen.value) IDLE_POLL_INTERVAL_MS else ACTIVE_POLL_INTERVAL_MS)
         }
     }
 
@@ -468,7 +623,7 @@ class SonosDashboardManager private constructor(context: Context) {
                     _haState.value = newState
                 }
             }
-            delay(5000)
+            delay(if (_isIdleScreen.value) IDLE_HA_POLL_INTERVAL_MS else ACTIVE_HA_POLL_INTERVAL_MS)
         }
     }
 
@@ -510,11 +665,27 @@ class SonosDashboardManager private constructor(context: Context) {
 
     fun sendSonosAction(action: String) {
         scope.launch {
-            val py = Python.getInstance()
-            val speaker = settingsManager.sonosSpeaker.first()
-            if (speaker.isNotBlank()) {
-                _trackState.update { it.copy(lastCommandSent = "Action: $action") }
-                py.getModule("sonos_bridge").callAttr("control_playback", action, speaker)
+            // TV mode's transport (play/pause/next/previous) belongs to
+            // whatever's actually feeding the TV input - the HA media_player
+            // entity, not the Sonos speaker itself, which is just relaying
+            // audio from the optical/HDMI input and has no real "next track"
+            // to send. Same play/pause/next/previous button labels, different
+            // backend, exactly like Now Playing already swaps its data source.
+            if (_isTvMode.value) {
+                val url = settingsManager.haUrl.first()
+                val token = settingsManager.haToken.first()
+                val haMedia = settingsManager.selectedHaMediaPlayer.first()
+                if (haMedia.isNotBlank()) {
+                    _trackState.update { it.copy(lastCommandSent = "HA Action: $action") }
+                    haManager.sendMediaPlayerCommand(url, token, haMedia, action)
+                }
+            } else {
+                val py = Python.getInstance()
+                val speaker = settingsManager.sonosSpeaker.first()
+                if (speaker.isNotBlank()) {
+                    _trackState.update { it.copy(lastCommandSent = "Action: $action") }
+                    py.getModule("sonos_bridge").callAttr("control_playback", action, speaker)
+                }
             }
         }
     }

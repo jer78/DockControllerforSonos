@@ -32,6 +32,10 @@ class SpectrumAnalyzer(private val bandCount: Int = 20) {
 
     private var job: Job? = null
 
+    // Auto-gain ceiling (see bucketToBands) - reset each start() so a
+    // session doesn't inherit a stale calibration from before it was paused.
+    private var agcCeiling = INITIAL_AGC_CEILING
+
     private val _bands = MutableStateFlow(FloatArray(bandCount))
     val bands: StateFlow<FloatArray> = _bands.asStateFlow()
 
@@ -47,6 +51,7 @@ class SpectrumAnalyzer(private val bandCount: Int = 20) {
     @SuppressLint("MissingPermission")
     fun start(scope: CoroutineScope) {
         if (isRunning) return
+        agcCeiling = INITIAL_AGC_CEILING
         job = scope.launch(Dispatchers.Default) {
             val record = openAudioRecord() ?: return@launch
             val fftSize = FFT_SIZE
@@ -118,12 +123,27 @@ class SpectrumAnalyzer(private val bandCount: Int = 20) {
         return null
     }
 
-    /** Log-spaced max-magnitude bucketing, with a rough dynamic-range compression for a livelier look. */
+    /**
+     * Log-spaced max-magnitude bucketing. Two adjustments keep this looking
+     * like a "real" analyzer instead of a mostly-flat row with one or two
+     * bars twitching:
+     *  - Frequency compensation: real audio (and the mic's own response)
+     *    rolls off hard at higher frequencies, so raw FFT magnitude alone
+     *    leaves treble bars almost always near-zero while only bass moves.
+     *    Boosted by sqrt(frequency) so the whole row visibly reacts.
+     *  - Auto-gain: instead of a fixed magnitude-to-1.0 reference (which has
+     *    to guess the room's actual volume/mic gain and was sitting too high
+     *    in practice, making every bar look tiny), track a decaying ceiling
+     *    of recent loudness and normalize against that. Rises instantly on a
+     *    loud passage, relaxes slowly after, so bars use the full height
+     *    regardless of how loud the room/mic actually reads.
+     */
     private fun bucketToBands(real: FloatArray, imag: FloatArray, sampleRate: Int, fftSize: Int): FloatArray {
         val usableBins = fftSize / 2
         val nyquist = sampleRate / 2.0
         val hzPerBin = nyquist / usableBins
-        val out = FloatArray(bandCount)
+        val boostedPeaks = FloatArray(bandCount)
+        var frameMax = 0f
 
         for (b in 0 until bandCount) {
             val f0 = MIN_FREQ_HZ * (MAX_FREQ_HZ / MIN_FREQ_HZ).pow(b / bandCount.toDouble())
@@ -136,9 +156,21 @@ class SpectrumAnalyzer(private val bandCount: Int = 20) {
                 val mag = hypot(real[i], imag[i])
                 if (mag > peak) peak = mag
             }
-            // Not calibrated to any real SPL/dB scale - just squashed into a
-            // visually reasonable 0..1 range.
-            out[b] = sqrt((peak / REFERENCE_MAGNITUDE).coerceIn(0f, 1f))
+            val freqBoost = sqrt(f0 / MIN_FREQ_HZ).toFloat()
+            val boosted = peak * freqBoost
+            boostedPeaks[b] = boosted
+            if (boosted > frameMax) frameMax = boosted
+        }
+
+        agcCeiling = (if (frameMax > agcCeiling) {
+            frameMax
+        } else {
+            agcCeiling * AGC_DECAY + frameMax * (1f - AGC_DECAY)
+        }).coerceAtLeast(MIN_AGC_CEILING)
+
+        val out = FloatArray(bandCount)
+        for (b in 0 until bandCount) {
+            out[b] = sqrt((boostedPeaks[b] / agcCeiling).coerceIn(0f, 1f))
         }
         return out
     }
@@ -191,11 +223,15 @@ class SpectrumAnalyzer(private val bandCount: Int = 20) {
 
     companion object {
         private const val SAMPLE_RATE = 44100
-        private const val FFT_SIZE = 2048 // power of two, ~46ms per frame at 44.1kHz
+        private const val FFT_SIZE = 1024 // power of two, ~23ms per frame at 44.1kHz - kept small for a snappy, real-time-feeling visualizer over frequency precision
         private const val MIN_FREQ_HZ = 60.0
         private const val MAX_FREQ_HZ = 16000.0
-        // Empirical-only reference used to squash raw FFT magnitude into a
-        // 0..1 range - tune this if the bars sit too low/high in practice.
-        private const val REFERENCE_MAGNITUDE = 40f
+        // Auto-gain tuning (see bucketToBands): seed ceiling before any real
+        // audio has been seen, floor so near-silence doesn't get amplified
+        // into noise-driven bars, and how fast the ceiling relaxes back down
+        // after a loud passage (per ~23ms frame, so 0.992 is roughly a 3s decay).
+        private const val INITIAL_AGC_CEILING = 8f
+        private const val MIN_AGC_CEILING = 1.5f
+        private const val AGC_DECAY = 0.992f
     }
 }
