@@ -136,6 +136,44 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
     except Exception as e:
         return [{"title": "DIAG", "artist": f"Crawl Error: {str(e)}"}]
 
+def _display_title(title):
+    # Mirrors get_sonos_favorites' title cleanup, so a title shown in the UI
+    # can be compared against the raw favorite it came from.
+    return "Unknown Album" if title.lower() in ['sonos', 'apple music', 'amazon music'] else title
+
+def delete_sonos_favorite(item_id, expected_title="", speaker_name=None):
+    """
+    PERMANENTLY removes a Sonos Favorite from the whole Sonos system (it
+    disappears from the Sonos app too). SoCo has no delete helper, so this
+    calls the ContentDirectory DestroyObject action directly - the same one
+    SoCo's own remove_sonos_playlist() uses.
+    """
+    try:
+        # Only real top-level favorites ("FV:2/<n>") can be destroyed.
+        # Items found by get_sonos_favorites' S2 category dive carry their
+        # service's IDs instead, and must never be passed to DestroyObject.
+        if not item_id or not item_id.startswith("FV:2/"):
+            return "FAIL: This item can't be deleted from here"
+
+        device = get_speaker_instance(speaker_name)
+        if not device: return "FAIL: Speaker Offline"
+        master = device.group.coordinator
+
+        # FV:2 IDs aren't guaranteed stable across changes made elsewhere
+        # (e.g. the Sonos app), so re-check the ID still points at the
+        # favorite the user actually confirmed before destroying anything.
+        favs = master.music_library.get_sonos_favorites(complete_result=True)
+        match = next((f for f in favs if f.item_id == item_id), None)
+        if match is None:
+            return "FAIL: Favorite no longer exists"
+        if expected_title and _display_title(match.title) != expected_title:
+            return "FAIL: Favorites changed - refresh and try again"
+
+        master.contentDirectory.DestroyObject([("ObjectID", item_id)])
+        return "OK"
+    except Exception as e:
+        return f"FAIL: {str(e)}"
+
 def get_now_playing(speaker_name=None):
     device = get_speaker_instance(speaker_name)
     if not device: return {"error": "No Sonos device found"}

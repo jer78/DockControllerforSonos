@@ -76,6 +76,7 @@ class MainActivity : ComponentActivity() {
             val audioSettings by manager.audioSettings.collectAsState()
             val discoveredSpeakers by manager.discoveredSpeakers.collectAsState()
             val albumHistory by manager.albumHistory.collectAsState()
+            val coverFlowMode by manager.coverFlowMode.collectAsState()
             val speakerGroups by manager.speakerGroups.collectAsState()
             val showSpectrumAnalyzer by settingsManager.showSpectrumAnalyzer.collectAsState(initial = false)
             val spectrumColorScheme by settingsManager.spectrumColorScheme.collectAsState(initial = SpectrumColorScheme.RAINBOW)
@@ -237,7 +238,9 @@ class MainActivity : ComponentActivity() {
                                     isAmbientMode = false
                                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                                 },
-                                use24HourClock = use24HourClock
+                                use24HourClock = use24HourClock,
+                                isFavoritesMode = coverFlowMode == "favorites",
+                                onDeleteFavorite = { manager.deleteSonosFavorite(it) }
                             )
                         }
                         DockScreen.NOW_PLAYING -> {

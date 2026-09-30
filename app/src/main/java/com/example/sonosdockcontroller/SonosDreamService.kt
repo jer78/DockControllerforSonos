@@ -74,6 +74,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                 val currentVolume by manager.currentVolume.collectAsState()
                 val audioSettings by manager.audioSettings.collectAsState()
                 val albumHistory by manager.albumHistory.collectAsState()
+                val coverFlowMode by manager.coverFlowMode.collectAsState()
                 val speakerGroups by manager.speakerGroups.collectAsState()
                 val showSpectrumAnalyzer by settingsManager.showSpectrumAnalyzer.collectAsState(initial = false)
                 val spectrumColorScheme by settingsManager.spectrumColorScheme.collectAsState(initial = SpectrumColorScheme.RAINBOW)
@@ -209,7 +210,9 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                     },
                                     onRemoveAlbum = { manager.removeAlbumFromHistory(it) },
                                     onWakeUp = { isAmbientMode = false },
-                                    use24HourClock = use24HourClock
+                                    use24HourClock = use24HourClock,
+                                    isFavoritesMode = coverFlowMode == "favorites",
+                                    onDeleteFavorite = { manager.deleteSonosFavorite(it) }
                                 )
                             }
                             DockScreen.NOW_PLAYING -> {

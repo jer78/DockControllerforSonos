@@ -1,6 +1,7 @@
 package com.example.sonosdockcontroller
 
 import android.content.Context
+import android.widget.Toast
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
 import kotlinx.coroutines.*
@@ -798,6 +799,38 @@ class SonosDashboardManager private constructor(context: Context) {
                 if (_coverFlowMode.value == "history") {
                     settingsManager.saveAlbumHistory(currentList)
                 }
+            }
+        }
+    }
+
+    // Favorites mode's X button. Unlike removeAlbumFromHistory (which only
+    // hides a card locally), this PERMANENTLY deletes the favorite from the
+    // user's Sonos system - the UI must confirm before calling it. The card
+    // is removed optimistically; on failure the list is reloaded from the
+    // speaker so it reappears, and the reason is shown as a Toast.
+    fun deleteSonosFavorite(item: AlbumHistoryItem) {
+        _albumHistory.value = _albumHistory.value.filterNot { it.playUri == item.playUri }
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            val result = try {
+                withTimeoutOrNull(8000) {
+                    Python.getInstance().getModule("sonos_bridge")
+                        .callAttr("delete_sonos_favorite", item.playUri, item.albumTitle, speaker)
+                        .toString()
+                } ?: "FAIL: Speaker timed out"
+            } catch (e: Exception) {
+                "FAIL: ${e.message}"
+            }
+
+            val message = if (result == "OK") {
+                _favoriteAlbumsRef.value = _favoriteAlbumsRef.value.filterNot { it.playUri == item.playUri }
+                "Deleted \"${item.albumTitle}\" from Sonos Favorites"
+            } else {
+                reloadAlbumSourceForMode(_coverFlowMode.value)
+                "Couldn't delete: ${result.removePrefix("FAIL: ")}"
+            }
+            withContext(Dispatchers.Main) {
+                Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
             }
         }
     }

@@ -2621,9 +2621,29 @@ fun AmbientClockScreen(
     onPlayAlbum: (AlbumHistoryItem, Rect) -> Unit,
     onRemoveAlbum: (String) -> Unit,
     onWakeUp: () -> Unit,
-    use24HourClock: Boolean = true
+    use24HourClock: Boolean = true,
+    // In Favorites mode the X permanently deletes the Sonos Favorite (after
+    // a confirmation prompt) instead of just hiding the card.
+    isFavoritesMode: Boolean = false,
+    onDeleteFavorite: (AlbumHistoryItem) -> Unit = {}
 ) {
     var isFadingOut by remember { mutableStateOf(false) }
+    // Favorite awaiting the user's confirm/cancel, and then the one they
+    // confirmed (which drives that card's drop animation before deleting).
+    var pendingFavoriteDelete by remember { mutableStateOf<AlbumHistoryItem?>(null) }
+    var confirmedFavoriteDelete by remember { mutableStateOf<AlbumHistoryItem?>(null) }
+
+    // Fallback if no centered card picked up the confirmed delete (e.g. the
+    // pager moved) - delete without the animation rather than leave it
+    // pending, where it would fire whenever that card next scrolled in.
+    LaunchedEffect(confirmedFavoriteDelete) {
+        val item = confirmedFavoriteDelete ?: return@LaunchedEffect
+        delay(1500)
+        if (confirmedFavoriteDelete == item) {
+            confirmedFavoriteDelete = null
+            onDeleteFavorite(item)
+        }
+    }
     val fadeAlpha by animateFloatAsState(
         targetValue = if (isFadingOut) 0f else 1f,
         animationSpec = tween(600),
@@ -2679,8 +2699,8 @@ fun AmbientClockScreen(
         }
     }
 
-    LaunchedEffect(albumHistory, isUserInteracting, isDragged) {
-        if (albumHistory.isNotEmpty()) {
+    LaunchedEffect(albumHistory, isUserInteracting, isDragged, pendingFavoriteDelete) {
+        if (albumHistory.isNotEmpty() && pendingFavoriteDelete == null) {
             while (true) {
                 delay(8000)
                 if (pagerState.pageCount > 0 && !isUserInteracting && !isDragged && !pagerState.isScrollInProgress) {
@@ -2758,6 +2778,14 @@ fun AmbientClockScreen(
                     val dropAnim = remember { Animatable(0f) }
                     val isBeingRemoved = remember { mutableStateOf(false) }
 
+                    // Only the centered copy animates - with a short list the
+                    // same favorite also appears on other (virtual) pages.
+                    LaunchedEffect(confirmedFavoriteDelete) {
+                        if (confirmedFavoriteDelete == albumItem && page == pagerState.currentPage) {
+                            isBeingRemoved.value = true
+                        }
+                    }
+
                     LaunchedEffect(isBeingRemoved.value) {
                         if (isBeingRemoved.value) {
                             dropAnim.animateTo(
@@ -2768,7 +2796,12 @@ fun AmbientClockScreen(
                                 targetValue = 2000f,
                                 animationSpec = tween(400, easing = LinearEasing)
                             )
-                            onRemoveAlbum(albumItem.artUrl)
+                            if (isFavoritesMode && confirmedFavoriteDelete == albumItem) {
+                                confirmedFavoriteDelete = null
+                                onDeleteFavorite(albumItem)
+                            } else {
+                                onRemoveAlbum(albumItem.artUrl)
+                            }
                             isBeingRemoved.value = false
                             dropAnim.snapTo(0f)
                         }
@@ -2885,7 +2918,10 @@ fun AmbientClockScreen(
                                         }
 
                                         IconButton(
-                                            onClick = { isBeingRemoved.value = true },
+                                            onClick = {
+                                                if (isFavoritesMode) pendingFavoriteDelete = albumItem
+                                                else isBeingRemoved.value = true
+                                            },
                                             modifier = Modifier
                                                 .align(Alignment.TopEnd)
                                                 .padding(16.dp)
@@ -3050,6 +3086,62 @@ fun AmbientClockScreen(
             trackState = trackState,
             onClose = { showDebugInfo = false }
         )
+
+        // Drawn in-tree rather than as an AlertDialog, since this screen
+        // also runs inside SonosDreamService, which isn't an Activity.
+        pendingFavoriteDelete?.let { item ->
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.7f))
+                    // Swallows taps so they don't wake the screen; a tap
+                    // outside the card cancels.
+                    .pointerInput(Unit) {
+                        detectTapGestures(onTap = { pendingFavoriteDelete = null })
+                    }
+            ) {
+                Surface(
+                    color = Color(0xFF1E1E1E),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier
+                        .width(480.dp)
+                        .pointerInput(Unit) { detectTapGestures { } }
+                ) {
+                    Column(modifier = Modifier.padding(28.dp)) {
+                        Text(
+                            "Delete from Sonos Favorites?",
+                            color = Color.White,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            "\"${item.albumTitle}\" will be permanently removed from your Sonos " +
+                                "Favorites, including in the Sonos app. This can't be undone here.",
+                            color = Color.White.copy(alpha = 0.75f),
+                            fontSize = 16.sp
+                        )
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            TextButton(onClick = { pendingFavoriteDelete = null }) {
+                                Text("Cancel", color = Color.White)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            TextButton(onClick = {
+                                pendingFavoriteDelete = null
+                                confirmedFavoriteDelete = item
+                            }) {
+                                Text("Delete", color = Color(0xFFFF5252), fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
