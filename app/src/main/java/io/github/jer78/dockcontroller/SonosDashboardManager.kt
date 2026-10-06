@@ -68,6 +68,14 @@ class SonosDashboardManager private constructor(context: Context) {
 
     private var pollingJob: Job? = null
 
+    // "Previous" is the song that actually played before the current one,
+    // remembered here as songs change. The queue alone can't provide that:
+    // picking a new album replaces the whole queue, losing the song that
+    // was just playing. lastSeenTrack is the song currently playing;
+    // lastPlayedTrack is the one before it.
+    private var lastSeenTrack: TrackDetails? = null
+    private var lastPlayedTrack: TrackDetails? = null
+
     // Set by whichever host (MainActivity / SonosDreamService) is currently
     // showing an ambient screen (Cover Flow or TV Ambient) - those run most
     // of the time on a screensaver, so polling backs off while idle there
@@ -565,8 +573,30 @@ class SonosDashboardManager private constructor(context: Context) {
                             // "None" is TrackState's existing "nothing to show"
                             // marker for these, which the UI checks for.
                             fun pyString(key: String) = pyDict[PyObject.fromJava(key)]?.toString() ?: ""
-                            val prevTitle = pyString("prev_title").ifBlank { "None" }
                             val nextTitle = pyString("next_title").ifBlank { "None" }
+
+                            // Sonos briefly reports a blank title while
+                            // switching tracks or albums, so only a real,
+                            // different song counts as a change. Compared
+                            // without the art URL, which can change for the
+                            // same song.
+                            if (title.isNotBlank()) {
+                                val nowPlaying = TrackDetails(title = title, artist = artist, album = album, artUrl = art)
+                                val previouslySeen = lastSeenTrack
+                                if (previouslySeen != null && previouslySeen.copy(artUrl = "") != nowPlaying.copy(artUrl = "")) {
+                                    lastPlayedTrack = previouslySeen
+                                }
+                                lastSeenTrack = nowPlaying
+                            }
+                            // Until a song change has been seen (e.g. right
+                            // after the app starts), fall back to the track
+                            // before this one in the queue.
+                            val previous = lastPlayedTrack ?: TrackDetails(
+                                title = pyString("prev_title").ifBlank { "None" },
+                                artist = pyString("prev_artist"),
+                                album = pyString("prev_album"),
+                                artUrl = pyString("prev_art")
+                            )
 
                             _trackState.update { it.copy(
                                 title = title,
@@ -577,10 +607,10 @@ class SonosDashboardManager private constructor(context: Context) {
                                 groupMembers = memberVolumes,
                                 positionSeconds = position,
                                 durationSeconds = duration,
-                                prevTrack = prevTitle,
-                                prevArtist = pyString("prev_artist"),
-                                prevAlbum = pyString("prev_album"),
-                                prevArtUrl = pyString("prev_art"),
+                                prevTrack = previous.title,
+                                prevArtist = previous.artist,
+                                prevAlbum = previous.album,
+                                prevArtUrl = previous.artUrl,
                                 nextTrack = nextTitle,
                                 nextArtist = pyString("next_artist"),
                                 nextArtUrl = pyString("next_art")
