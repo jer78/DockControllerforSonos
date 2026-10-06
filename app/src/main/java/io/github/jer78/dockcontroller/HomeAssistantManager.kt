@@ -7,10 +7,22 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+
+// Result of the Settings > Home Assistant "Connect" check.
+sealed class HaConnectionStatus {
+    object NotTested : HaConnectionStatus()
+    object Testing : HaConnectionStatus()
+    data class Connected(val serverName: String, val version: String) : HaConnectionStatus()
+    data class Failed(val reason: String) : HaConnectionStatus()
+}
 
 class HomeAssistantManager {
     private val client = OkHttpClient()
@@ -18,6 +30,63 @@ class HomeAssistantManager {
     private fun getFullUrl(baseUrl: String, path: String): String {
         val cleanBase = baseUrl.trimEnd('/')
         return if (cleanBase.startsWith("http")) "$cleanBase$path" else "http://$cleanBase$path"
+    }
+
+    // Checks the URL and token together against /api/config, which needs a
+    // valid token and also tells us the server's name and version to show.
+    // Short timeout so a wrong address fails in seconds rather than hanging
+    // the Settings screen on OkHttp's default.
+    fun testConnection(url: String, token: String, callback: (HaConnectionStatus) -> Unit) {
+        if (url.isBlank() || token.isBlank()) {
+            callback(HaConnectionStatus.Failed("Enter a server URL and token"))
+            return
+        }
+        val request = try {
+            Request.Builder()
+                .url(getFullUrl(url.trim(), "/api/config"))
+                .addHeader("Authorization", "Bearer ${token.trim()}")
+                .build()
+        } catch (e: IllegalArgumentException) {
+            callback(HaConnectionStatus.Failed("That server URL isn't valid"))
+            return
+        }
+
+        val testClient = client.newBuilder().callTimeout(8, TimeUnit.SECONDS).build()
+        testClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                callback(HaConnectionStatus.Failed(when (e) {
+                    is UnknownHostException -> "Can't find that server - check the URL"
+                    is ConnectException -> "Server refused the connection - check the address and port"
+                    is SocketTimeoutException -> "Timed out - is the server reachable from this network?"
+                    is SSLException -> "Secure connection failed - try http:// or check the certificate"
+                    else -> if (call.isCanceled() || e.message?.contains("timeout", ignoreCase = true) == true) {
+                        "Timed out - is the server reachable from this network?"
+                    } else {
+                        "Couldn't connect: ${e.message ?: e.javaClass.simpleName}"
+                    }
+                }))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    val status = when (response.code) {
+                        200 -> try {
+                            val json = JSONObject(response.body?.string().orEmpty())
+                            HaConnectionStatus.Connected(
+                                serverName = json.optString("location_name", "Home Assistant").ifBlank { "Home Assistant" },
+                                version = json.optString("version", "")
+                            )
+                        } catch (e: Exception) {
+                            HaConnectionStatus.Failed("Server answered, but it doesn't look like Home Assistant")
+                        }
+                        401, 403 -> HaConnectionStatus.Failed("Token was rejected - check the long-lived access token")
+                        404 -> HaConnectionStatus.Failed("No Home Assistant API at that address - check the URL")
+                        else -> HaConnectionStatus.Failed("Server returned an error (HTTP ${response.code})")
+                    }
+                    callback(status)
+                }
+            }
+        })
     }
 
     fun fetchEntities(url: String, token: String, callback: (List<String>) -> Unit) {

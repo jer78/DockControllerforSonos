@@ -2315,6 +2315,29 @@ fun EntityAutocompleteField(
     }
 }
 
+// Status line beside Settings > Home Assistant's Connect button.
+@Composable
+private fun HaConnectionIndicator(status: HaConnectionStatus, modifier: Modifier = Modifier) {
+    val (color, text) = when (status) {
+        HaConnectionStatus.NotTested -> Color.Gray to "Not connected - tap Connect to check"
+        HaConnectionStatus.Testing -> Color.Gray to "Connecting..."
+        is HaConnectionStatus.Connected -> Color(0xFF2E7D32) to buildString {
+            append("Connected to ${status.serverName}")
+            if (status.version.isNotBlank()) append(" (v${status.version})")
+        }
+        is HaConnectionStatus.Failed -> Color(0xFFC62828) to status.reason
+    }
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        if (status == HaConnectionStatus.Testing) {
+            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+        } else {
+            Box(Modifier.size(10.dp).clip(CircleShape).background(color))
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(text, color = color, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
 // Compact label + switch row for the Settings dialog.
 @Composable
 private fun SettingsToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
@@ -2381,6 +2404,28 @@ fun SettingsModal(
     var climateEntities by remember { mutableStateOf<List<String>>(emptyList()) }
     var mediaPlayerEntities by remember { mutableStateOf<List<String>>(emptyList()) }
 
+    var haConnection by remember { mutableStateOf<HaConnectionStatus>(HaConnectionStatus.NotTested) }
+
+    // Tests the URL + token, and on success (re)loads the entity lists so
+    // the fields below autocomplete against whatever server just connected.
+    fun connectToHa() {
+        haConnection = HaConnectionStatus.Testing
+        val url = haUrl
+        val token = haToken
+        haManager.testConnection(url, token) { status ->
+            // Ignore a stale result if the fields changed while it ran.
+            if (url != haUrl || token != haToken) return@testConnection
+            haConnection = status
+            if (status is HaConnectionStatus.Connected) {
+                haManager.fetchEntities(url, token) { all ->
+                    lightEntities = all.filter { it.startsWith("light.") }.sorted()
+                    climateEntities = all.filter { it.startsWith("climate.") }.sorted()
+                    mediaPlayerEntities = all.filter { it.startsWith("media_player.") }.sorted()
+                }
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         selectedSpeaker = settingsManager.sonosSpeaker.first()
         haUrl = settingsManager.haUrl.first()
@@ -2407,14 +2452,11 @@ fun SettingsModal(
         spectrumHeightPercent = settingsManager.spectrumHeightPercent.first()
         spectrumConfineToAlbumArt = settingsManager.spectrumConfineToAlbumArt.first()
 
-        // Pull every light/climate/media_player entity HA knows about, once
-        // a connection is available, so the fields below can autocomplete.
+        // Check the saved connection straight away, so the status shows
+        // without needing to tap Connect - this also loads the entity lists
+        // the fields below autocomplete from.
         if (haUrl.isNotBlank() && haToken.isNotBlank()) {
-            haManager.fetchEntities(haUrl, haToken) { all ->
-                lightEntities = all.filter { it.startsWith("light.") }.sorted()
-                climateEntities = all.filter { it.startsWith("climate.") }.sorted()
-                mediaPlayerEntities = all.filter { it.startsWith("media_player.") }.sorted()
-            }
+            connectToHa()
         }
     }
 
@@ -2857,19 +2899,42 @@ fun SettingsModal(
 
                             OutlinedTextField(
                                 value = haUrl,
-                                onValueChange = { haUrl = it },
+                                onValueChange = {
+                                    haUrl = it
+                                    haConnection = HaConnectionStatus.NotTested
+                                },
                                 label = { Text("Server URL") },
+                                placeholder = { Text("http://homeassistant.local:8123") },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
 
                             OutlinedTextField(
                                 value = haToken,
-                                onValueChange = { haToken = it },
+                                onValueChange = {
+                                    haToken = it
+                                    haConnection = HaConnectionStatus.NotTested
+                                },
                                 label = { Text("Long-Lived Access Token") },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Button(
+                                    onClick = { connectToHa() },
+                                    enabled = haUrl.isNotBlank() && haToken.isNotBlank() &&
+                                        haConnection != HaConnectionStatus.Testing
+                                ) {
+                                    Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Connect")
+                                }
+                                HaConnectionIndicator(haConnection, modifier = Modifier.weight(1f))
+                            }
 
                             EntityAutocompleteField(
                                 label = "Light Entity",
