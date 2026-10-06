@@ -1,4 +1,4 @@
-package com.example.sonosdockcontroller
+package io.github.jer78.dockcontroller
 
 import android.annotation.SuppressLint
 import android.media.AudioFormat

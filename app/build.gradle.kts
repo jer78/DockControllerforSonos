@@ -5,15 +5,17 @@ plugins {
 }
 
 android {
-    namespace = "com.example.sonosdockcontroller"
+    namespace = "io.github.jer78.dockcontroller"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.sonosdockcontroller"
+        applicationId = "io.github.jer78.dockcontroller"
         minSdk = 26
         targetSdk = 35
         versionCode = 7
         versionName = "1.0.6"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -67,4 +69,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.palette:palette-ktx:1.0.0")
     implementation("androidx.compose.material:material-icons-extended:1.7.5")
+
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
 }

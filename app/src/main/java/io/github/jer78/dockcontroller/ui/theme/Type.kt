@@ -1,4 +1,4 @@
-package com.example.sonosdockcontroller.ui.theme
+package io.github.jer78.dockcontroller.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

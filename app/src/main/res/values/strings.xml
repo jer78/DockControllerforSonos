@@ -1,3 +1,5 @@
 <resources>
-    <string name="app_name">Dock Controller for Sonos</string>
+    <string name="app_name">Dock Controller for Sonos and Home Assistant</string>
+    <!-- Shown under the launcher icon, where the full name gets cut off. -->
+    <string name="launcher_label">Dock Controller</string>
 </resources>

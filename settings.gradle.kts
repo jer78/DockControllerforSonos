@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Dock Controller for Sonos"
+rootProject.name = "Dock Controller for Sonos and Home Assistant"
 include(":app")

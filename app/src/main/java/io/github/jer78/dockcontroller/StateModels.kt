@@ -1,4 +1,4 @@
-package com.example.sonosdockcontroller
+package io.github.jer78.dockcontroller
 
 // The three top-level screens MainActivity/SonosDreamService switch between,
 // used to drive the drop/rise AnimatedContent transition instead of an

@@ -1,4 +1,4 @@
-package com.example.sonosdockcontroller
+package io.github.jer78.dockcontroller
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*

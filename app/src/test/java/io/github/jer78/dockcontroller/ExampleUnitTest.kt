@@ -1,4 +1,4 @@
-package com.example.dockcontrollerforsonos
+package io.github.jer78.dockcontroller
 
 import org.junit.Test
 
