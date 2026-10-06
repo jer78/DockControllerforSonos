@@ -31,6 +31,12 @@ class SonosDashboardManager private constructor(context: Context) {
     private val _albumHistory = MutableStateFlow<List<AlbumHistoryItem>>(emptyList())
     val albumHistory: StateFlow<List<AlbumHistoryItem>> = _albumHistory.asStateFlow()
 
+    // The album last centered in Cover Flow, so leaving for Now Playing (or
+    // switching between the app and the screensaver) resumes the rotation
+    // there instead of restarting from the first album. Only read when Cover
+    // Flow is first composed, so it doesn't need to be observable.
+    var coverFlowCenterAlbum: AlbumHistoryItem? = null
+
     // Reference list of favorited ALBUMS, used only for matching what's
     // currently playing against - not shown directly in the UI. Mode A
     // (History) only tracks plays of albums that are already Sonos
@@ -55,6 +61,10 @@ class SonosDashboardManager private constructor(context: Context) {
 
     private val _favoritesRefreshStatus = MutableStateFlow("Idle")
     val favoritesRefreshStatus: StateFlow<String> = _favoritesRefreshStatus.asStateFlow()
+    // Item count from the last completed favorites refresh - null while one is
+    // running or after it failed.
+    private val _favoritesRefreshCount = MutableStateFlow<Int?>(null)
+    val favoritesRefreshCount: StateFlow<Int?> = _favoritesRefreshCount.asStateFlow()
 
     private var pollingJob: Job? = null
 
@@ -311,6 +321,7 @@ class SonosDashboardManager private constructor(context: Context) {
     fun refreshFavorites(fAlbums: Boolean, fPlaylists: Boolean, fRadio: Boolean) {
         scope.launch {
             _favoritesRefreshStatus.value = "Starting Instant Scan..."
+            _favoritesRefreshCount.value = null
             val py = Python.getInstance()
             val pyModule = py.getModule("sonos_bridge")
             val speaker = settingsManager.sonosSpeaker.first()
@@ -353,7 +364,7 @@ class SonosDashboardManager private constructor(context: Context) {
                         // actually seeing it play, if we have one. Keyed by
                         // title, not this fetch's uri, since that ID isn't
                         // guaranteed stable across refreshes.
-                        val artist = _favoriteArtistCache.value[title.lowercase()] ?: rawArtist
+                        val artist = learnedArtistFor(title) ?: rawArtist
                         favItems.add(AlbumHistoryItem(
                             artUrl = map[PyObject.fromJava("art")]?.toString() ?: "",
                             artist = artist,
@@ -365,6 +376,7 @@ class SonosDashboardManager private constructor(context: Context) {
                 }
                 
                 _albumHistory.value = favItems
+                _favoritesRefreshCount.value = favItems.size
                 if (favItems.isNotEmpty()) {
                     _favoritesRefreshStatus.value = "Success: Found ${favItems.size} items"
                 } else if (diagMsg.isNotBlank()) {
@@ -408,6 +420,26 @@ class SonosDashboardManager private constructor(context: Context) {
                 e.printStackTrace()
             }
         }
+    }
+
+    // Album-title comparison key that ignores edition/version suffixes in
+    // brackets ("(Deluxe Version)", "[Remastered 2009]") plus case and extra
+    // whitespace. Falls back to the plain lowercased title if stripping would
+    // leave nothing (a title that's entirely in brackets).
+    private fun normalizeAlbumTitle(title: String): String {
+        val stripped = title
+            .replace(Regex("""\s*[(\[][^)\]]*[)\]]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+            .lowercase()
+        return stripped.ifEmpty { title.trim().lowercase() }
+    }
+
+    // Older cache entries were keyed by the full lowercased title (brackets
+    // and all), so check that form too rather than losing those artists.
+    private fun learnedArtistFor(title: String): String? {
+        val cache = _favoriteArtistCache.value
+        return cache[normalizeAlbumTitle(title)] ?: cache[title.lowercase()]
     }
 
     // SoCo reports position/duration as "H:MM:SS" - live streams/radio (and
@@ -530,6 +562,11 @@ class SonosDashboardManager private constructor(context: Context) {
                             val state = pyDict[PyObject.fromJava("state")]?.toString() ?: "STOPPED"
                             val position = parseSonosTime(pyDict[PyObject.fromJava("position")]?.toString())
                             val duration = parseSonosTime(pyDict[PyObject.fromJava("duration")]?.toString())
+                            // "None" is TrackState's existing "nothing to show"
+                            // marker for these, which the UI checks for.
+                            fun pyString(key: String) = pyDict[PyObject.fromJava(key)]?.toString() ?: ""
+                            val prevTitle = pyString("prev_title").ifBlank { "None" }
+                            val nextTitle = pyString("next_title").ifBlank { "None" }
 
                             _trackState.update { it.copy(
                                 title = title,
@@ -539,7 +576,14 @@ class SonosDashboardManager private constructor(context: Context) {
                                 isPlaying = state == "PLAYING",
                                 groupMembers = memberVolumes,
                                 positionSeconds = position,
-                                durationSeconds = duration
+                                durationSeconds = duration,
+                                prevTrack = prevTitle,
+                                prevArtist = pyString("prev_artist"),
+                                prevAlbum = pyString("prev_album"),
+                                prevArtUrl = pyString("prev_art"),
+                                nextTrack = nextTitle,
+                                nextArtist = pyString("next_artist"),
+                                nextArtUrl = pyString("next_art")
                             )}
 
                             if (artist.isNotBlank() && album.isNotBlank()) {
@@ -551,8 +595,19 @@ class SonosDashboardManager private constructor(context: Context) {
                                 // title/resource/class), so match on album
                                 // title alone and take the real artist name
                                 // from the live playback info instead.
+                                //
+                                // The playing track's album name often carries
+                                // an edition suffix the favorite doesn't (or
+                                // vice versa) - "(Deluxe Version)",
+                                // "[Remastered]" - so fall back to comparing
+                                // with those stripped when there's no exact
+                                // match. Exact still wins, so "Album" and
+                                // "Album (Live)" favorites stay distinct.
+                                val normalizedAlbum = normalizeAlbumTitle(album)
                                 val match = _favoriteAlbumsRef.value.find {
                                     it.albumTitle.equals(album, ignoreCase = true)
+                                } ?: _favoriteAlbumsRef.value.find {
+                                    normalizeAlbumTitle(it.albumTitle) == normalizedAlbum
                                 }
                                 if (match != null) {
                                     // Keyed by album title, not playUri: Sonos
@@ -562,7 +617,7 @@ class SonosDashboardManager private constructor(context: Context) {
                                     // keyed cache could "forget" an already-
                                     // learned artist the next time the same
                                     // album resolves to a different ID.
-                                    val cacheKey = match.albumTitle.lowercase()
+                                    val cacheKey = normalizeAlbumTitle(match.albumTitle)
 
                                     // Learned regardless of mode, so Favorites
                                     // (Mode B) can backfill its own display
@@ -572,6 +627,15 @@ class SonosDashboardManager private constructor(context: Context) {
                                         val updatedCache = _favoriteArtistCache.value + (cacheKey to artist)
                                         _favoriteArtistCache.value = updatedCache
                                         settingsManager.saveFavoriteArtistCache(updatedCache)
+                                    }
+
+                                    // Show it in Favorites straight away rather
+                                    // than waiting for the next favorites refresh
+                                    // to pick it up from the cache.
+                                    if (currentMode == "favorites" && _albumHistory.value.any { normalizeAlbumTitle(it.albumTitle) == cacheKey && it.artist != artist }) {
+                                        _albumHistory.value = _albumHistory.value.map {
+                                            if (normalizeAlbumTitle(it.albumTitle) == cacheKey) it.copy(artist = artist) else it
+                                        }
                                     }
 
                                     // Dedupe by title, not playUri, for the

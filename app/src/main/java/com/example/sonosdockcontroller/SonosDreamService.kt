@@ -1,10 +1,16 @@
 package com.example.sonosdockcontroller
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.service.dreams.DreamService
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -12,9 +18,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
@@ -23,7 +33,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.*
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
@@ -76,11 +88,22 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                 val albumHistory by manager.albumHistory.collectAsState()
                 val coverFlowMode by manager.coverFlowMode.collectAsState()
                 val speakerGroups by manager.speakerGroups.collectAsState()
+                val discoveredSpeakers by manager.discoveredSpeakers.collectAsState()
+                val refreshStatus by manager.favoritesRefreshStatus.collectAsState()
+                val refreshCount by manager.favoritesRefreshCount.collectAsState()
                 val showSpectrumAnalyzer by settingsManager.showSpectrumAnalyzer.collectAsState(initial = false)
                 val spectrumColorScheme by settingsManager.spectrumColorScheme.collectAsState(initial = SpectrumColorScheme.RAINBOW)
                 val spectrumHeightPercent by settingsManager.spectrumHeightPercent.collectAsState(initial = 1f)
                 val spectrumConfineToAlbumArt by settingsManager.spectrumConfineToAlbumArt.collectAsState(initial = false)
                 val use24HourClock by settingsManager.use24HourClock.collectAsState(initial = true)
+                val coverFlowReflection by settingsManager.coverFlowReflection.collectAsState(initial = SettingsManager.COVER_FLOW_REFLECTION_DEFAULT)
+                val coverFlowGlassTable by settingsManager.coverFlowGlassTable.collectAsState(initial = SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT)
+                val coverFlowSideLight by settingsManager.coverFlowSideLight.collectAsState(initial = SettingsManager.COVER_FLOW_SIDE_LIGHT_DEFAULT)
+                val coverFlowHidePrevious by settingsManager.coverFlowHidePrevious.collectAsState(initial = false)
+                val coverFlowHideNextUp by settingsManager.coverFlowHideNextUp.collectAsState(initial = false)
+                val coverFlowHideNowPlaying by settingsManager.coverFlowHideNowPlaying.collectAsState(initial = false)
+                val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
+                val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
                 val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
                     initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
                 )
@@ -94,6 +117,18 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
 
                 var isAmbientMode by remember { mutableStateOf(false) }
                 var isTvAmbientMode by remember { mutableStateOf(false) }
+                var showSettings by remember { mutableStateOf(false) }
+
+                // Flash Error Logic (matches MainActivity)
+                var flashErrorMessage by remember { mutableStateOf<String?>(null) }
+                val lastCommand = trackState.lastCommandSent
+                LaunchedEffect(lastCommand) {
+                    if (lastCommand.contains("FAIL") || lastCommand.contains("ERR")) {
+                        flashErrorMessage = lastCommand
+                        delay(4000)
+                        flashErrorMessage = null
+                    }
+                }
 
                 // Dims the screen in a dark room instead of always running
                 // at full system brightness (see AmbientBrightnessController)
@@ -211,8 +246,16 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                     onRemoveAlbum = { manager.removeAlbumFromHistory(it) },
                                     onWakeUp = { isAmbientMode = false },
                                     use24HourClock = use24HourClock,
+                                    reflectionStrength = coverFlowReflection,
+                                    glassTableStrength = coverFlowGlassTable,
+                                    sideLightStrength = coverFlowSideLight,
                                     isFavoritesMode = coverFlowMode == "favorites",
-                                    onDeleteFavorite = { manager.deleteSonosFavorite(it) }
+                                    onDeleteFavorite = { manager.deleteSonosFavorite(it) },
+                                    initialCenterAlbum = manager.coverFlowCenterAlbum,
+                                    onCenterAlbumChanged = { manager.coverFlowCenterAlbum = it },
+                                    hidePrevious = coverFlowHidePrevious,
+                                    hideNextUp = coverFlowHideNextUp,
+                                    hideNowPlaying = coverFlowHideNowPlaying
                                 )
                             }
                             DockScreen.NOW_PLAYING -> {
@@ -228,7 +271,10 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                     onBrightnessChange = { manager.setLightBrightness(it) },
                                     onEnterAmbient = { isAmbientMode = true; transitioningAlbum = null },
                                     albumHistory = albumHistory,
-                                    onOpenSettings = { finish() },
+                                    onOpenSettings = {
+                                        manager.triggerDiscovery()
+                                        showSettings = true
+                                    },
                                     speakerGroups = speakerGroups,
                                     onToggleJoin = { name, join -> manager.toggleSpeakerJoin(name, join) },
                                     onAlbumArtPositioned = { nowPlayingArtRect = it },
@@ -250,9 +296,34 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                     onSetBass = { manager.setBass(it) },
                                     onSetTreble = { manager.setTreble(it) },
                                     onSetLoudness = { manager.setLoudness(it) },
-                                    onToggleSubEnabled = { manager.toggleSubEnabled() }
+                                    onToggleSubEnabled = { manager.toggleSubEnabled() },
+                                    hidePrevious = nowPlayingHidePrevious,
+                                    hideNextUp = nowPlayingHideNextUp
                                 )
                             }
+                        }
+                    }
+
+                    // Error Flash Box
+                    AnimatedVisibility(
+                        visible = flashErrorMessage != null,
+                        enter = slideInVertically { -it } + fadeIn(),
+                        exit = slideOutVertically { -it } + fadeOut(),
+                        modifier = Modifier.align(Alignment.TopCenter).padding(top = 40.dp)
+                    ) {
+                        Surface(
+                            color = Color.Red,
+                            shape = RoundedCornerShape(12.dp),
+                            shadowElevation = 12.dp,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        ) {
+                            Text(
+                                text = flashErrorMessage ?: "",
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
                         }
                     }
 
@@ -282,11 +353,35 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                 modifier = Modifier
                                     .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
                                     .size(with(density) { width.toDp() }, with(density) { height.toDp() })
-                                    .clip(RoundedCornerShape(lerp(12f, 24f, animProgress.value).dp)),
+                                    .clip(RoundedCornerShape(lerp(0f, 24f, animProgress.value).dp)),
                                 contentScale = ContentScale.Crop
                             )
                         }
                     }
+                }
+
+                if (showSettings) {
+                    SettingsModal(
+                        discoveredSpeakers = discoveredSpeakers,
+                        settingsManager = settingsManager,
+                        refreshStatus = refreshStatus,
+                        refreshCount = refreshCount,
+                        albumHistoryCount = albumHistory.size,
+                        onRefreshFavorites = { a, p, r -> manager.refreshFavorites(a, p, r) },
+                        onClearHistory = { manager.clearAlbumHistory() },
+                        onSettingsSaved = { manager.refreshAfterSettingsSave() },
+                        onDismiss = { showSettings = false },
+                        micPermissionGranted = micPermissionGranted,
+                        // A dream can't show the runtime permission prompt, so
+                        // hand off to the app, which can.
+                        onRequestMicPermission = {
+                            startActivity(
+                                Intent(this@SonosDreamService, MainActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                            finish()
+                        }
+                    )
                 }
             }
         }

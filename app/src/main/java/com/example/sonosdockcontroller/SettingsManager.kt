@@ -45,6 +45,28 @@ class SettingsManager(private val context: Context) {
         // Cover Flow's ambient clock: true = 24-hour ("14:30"), false = 12-hour ("2:30 PM").
         val USE_24_HOUR_CLOCK = booleanPreferencesKey("use_24_hour_clock")
 
+        // Cover Flow's "glass table" look, each 0..1: how strong/sharp the
+        // album reflections are, and how visible the glass surface under
+        // them is. 0 is the original subtle look.
+        val COVER_FLOW_REFLECTION = floatPreferencesKey("cover_flow_reflection")
+        val COVER_FLOW_GLASS_TABLE = floatPreferencesKey("cover_flow_glass_table")
+
+        // Strength (0..1) of the light falling across Cover Flow's glass
+        // table from the left side.
+        val COVER_FLOW_SIDE_LIGHT = floatPreferencesKey("cover_flow_side_light")
+
+        // Which track cards Cover Flow shows while music plays: Previous
+        // (bottom left), and Now Playing / Next Up (bottom right, taking
+        // turns when both are shown).
+        val COVER_FLOW_HIDE_PREVIOUS = booleanPreferencesKey("cover_flow_hide_previous")
+        val COVER_FLOW_HIDE_NEXT_UP = booleanPreferencesKey("cover_flow_hide_next_up")
+        val COVER_FLOW_HIDE_NOW_PLAYING = booleanPreferencesKey("cover_flow_hide_now_playing")
+
+        // Whether the Now Playing screen shows its Previous / Next Up
+        // track chips - independent of Cover Flow's own cards above.
+        val NOW_PLAYING_HIDE_PREVIOUS = booleanPreferencesKey("now_playing_hide_previous")
+        val NOW_PLAYING_HIDE_NEXT_UP = booleanPreferencesKey("now_playing_hide_next_up")
+
         // How long TV mode sits on the Now Playing screen (actively playing)
         // before dropping into the TV Ambient screensaver, in seconds.
         val TV_SCREENSAVER_DELAY_SECONDS = intPreferencesKey("tv_screensaver_delay_seconds")
@@ -58,6 +80,10 @@ class SettingsManager(private val context: Context) {
         const val TV_SCREENSAVER_DELAY_MIN_SECONDS = 30
         const val TV_SCREENSAVER_DELAY_MAX_SECONDS = 1800
         const val TV_SCREENSAVER_DELAY_DEFAULT_SECONDS = 30
+
+        const val COVER_FLOW_REFLECTION_DEFAULT = 0f
+        const val COVER_FLOW_GLASS_TABLE_DEFAULT = 0f
+        const val COVER_FLOW_SIDE_LIGHT_DEFAULT = 0.5f
     }
 
     val sonosSpeaker: Flow<String> = context.dataStore.data.map { it[SELECTED_SONOS_SPEAKER] ?: "" }
@@ -106,6 +132,54 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setUse24HourClock(enabled: Boolean) {
         context.dataStore.edit { it[USE_24_HOUR_CLOCK] = enabled }
+    }
+
+    val coverFlowReflection: Flow<Float> = context.dataStore.data.map { it[COVER_FLOW_REFLECTION] ?: COVER_FLOW_REFLECTION_DEFAULT }
+
+    suspend fun setCoverFlowReflection(strength: Float) {
+        context.dataStore.edit { it[COVER_FLOW_REFLECTION] = strength }
+    }
+
+    val coverFlowGlassTable: Flow<Float> = context.dataStore.data.map { it[COVER_FLOW_GLASS_TABLE] ?: COVER_FLOW_GLASS_TABLE_DEFAULT }
+
+    suspend fun setCoverFlowGlassTable(strength: Float) {
+        context.dataStore.edit { it[COVER_FLOW_GLASS_TABLE] = strength }
+    }
+
+    val coverFlowSideLight: Flow<Float> = context.dataStore.data.map { it[COVER_FLOW_SIDE_LIGHT] ?: COVER_FLOW_SIDE_LIGHT_DEFAULT }
+
+    suspend fun setCoverFlowSideLight(strength: Float) {
+        context.dataStore.edit { it[COVER_FLOW_SIDE_LIGHT] = strength }
+    }
+
+    val coverFlowHidePrevious: Flow<Boolean> = context.dataStore.data.map { it[COVER_FLOW_HIDE_PREVIOUS] ?: false }
+
+    suspend fun setCoverFlowHidePrevious(hide: Boolean) {
+        context.dataStore.edit { it[COVER_FLOW_HIDE_PREVIOUS] = hide }
+    }
+
+    val coverFlowHideNextUp: Flow<Boolean> = context.dataStore.data.map { it[COVER_FLOW_HIDE_NEXT_UP] ?: false }
+
+    suspend fun setCoverFlowHideNextUp(hide: Boolean) {
+        context.dataStore.edit { it[COVER_FLOW_HIDE_NEXT_UP] = hide }
+    }
+
+    val coverFlowHideNowPlaying: Flow<Boolean> = context.dataStore.data.map { it[COVER_FLOW_HIDE_NOW_PLAYING] ?: false }
+
+    suspend fun setCoverFlowHideNowPlaying(hide: Boolean) {
+        context.dataStore.edit { it[COVER_FLOW_HIDE_NOW_PLAYING] = hide }
+    }
+
+    val nowPlayingHidePrevious: Flow<Boolean> = context.dataStore.data.map { it[NOW_PLAYING_HIDE_PREVIOUS] ?: false }
+
+    suspend fun setNowPlayingHidePrevious(hide: Boolean) {
+        context.dataStore.edit { it[NOW_PLAYING_HIDE_PREVIOUS] = hide }
+    }
+
+    val nowPlayingHideNextUp: Flow<Boolean> = context.dataStore.data.map { it[NOW_PLAYING_HIDE_NEXT_UP] ?: false }
+
+    suspend fun setNowPlayingHideNextUp(hide: Boolean) {
+        context.dataStore.edit { it[NOW_PLAYING_HIDE_NEXT_UP] = hide }
     }
 
     val tvScreensaverDelaySeconds: Flow<Int> = context.dataStore.data.map {

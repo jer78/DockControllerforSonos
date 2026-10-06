@@ -3,6 +3,9 @@ package com.example.sonosdockcontroller
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import android.content.Context
+import android.os.Build
+import android.view.WindowManager
+import java.util.function.Consumer
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -35,18 +38,24 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
@@ -54,6 +63,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -63,6 +74,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.palette.graphics.Palette
@@ -71,13 +83,11 @@ import coil.imageLoader
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.abs
@@ -140,6 +150,27 @@ fun MetadataDebuggerOverlay(
                 Text("SYSTEM METADATA (XML):", color = Color.DarkGray, fontWeight = FontWeight.Bold)
                 Text(trackState.rawMetadata, color = Color.DarkGray, fontSize = 12.sp)
                 
+                HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color.Black.copy(alpha = 0.2f))
+
+                Text("TEST MODE:", color = Color.Blue, fontWeight = FontWeight.Bold)
+                val fallbackCount = TvFallbackArt.imageUrls(LocalContext.current).size
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("TV fallback artwork", color = Color.Black, fontWeight = FontWeight.Medium)
+                        Text(
+                            if (fallbackCount == 0) "No images found in assets/tv_fallback/"
+                            else "Forces the fallback art on and cycles all $fallbackCount image(s) every 5s",
+                            color = Color.DarkGray,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Switch(
+                        checked = TvFallbackArt.testMode,
+                        onCheckedChange = { TvFallbackArt.testMode = it },
+                        enabled = fallbackCount > 0 || TvFallbackArt.testMode
+                    )
+                }
+
                 Spacer(Modifier.height(24.dp))
                 Button(
                     onClick = onClose, 
@@ -158,20 +189,37 @@ private val SonosMuteGreen = Color(0xFF4CAF50)
 
 // A long-press timeout (~500ms) is easy to trigger by accident just
 // resting a finger on the screen - the metadata debugger only means to be
-// reachable deliberately, so it needs a real hold instead.
-private const val DEBUG_TOGGLE_HOLD_MS = 10_000L
+// reachable deliberately, so it needs a real hold instead. Kept well under
+// the 10s paused-idle timer that drops Now Playing back to Cover Flow, which
+// a 10s hold used to race (and lose to).
+private const val DEBUG_TOGGLE_HOLD_MS = 3_000L
 
+// Watches the Initial pass, so it sees the press even when a child (album
+// art card, button, pager) or a sibling drag detector would otherwise
+// consume it first - which is what made the old detectTapGestures version
+// so hard to trigger. Tolerates a few touch-slops of finger drift, since
+// nobody holds perfectly still for seconds. Once triggered, the rest of the
+// gesture is consumed so releasing doesn't also count as a tap/click on
+// whatever was underneath.
 private fun Modifier.debugToggleHoldGesture(onTrigger: () -> Unit): Modifier = pointerInput(Unit) {
-    detectTapGestures(
-        onPress = {
-            try {
-                withTimeout(DEBUG_TOGGLE_HOLD_MS) { tryAwaitRelease() }
-            } catch (e: TimeoutCancellationException) {
-                // Still held after the full timeout, rather than released early.
-                onTrigger()
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        val maxDrift = viewConfiguration.touchSlop * 4
+        val endedEarly = withTimeoutOrNull(DEBUG_TOGGLE_HOLD_MS) {
+            while (true) {
+                val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id }
+                if (change == null || !change.pressed || (change.position - down.position).getDistance() > maxDrift) break
             }
+            true
         }
-    )
+        if (endedEarly == null) {
+            onTrigger()
+            do {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                event.changes.forEach { it.consume() }
+            } while (event.changes.any { it.pressed })
+        }
+    }
 }
 
 @Composable
@@ -652,6 +700,33 @@ fun LabeledIconButton(
     }
 }
 
+// Frosted-glass look without a real backdrop blur: the dashboard behind it is
+// already heavily blurred album art, so a translucent top-lit fill, a thin
+// bright rim and a soft shadow read as glass at no rendering cost.
+@Composable
+fun GlassIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = modifier
+            .size(40.dp)
+            .shadow(elevation = 6.dp, shape = CircleShape)
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(Color.White.copy(alpha = 0.26f), Color.White.copy(alpha = 0.10f))
+                ),
+                CircleShape
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+    ) {
+        Icon(icon, contentDescription = contentDescription, tint = Color.White)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DockDashboardUI(
@@ -683,6 +758,9 @@ fun DockDashboardUI(
     spectrumHeightPercent: Float = 1f,
     spectrumConfineToAlbumArt: Boolean = false,
     audioSettings: SonosAudioSettings = SonosAudioSettings(),
+    // Settings > Now Playing > Track Info.
+    hidePrevious: Boolean = false,
+    hideNextUp: Boolean = false,
     onToggleNightMode: () -> Unit = {},
     onToggleDialogMode: () -> Unit = {},
     onSetBass: (Int) -> Unit = {},
@@ -695,6 +773,7 @@ fun DockDashboardUI(
     var showThermostat by remember { mutableStateOf(false) }
     var showLightDialog by remember { mutableStateOf(false) }
     var showSoundSettings by remember { mutableStateOf(false) }
+    var previousTrackDetails by remember { mutableStateOf<TrackDetails?>(null) }
 
     val spectrumAnalyzer = remember { SpectrumAnalyzer() }
     val spectrumBands by spectrumAnalyzer.bands.collectAsState()
@@ -710,10 +789,11 @@ fun DockDashboardUI(
     }
 
     val context = LocalContext.current
+    val artworkUrl = TvFallbackArt.rememberArtworkUrl(isTvMode, trackState.albumArtUrl)
     var albumPalette by remember { mutableStateOf<List<Color>>(emptyList()) }
-    LaunchedEffect(trackState.albumArtUrl, spectrumColorScheme, showSpectrumAnalyzer) {
+    LaunchedEffect(artworkUrl, spectrumColorScheme, showSpectrumAnalyzer) {
         albumPalette = if (showSpectrumAnalyzer && spectrumColorScheme == SpectrumColorScheme.ALBUM_ART) {
-            extractAlbumPalette(context, trackState.albumArtUrl)
+            extractAlbumPalette(context, artworkUrl)
         } else {
             emptyList()
         }
@@ -741,9 +821,9 @@ fun DockDashboardUI(
                 )
             }
     ) {
-        if (trackState.albumArtUrl.isNotBlank()) {
+        if (artworkUrl.isNotBlank()) {
             AsyncImage(
-                model = trackState.albumArtUrl,
+                model = artworkUrl,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -833,33 +913,26 @@ fun DockDashboardUI(
                     }
                 }
             }
-
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                LabeledIconButton(
-                    icon = Icons.Default.SpeakerGroup,
-                    label = "Speaker Groups",
-                    onClick = { showGroupingModal = true }
-                )
-
-                LabeledIconButton(
-                    icon = Icons.Default.BurstMode,
-                    label = "Cover Flow",
-                    onClick = onEnterAmbient
-                )
-            }
         }
 
-        LabeledIconButton(
-            icon = Icons.Default.Settings,
-            label = "Settings",
-            onClick = onOpenSettings,
+        Row(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(24.dp)
-        )
+                .padding(24.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            LabeledIconButton(
+                icon = Icons.Default.BurstMode,
+                label = "Cover Flow",
+                onClick = onEnterAmbient
+            )
+
+            LabeledIconButton(
+                icon = Icons.Default.Settings,
+                label = "Settings",
+                onClick = onOpenSettings
+            )
+        }
 
         Row(
             modifier = Modifier
@@ -882,9 +955,9 @@ fun DockDashboardUI(
                     // below can stack on top of the art instead of being laid out
                     // as a second, height-starved Column child underneath it.
                     Box(modifier = Modifier.fillMaxSize()) {
-                        if (trackState.albumArtUrl.isNotBlank()) {
+                        if (artworkUrl.isNotBlank()) {
                             AsyncImage(
-                                model = trackState.albumArtUrl,
+                                model = artworkUrl,
                                 contentDescription = "Album Cover",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
@@ -958,10 +1031,13 @@ fun DockDashboardUI(
                 verticalArrangement = Arrangement.Center
             ) {
                 if (!isTvMode) {
-                    if (trackState.prevTrack != "None") {
+                    if (trackState.prevTrack != "None" && !hidePrevious) {
                         Surface(
                             color = Color.White.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(12.dp)
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { previousTrackDetails = trackState.previousTrackDetails() }
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1028,7 +1104,7 @@ fun DockDashboardUI(
                     )
                 }
 
-                if (!isTvMode && trackState.nextTrack != "None") {
+                if (!isTvMode && trackState.nextTrack != "None" && !hideNextUp) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Surface(
                         color = Color.White.copy(alpha = 0.15f),
@@ -1186,17 +1262,22 @@ fun DockDashboardUI(
                             tint = Color.White
                         )
 
+                        Spacer(modifier = Modifier.width(16.dp))
+
+                        GlassIconButton(
+                            icon = Icons.Default.SpeakerGroup,
+                            contentDescription = "Speaker Groups",
+                            onClick = { showGroupingModal = true }
+                        )
+
                         if (hasSoundSettings) {
                             Spacer(modifier = Modifier.width(16.dp))
 
-                            IconButton(
-                                onClick = { showSoundSettings = true },
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .background(Color.White.copy(alpha = 0.15f), CircleShape)
-                            ) {
-                                Icon(Icons.Default.Tune, contentDescription = "Sound Settings", tint = Color.White)
-                            }
+                            GlassIconButton(
+                                icon = Icons.Default.Tune,
+                                contentDescription = "Sound Settings",
+                                onClick = { showSoundSettings = true }
+                            )
                         }
                     }
 
@@ -1262,12 +1343,19 @@ fun DockDashboardUI(
         if (showLightDialog) {
             LightDialog(
                 haState = haState,
-                albumArtUrl = trackState.albumArtUrl,
                 onSetOn = onSetLightOn,
                 onSetBrightness = onBrightnessChange,
                 onSetColorRgb = onSetLightColorRgb,
                 onSetColorTemp = onSetLightColorTemp,
                 onDismiss = { showLightDialog = false }
+            )
+        }
+
+        previousTrackDetails?.let { track ->
+            TrackDetailsDialog(
+                heading = "Previous Track",
+                track = track,
+                onDismiss = { previousTrackDetails = null }
             )
         }
 
@@ -1284,6 +1372,67 @@ fun DockDashboardUI(
             )
         }
     }
+}
+
+// Whether the system is actually blurring behind the current GlassDialog -
+// GlassCard goes more opaque when it isn't, so text stays readable over
+// sharp album art.
+private val LocalGlassBlurActive = compositionLocalOf { false }
+
+// Dashboard pop-up with a real frosted-glass backdrop: on Android 12+ the
+// dialog window blurs everything behind it (cross-window blur), and the
+// translucent GlassCard inside lets that blur show through. The system can
+// turn blur off at any time (battery saver, some devices never support it),
+// so this listens for that and falls back to a plain dim.
+@Composable
+fun GlassDialog(
+    onDismissRequest: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Dialog(onDismissRequest = onDismissRequest) {
+        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+        val blurRadiusPx = with(LocalDensity.current) { 30.dp.roundToPx() }
+        var blurActive by remember { mutableStateOf(false) }
+
+        DisposableEffect(window) {
+            if (window == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                return@DisposableEffect onDispose { }
+            }
+            window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+            window.attributes = window.attributes.apply { blurBehindRadius = blurRadiusPx }
+            val listener = Consumer<Boolean> { enabled ->
+                blurActive = enabled
+                // Blur already separates the card from the dashboard, so only
+                // a light dim is needed; without it, dim harder instead.
+                window.setDimAmount(if (enabled) 0.2f else 0.5f)
+            }
+            window.windowManager.addCrossWindowBlurEnabledListener(window.context.mainExecutor, listener)
+            onDispose { window.windowManager.removeCrossWindowBlurEnabledListener(listener) }
+        }
+
+        CompositionLocalProvider(LocalGlassBlurActive provides blurActive) {
+            content()
+        }
+    }
+}
+
+// The translucent card inside a GlassDialog - light charcoal glass with a
+// faint rim that's brighter along the top edge, like light catching it.
+@Composable
+fun GlassCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        color = Color(0xFF2C2C30).copy(alpha = if (LocalGlassBlurActive.current) 0.72f else 0.92f),
+        shape = RoundedCornerShape(28.dp),
+        border = BorderStroke(
+            1.dp,
+            Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.22f), Color.White.copy(alpha = 0.06f)))
+        ),
+        modifier = modifier,
+        content = content
+    )
 }
 
 @Composable
@@ -1310,14 +1459,28 @@ fun GroupingModal(
         onToggleJoin(name, join)
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Manage Speaker Groups", fontWeight = FontWeight.Bold) },
-        text = {
+    // Lighter than Color.Blue so "Joined" reads on the dark glass.
+    val joinedBlue = Color(0xFF64B5F6)
+
+    GlassDialog(onDismissRequest = onDismiss) {
+        GlassCard(modifier = Modifier.width(420.dp)) {
             Column(
-                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                modifier = Modifier
+                    .padding(24.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Speaker Groups", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                }
+
                 if (speakerGroups.isEmpty()) {
                     Text("Searching for other speakers...", color = Color.Gray)
                 } else {
@@ -1334,7 +1497,9 @@ fun GroupingModal(
                                         speakerGroups.filter { !displayedJoin(it) }
                                             .forEach { setJoin(it.name, true) }
                                     },
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.3f))
                                 ) { Text("Join All") }
                             }
                             if (anyJoined) {
@@ -1343,7 +1508,9 @@ fun GroupingModal(
                                         speakerGroups.filter { displayedJoin(it) }
                                             .forEach { setJoin(it.name, false) }
                                     },
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.3f))
                                 ) { Text("Unjoin All") }
                             }
                         }
@@ -1354,7 +1521,7 @@ fun GroupingModal(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(if (isJoined) Color.Blue.copy(alpha = 0.1f) else Color.Transparent)
+                                .background(if (isJoined) joinedBlue.copy(alpha = 0.15f) else Color.Transparent)
                                 .padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -1363,13 +1530,13 @@ fun GroupingModal(
                                 Icon(
                                     painter = painterResource(id = sonosModelIconRes(group.model)),
                                     contentDescription = null,
-                                    tint = if (isJoined) Color.Blue else Color.Gray,
+                                    tint = if (isJoined) joinedBlue else Color.Gray,
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
-                                    Text(group.name, fontWeight = FontWeight.SemiBold)
-                                    Text(if (isJoined) "Joined" else "Available", fontSize = 12.sp, color = if (isJoined) Color.Blue else Color.Gray)
+                                    Text(group.name, color = Color.White, fontWeight = FontWeight.SemiBold)
+                                    Text(if (isJoined) "Joined" else "Available", fontSize = 12.sp, color = if (isJoined) joinedBlue else Color.Gray)
                                 }
                             }
                             Switch(
@@ -1380,11 +1547,8 @@ fun GroupingModal(
                     }
                 }
             }
-        },
-        confirmButton = {
-            Button(onClick = onDismiss) { Text("Done") }
         }
-    )
+    }
 }
 
 // Maps a Sonos model_name (from SoCo's get_speaker_info) to a per-model
@@ -1468,12 +1632,8 @@ fun ThermostatDialog(
         }
     }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            color = Color(0xFF161616),
-            shape = RoundedCornerShape(28.dp),
-            modifier = Modifier.width(420.dp)
-        ) {
+    GlassDialog(onDismissRequest = onDismiss) {
+        GlassCard(modifier = Modifier.width(420.dp)) {
             Column(
                 modifier = Modifier
                     .padding(24.dp)
@@ -1728,7 +1888,6 @@ private val LIGHT_PRESET_COLORS = listOf(
 @Composable
 fun LightDialog(
     haState: HAState,
-    albumArtUrl: String = "",
     onSetOn: (Boolean) -> Unit,
     onSetBrightness: (Int) -> Unit,
     onSetColorRgb: (Int, Int, Int) -> Unit,
@@ -1763,33 +1922,9 @@ fun LightDialog(
         }
     }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            color = Color.Black,
-            shape = RoundedCornerShape(28.dp),
-            modifier = Modifier.width(380.dp)
-        ) {
+    GlassDialog(onDismissRequest = onDismiss) {
+        GlassCard(modifier = Modifier.width(380.dp)) {
             Box {
-                // Same blurred-album-art backdrop as the Now Playing screen,
-                // so this dialog reads as part of that screen rather than a
-                // generic system sheet dropped on top of it.
-                if (albumArtUrl.isNotBlank()) {
-                    AsyncImage(
-                        model = albumArtUrl,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .matchParentSize()
-                            .blur(60.dp)
-                            .alpha(0.35f)
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(Color.Black.copy(alpha = 0.55f))
-                )
-
                 Column(
                     modifier = Modifier
                         .padding(24.dp)
@@ -1807,11 +1942,10 @@ fun LightDialog(
                         }
                     }
 
-                    // Glass pill sections, matching the translucent black
-                    // surfaces (LabeledIconButton, top status pills) used
-                    // throughout the Now Playing screen.
+                    // Same faint white sections as the Thermostat and Sound
+                    // Settings pop-ups.
                     Surface(
-                        color = Color.Black.copy(alpha = 0.4f),
+                        color = Color.White.copy(alpha = 0.08f),
                         shape = RoundedCornerShape(20.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -1835,7 +1969,7 @@ fun LightDialog(
                     }
 
                     Surface(
-                        color = Color.Black.copy(alpha = 0.4f),
+                        color = Color.White.copy(alpha = 0.08f),
                         shape = RoundedCornerShape(20.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -1861,7 +1995,7 @@ fun LightDialog(
 
                     if (supportsRgb) {
                         Surface(
-                            color = Color.Black.copy(alpha = 0.4f),
+                            color = Color.White.copy(alpha = 0.08f),
                             shape = RoundedCornerShape(20.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -1901,7 +2035,7 @@ fun LightDialog(
                         }
                     } else if (supportsColorTemp) {
                         Surface(
-                            color = Color.Black.copy(alpha = 0.4f),
+                            color = Color.White.copy(alpha = 0.08f),
                             shape = RoundedCornerShape(20.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -1971,12 +2105,8 @@ fun SoundSettingsDialog(
         }
     }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            color = Color(0xFF161616),
-            shape = RoundedCornerShape(28.dp),
-            modifier = Modifier.width(380.dp)
-        ) {
+    GlassDialog(onDismissRequest = onDismiss) {
+        GlassCard(modifier = Modifier.width(380.dp)) {
             Column(
                 modifier = Modifier
                     .padding(24.dp)
@@ -2185,12 +2315,26 @@ fun EntityAutocompleteField(
     }
 }
 
+// Compact label + switch row for the Settings dialog.
+@Composable
+private fun SettingsToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 14.sp)
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsModal(
     discoveredSpeakers: List<String>,
     settingsManager: SettingsManager,
     refreshStatus: String,
+    refreshCount: Int? = null,
     albumHistoryCount: Int,
     onRefreshFavorites: (Boolean, Boolean, Boolean) -> Unit,
     onClearHistory: () -> Unit,
@@ -2209,8 +2353,17 @@ fun SettingsModal(
     var selectedHaMediaPlayer by remember { mutableStateOf("") }
     var coverFlowMode by remember { mutableStateOf("history") }
     var use24HourClock by remember { mutableStateOf(true) }
+    var coverFlowReflection by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_REFLECTION_DEFAULT) }
+    var coverFlowGlassTable by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT) }
+    var pendingCoverFlowGlass by remember { mutableStateOf<Job?>(null) }
     var tvScreensaverDelaySeconds by remember { mutableIntStateOf(SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS) }
     var pendingScreensaverDelay by remember { mutableStateOf<Job?>(null) }
+    var coverFlowSideLight by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_SIDE_LIGHT_DEFAULT) }
+    var hidePrevious by remember { mutableStateOf(false) }
+    var hideNextUp by remember { mutableStateOf(false) }
+    var hideNowPlaying by remember { mutableStateOf(false) }
+    var nowPlayingHidePrevious by remember { mutableStateOf(false) }
+    var nowPlayingHideNextUp by remember { mutableStateOf(false) }
     var showSpectrumAnalyzer by remember { mutableStateOf(false) }
     var spectrumColorScheme by remember { mutableStateOf(SpectrumColorScheme.RAINBOW) }
     var spectrumHeightPercent by remember { mutableFloatStateOf(1f) }
@@ -2237,7 +2390,15 @@ fun SettingsModal(
         selectedHaMediaPlayer = settingsManager.selectedHaMediaPlayer.first()
         coverFlowMode = settingsManager.coverFlowMode.first()
         use24HourClock = settingsManager.use24HourClock.first()
+        coverFlowReflection = settingsManager.coverFlowReflection.first()
+        coverFlowGlassTable = settingsManager.coverFlowGlassTable.first()
         tvScreensaverDelaySeconds = settingsManager.tvScreensaverDelaySeconds.first()
+        coverFlowSideLight = settingsManager.coverFlowSideLight.first()
+        hidePrevious = settingsManager.coverFlowHidePrevious.first()
+        hideNextUp = settingsManager.coverFlowHideNextUp.first()
+        hideNowPlaying = settingsManager.coverFlowHideNowPlaying.first()
+        nowPlayingHidePrevious = settingsManager.nowPlayingHidePrevious.first()
+        nowPlayingHideNextUp = settingsManager.nowPlayingHideNextUp.first()
         fAlbums = settingsManager.filterAlbums.first()
         fPlaylists = settingsManager.filterPlaylists.first()
         fRadio = settingsManager.filterRadio.first()
@@ -2262,304 +2423,479 @@ fun SettingsModal(
         "favorites" to "Mode B: Albums, Playlists & Radio"
     )
 
+    val tabs = listOf("General", "Cover Flow", "Now Playing", "Home Assistant")
+    var selectedTab by remember { mutableIntStateOf(0) }
+
+    // The refresh status line doesn't visibly change when a re-scan finds
+    // the same count as last time, so the button itself reports this
+    // press's result. Kept out here so switching tabs doesn't reset it.
+    var refreshPressed by remember { mutableStateOf(false) }
+    val isRefreshing = refreshPressed && refreshStatus.startsWith("Starting")
+
+    // Fixed height so the dialog doesn't jump around when switching tabs -
+    // anything taller than this scrolls within the tab.
+    val tabContentHeight = (LocalConfiguration.current.screenHeightDp * 0.55f).dp
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        modifier = Modifier.fillMaxWidth(0.94f),
+        modifier = Modifier.fillMaxWidth(0.94f).widthIn(max = 960.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
-        title = { Text("Dashboard Configuration", fontWeight = FontWeight.Bold) },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Dashboard Configuration", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("v${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = Color.Gray)
+            }
+        },
         text = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(20.dp)
-            ) {
-                // LEFT COLUMN: Sonos playback source
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("Sonos Speaker:", fontWeight = FontWeight.SemiBold)
-                    if (discoveredSpeakers.isEmpty()) {
-                        Text("Scanning Wi-Fi for speakers...", fontSize = 12.sp, color = Color.Gray)
-                    } else {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            discoveredSpeakers.forEach { speaker ->
-                                FilterChip(
-                                    selected = (speaker == selectedSpeaker),
-                                    onClick = { selectedSpeaker = speaker },
-                                    label = { Text(speaker) }
-                                )
-                            }
-                        }
-                    }
-
-                    HorizontalDivider()
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Spectrum Analyzer", fontWeight = FontWeight.SemiBold)
-                            Text(
-                                text = if (showSpectrumAnalyzer && !micPermissionGranted) {
-                                    "Needs microphone access - tap to grant"
-                                } else {
-                                    "Uses the mic to show a live visualizer behind Now Playing while music plays. Not calibrated, just for looks."
-                                },
-                                fontSize = 11.sp,
-                                color = if (showSpectrumAnalyzer && !micPermissionGranted) Color(0xFFFFA726) else Color.Gray
-                            )
-                        }
-                        Switch(
-                            checked = showSpectrumAnalyzer,
-                            onCheckedChange = { checked ->
-                                showSpectrumAnalyzer = checked
-                                scope.launch { settingsManager.setShowSpectrumAnalyzer(checked) }
-                                if (checked && !micPermissionGranted) {
-                                    onRequestMicPermission()
-                                }
-                            }
-                        )
-                    }
-
-                    if (showSpectrumAnalyzer) {
-                        Text("Color Scheme:", fontSize = 12.sp, color = Color.Gray)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SpectrumColorScheme.entries.forEach { scheme ->
-                                FilterChip(
-                                    selected = (spectrumColorScheme == scheme),
-                                    onClick = {
-                                        spectrumColorScheme = scheme
-                                        scope.launch { settingsManager.setSpectrumColorScheme(scheme) }
-                                    },
-                                    label = { Text(scheme.label) }
-                                )
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Confine to Album Art", fontSize = 12.sp, color = Color.Gray)
-                                Text(
-                                    "Draw bars only over the album art instead of the full screen.",
-                                    fontSize = 10.sp,
-                                    color = Color.Gray
-                                )
-                            }
-                            Switch(
-                                checked = spectrumConfineToAlbumArt,
-                                onCheckedChange = { checked ->
-                                    spectrumConfineToAlbumArt = checked
-                                    scope.launch { settingsManager.setSpectrumConfineToAlbumArt(checked) }
-                                }
-                            )
-                        }
-
-                        if (!spectrumConfineToAlbumArt) {
-                            Text(
-                                "Height from bottom: ${(spectrumHeightPercent * 100).roundToInt()}%",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                            Slider(
-                                value = spectrumHeightPercent,
-                                onValueChange = {
-                                    spectrumHeightPercent = it
-                                    pendingSpectrumHeight?.cancel()
-                                    pendingSpectrumHeight = scope.launch {
-                                        delay(300)
-                                        settingsManager.setSpectrumHeightPercent(it)
-                                    }
-                                },
-                                valueRange = 0.1f..1f
-                            )
-                        }
-                    }
-
-                    HorizontalDivider()
-
-                    Text("Cover Flow Mode:", fontWeight = FontWeight.SemiBold)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        modes.forEach { (mode, label) ->
-                            FilterChip(
-                                selected = (coverFlowMode == mode),
-                                onClick = { coverFlowMode = mode },
-                                label = { Text(label) }
-                            )
-                        }
-                    }
-
-                    Text("Clock Format:", fontSize = 12.sp, color = Color.Gray)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = !use24HourClock,
-                            onClick = {
-                                use24HourClock = false
-                                scope.launch { settingsManager.setUse24HourClock(false) }
-                            },
-                            label = { Text("12-Hour") }
-                        )
-                        FilterChip(
-                            selected = use24HourClock,
-                            onClick = {
-                                use24HourClock = true
-                                scope.launch { settingsManager.setUse24HourClock(true) }
-                            },
-                            label = { Text("24-Hour") }
-                        )
-                    }
-
-                    HorizontalDivider()
-
-                    Text("TV Screensaver Delay:", fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "How long TV mode stays on the Now Playing screen before dropping into the screensaver: ${formatScreensaverDelay(tvScreensaverDelaySeconds)}",
-                        fontSize = 12.sp,
-                        color = Color.Gray
-                    )
-                    Slider(
-                        value = tvScreensaverDelaySeconds.toFloat(),
-                        onValueChange = {
-                            tvScreensaverDelaySeconds = (it.roundToInt() / 30) * 30
-                            pendingScreensaverDelay?.cancel()
-                            pendingScreensaverDelay = scope.launch {
-                                delay(300)
-                                settingsManager.setTvScreensaverDelaySeconds(tvScreensaverDelaySeconds)
-                            }
-                        },
-                        valueRange = SettingsManager.TV_SCREENSAVER_DELAY_MIN_SECONDS.toFloat()..
-                            SettingsManager.TV_SCREENSAVER_DELAY_MAX_SECONDS.toFloat(),
-                        // One tick per 30s step between the endpoints.
-                        steps = (SettingsManager.TV_SCREENSAVER_DELAY_MAX_SECONDS -
-                            SettingsManager.TV_SCREENSAVER_DELAY_MIN_SECONDS) / 30 - 1
-                    )
-
-                    if (coverFlowMode == "history") {
-                        Text(
-                            "Albums need to be favorited in the Sonos app. This mode just captures the history of when your favorited albums are played.",
-                            fontSize = 12.sp,
-                            color = Color.Gray
-                        )
-                        OutlinedButton(
-                            onClick = { showClearHistoryConfirm = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = albumHistoryCount > 0,
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red)
-                        ) {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Clear History ($albumHistoryCount)")
-                        }
-                    } else {
-                        Text("Sync Categories:", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(checked = fAlbums, onCheckedChange = { fAlbums = it })
-                                Text("Albums", fontSize = 12.sp)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(checked = fPlaylists, onCheckedChange = { fPlaylists = it })
-                                Text("Playlists", fontSize = 12.sp)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(checked = fRadio, onCheckedChange = { fRadio = it })
-                                Text("Radio", fontSize = 12.sp)
-                            }
-                        }
-
-                        Button(
-                            onClick = { onRefreshFavorites(fAlbums, fPlaylists, fRadio) },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.Gray)
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Refresh Favorites")
-                        }
-
-                        Text(
-                            text = "Status: $refreshStatus",
-                            fontSize = 12.sp,
-                            color = if (refreshStatus.contains("Error")) Color.Red else Color.Black,
-                            fontWeight = FontWeight.Bold
+            Column(modifier = Modifier.fillMaxWidth()) {
+                TabRow(selectedTabIndex = selectedTab) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = { Text(title, maxLines = 1) }
                         )
                     }
                 }
 
-                Box(
-                    Modifier
-                        .fillMaxHeight()
-                        .width(1.dp)
-                        .background(Color.LightGray.copy(alpha = 0.5f))
-                )
-
-                // RIGHT COLUMN: Home Assistant integration
                 Column(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(tabContentHeight)
+                        .verticalScroll(rememberScrollState())
+                        .padding(top = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Home Assistant Integration:", fontWeight = FontWeight.SemiBold)
+                    when (selectedTab) {
+                        // GENERAL: which speaker, and dock-wide display basics
+                        0 -> {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(24.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("Sonos Speaker:", fontWeight = FontWeight.SemiBold)
+                                    if (discoveredSpeakers.isEmpty()) {
+                                        Text("Scanning Wi-Fi for speakers...", fontSize = 12.sp, color = Color.Gray)
+                                    } else {
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            discoveredSpeakers.forEach { speaker ->
+                                                FilterChip(
+                                                    selected = (speaker == selectedSpeaker),
+                                                    onClick = { selectedSpeaker = speaker },
+                                                    label = { Text(speaker) }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
 
-                    OutlinedTextField(
-                        value = haUrl,
-                        onValueChange = { haUrl = it },
-                        label = { Text("Server URL") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("Clock Format:", fontWeight = FontWeight.SemiBold)
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        FilterChip(
+                                            selected = !use24HourClock,
+                                            onClick = {
+                                                use24HourClock = false
+                                                scope.launch { settingsManager.setUse24HourClock(false) }
+                                            },
+                                            label = { Text("12-Hour") }
+                                        )
+                                        FilterChip(
+                                            selected = use24HourClock,
+                                            onClick = {
+                                                use24HourClock = true
+                                                scope.launch { settingsManager.setUse24HourClock(true) }
+                                            },
+                                            label = { Text("24-Hour") }
+                                        )
+                                    }
+                                    HorizontalDivider()
 
-                    OutlinedTextField(
-                        value = haToken,
-                        onValueChange = { haToken = it },
-                        label = { Text("Long-Lived Access Token") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                                    Text("TV Screensaver Delay:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "Time on Now Playing before the TV screensaver starts: ${formatScreensaverDelay(tvScreensaverDelaySeconds)}",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    Slider(
+                                        value = tvScreensaverDelaySeconds.toFloat(),
+                                        onValueChange = {
+                                            tvScreensaverDelaySeconds = (it.roundToInt() / 30) * 30
+                                            pendingScreensaverDelay?.cancel()
+                                            pendingScreensaverDelay = scope.launch {
+                                                delay(300)
+                                                settingsManager.setTvScreensaverDelaySeconds(tvScreensaverDelaySeconds)
+                                            }
+                                        },
+                                        valueRange = SettingsManager.TV_SCREENSAVER_DELAY_MIN_SECONDS.toFloat()..
+                                            SettingsManager.TV_SCREENSAVER_DELAY_MAX_SECONDS.toFloat(),
+                                        // One tick per 30s step between the endpoints.
+                                        steps = (SettingsManager.TV_SCREENSAVER_DELAY_MAX_SECONDS -
+                                            SettingsManager.TV_SCREENSAVER_DELAY_MIN_SECONDS) / 30 - 1
+                                    )
+                                }
+                            }
+                        }
 
-                    EntityAutocompleteField(
-                        label = "Light Entity",
-                        value = selectedLight,
-                        onValueChange = { selectedLight = it },
-                        suggestions = lightEntities,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                        // COVER FLOW: what it shows, its track cards, and the
+                        // glass table look
+                        1 -> {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(24.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("Cover Flow Mode:", fontWeight = FontWeight.SemiBold)
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        modes.forEach { (mode, label) ->
+                                            FilterChip(
+                                                selected = (coverFlowMode == mode),
+                                                onClick = { coverFlowMode = mode },
+                                                label = { Text(label) }
+                                            )
+                                        }
+                                    }
 
-                    EntityAutocompleteField(
-                        label = "Climate Entity",
-                        value = selectedClimate,
-                        onValueChange = { selectedClimate = it },
-                        suggestions = climateEntities,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                                    if (coverFlowMode == "history") {
+                                        Text(
+                                            "Albums need to be favorited in the Sonos app. This mode just captures the history of when your favorited albums are played.",
+                                            fontSize = 12.sp,
+                                            color = Color.Gray
+                                        )
+                                        OutlinedButton(
+                                            onClick = { showClearHistoryConfirm = true },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = albumHistoryCount > 0,
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red)
+                                        ) {
+                                            Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("Clear History ($albumHistoryCount)")
+                                        }
+                                    } else {
+                                        Text("Sync Categories:", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Checkbox(checked = fAlbums, onCheckedChange = { fAlbums = it })
+                                                Text("Albums", fontSize = 12.sp)
+                                            }
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Checkbox(checked = fPlaylists, onCheckedChange = { fPlaylists = it })
+                                                Text("Playlists", fontSize = 12.sp)
+                                            }
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Checkbox(checked = fRadio, onCheckedChange = { fRadio = it })
+                                                Text("Radio", fontSize = 12.sp)
+                                            }
+                                        }
 
-                    EntityAutocompleteField(
-                        label = "Fallback Media Player",
-                        value = selectedHaMediaPlayer,
-                        onValueChange = { selectedHaMediaPlayer = it },
-                        suggestions = mediaPlayerEntities,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                                        Button(
+                                            onClick = {
+                                                refreshPressed = true
+                                                onRefreshFavorites(fAlbums, fPlaylists, fRadio)
+                                            },
+                                            enabled = !isRefreshing,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color.Gray)
+                                        ) {
+                                            Icon(Icons.Default.Refresh, contentDescription = null)
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                when {
+                                                    !refreshPressed -> "Refresh Favorites"
+                                                    isRefreshing -> "Refreshing..."
+                                                    refreshCount != null -> "Refreshed $refreshCount Favorite${if (refreshCount == 1) "" else "s"}"
+                                                    else -> "Refresh Failed - Tap to Retry"
+                                                }
+                                            )
+                                        }
 
-                    Text(
-                        text = "v${BuildConfig.VERSION_NAME}",
-                        fontSize = 12.sp,
-                        color = Color.Gray,
-                        modifier = Modifier.align(Alignment.End)
-                    )
+                                        Text(
+                                            text = "Status: $refreshStatus",
+                                            fontSize = 12.sp,
+                                            color = if (refreshStatus.contains("Error")) Color.Red else Color.Black,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("Track Cards:", fontWeight = FontWeight.SemiBold)
+                                    SettingsToggleRow("Hide Previous", hidePrevious) {
+                                        hidePrevious = it
+                                        scope.launch { settingsManager.setCoverFlowHidePrevious(it) }
+                                    }
+                                    SettingsToggleRow("Hide Now Playing", hideNowPlaying) {
+                                        hideNowPlaying = it
+                                        scope.launch { settingsManager.setCoverFlowHideNowPlaying(it) }
+                                    }
+                                    SettingsToggleRow("Hide Next Up", hideNextUp) {
+                                        hideNextUp = it
+                                        scope.launch { settingsManager.setCoverFlowHideNextUp(it) }
+                                    }
+                                }
+
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // All three sliders share one debounced save, so
+                                    // dragging doesn't write to DataStore on every frame.
+                                    fun saveCoverFlowGlass() {
+                                        pendingCoverFlowGlass?.cancel()
+                                        pendingCoverFlowGlass = scope.launch {
+                                            delay(300)
+                                            settingsManager.setCoverFlowReflection(coverFlowReflection)
+                                            settingsManager.setCoverFlowGlassTable(coverFlowGlassTable)
+                                            settingsManager.setCoverFlowSideLight(coverFlowSideLight)
+                                        }
+                                    }
+
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Glass Table:", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                        TextButton(
+                                            onClick = {
+                                                coverFlowReflection = SettingsManager.COVER_FLOW_REFLECTION_DEFAULT
+                                                coverFlowGlassTable = SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT
+                                                coverFlowSideLight = SettingsManager.COVER_FLOW_SIDE_LIGHT_DEFAULT
+                                                saveCoverFlowGlass()
+                                            },
+                                            enabled = coverFlowReflection != SettingsManager.COVER_FLOW_REFLECTION_DEFAULT ||
+                                                coverFlowGlassTable != SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT ||
+                                                coverFlowSideLight != SettingsManager.COVER_FLOW_SIDE_LIGHT_DEFAULT
+                                        ) {
+                                            Text("Reset to Default")
+                                        }
+                                    }
+                                    Text(
+                                        "Reflection strength: ${(coverFlowReflection * 100).roundToInt()}%",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    Slider(
+                                        value = coverFlowReflection,
+                                        onValueChange = {
+                                            coverFlowReflection = it
+                                            saveCoverFlowGlass()
+                                        },
+                                        valueRange = 0f..1f
+                                    )
+                                    Text(
+                                        "Glass surface: ${(coverFlowGlassTable * 100).roundToInt()}%",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    Slider(
+                                        value = coverFlowGlassTable,
+                                        onValueChange = {
+                                            coverFlowGlassTable = it
+                                            saveCoverFlowGlass()
+                                        },
+                                        valueRange = 0f..1f
+                                    )
+                                    Text(
+                                        "Side light: ${(coverFlowSideLight * 100).roundToInt()}%",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    Slider(
+                                        value = coverFlowSideLight,
+                                        onValueChange = {
+                                            coverFlowSideLight = it
+                                            saveCoverFlowGlass()
+                                        },
+                                        valueRange = 0f..1f
+                                    )
+                                }
+                            }
+                        }
+
+                        // NOW PLAYING: track info chips and the mic-driven
+                        // spectrum analyzer drawn behind the screen
+                        2 -> {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(24.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("Track Info:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "The previous and next tracks shown above and below the song title.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    SettingsToggleRow("Hide Previous", nowPlayingHidePrevious) {
+                                        nowPlayingHidePrevious = it
+                                        scope.launch { settingsManager.setNowPlayingHidePrevious(it) }
+                                    }
+                                    SettingsToggleRow("Hide Next Up", nowPlayingHideNextUp) {
+                                        nowPlayingHideNextUp = it
+                                        scope.launch { settingsManager.setNowPlayingHideNextUp(it) }
+                                    }
+                                }
+
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text("Spectrum Analyzer", fontWeight = FontWeight.SemiBold)
+                                            Text(
+                                                text = if (showSpectrumAnalyzer && !micPermissionGranted) {
+                                                    "Needs microphone access - tap to grant"
+                                                } else {
+                                                    "Uses the mic to show a live visualizer behind Now Playing while music plays. Not calibrated, just for looks."
+                                                },
+                                                fontSize = 11.sp,
+                                                color = if (showSpectrumAnalyzer && !micPermissionGranted) Color(0xFFFFA726) else Color.Gray
+                                            )
+                                        }
+                                        Switch(
+                                            checked = showSpectrumAnalyzer,
+                                            onCheckedChange = { checked ->
+                                                showSpectrumAnalyzer = checked
+                                                scope.launch { settingsManager.setShowSpectrumAnalyzer(checked) }
+                                                if (checked && !micPermissionGranted) {
+                                                    onRequestMicPermission()
+                                                }
+                                            }
+                                        )
+                                    }
+
+                                    if (showSpectrumAnalyzer) {
+                                        Text("Color Scheme:", fontSize = 12.sp, color = Color.Gray)
+                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            SpectrumColorScheme.entries.forEach { scheme ->
+                                                FilterChip(
+                                                    selected = (spectrumColorScheme == scheme),
+                                                    onClick = {
+                                                        spectrumColorScheme = scheme
+                                                        scope.launch { settingsManager.setSpectrumColorScheme(scheme) }
+                                                    },
+                                                    label = { Text(scheme.label) }
+                                                )
+                                            }
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text("Confine to Album Art", fontSize = 12.sp, color = Color.Gray)
+                                                Text(
+                                                    "Draw bars only over the album art instead of the full screen.",
+                                                    fontSize = 10.sp,
+                                                    color = Color.Gray
+                                                )
+                                            }
+                                            Switch(
+                                                checked = spectrumConfineToAlbumArt,
+                                                onCheckedChange = { checked ->
+                                                    spectrumConfineToAlbumArt = checked
+                                                    scope.launch { settingsManager.setSpectrumConfineToAlbumArt(checked) }
+                                                }
+                                            )
+                                        }
+
+                                        if (!spectrumConfineToAlbumArt) {
+                                            Text(
+                                                "Height from bottom: ${(spectrumHeightPercent * 100).roundToInt()}%",
+                                                fontSize = 12.sp,
+                                                color = Color.Gray
+                                            )
+                                            Slider(
+                                                value = spectrumHeightPercent,
+                                                onValueChange = {
+                                                    spectrumHeightPercent = it
+                                                    pendingSpectrumHeight?.cancel()
+                                                    pendingSpectrumHeight = scope.launch {
+                                                        delay(300)
+                                                        settingsManager.setSpectrumHeightPercent(it)
+                                                    }
+                                                },
+                                                valueRange = 0.1f..1f
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // HOME ASSISTANT: connection and entities
+                        3 -> {
+                            Text("Home Assistant Integration:", fontWeight = FontWeight.SemiBold)
+
+                            OutlinedTextField(
+                                value = haUrl,
+                                onValueChange = { haUrl = it },
+                                label = { Text("Server URL") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            OutlinedTextField(
+                                value = haToken,
+                                onValueChange = { haToken = it },
+                                label = { Text("Long-Lived Access Token") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            EntityAutocompleteField(
+                                label = "Light Entity",
+                                value = selectedLight,
+                                onValueChange = { selectedLight = it },
+                                suggestions = lightEntities,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            EntityAutocompleteField(
+                                label = "Climate Entity",
+                                value = selectedClimate,
+                                onValueChange = { selectedClimate = it },
+                                suggestions = climateEntities,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            EntityAutocompleteField(
+                                label = "Fallback Media Player",
+                                value = selectedHaMediaPlayer,
+                                onValueChange = { selectedHaMediaPlayer = it },
+                                suggestions = mediaPlayerEntities,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -2613,6 +2949,192 @@ fun SettingsModal(
     }
 }
 
+// A track as it was when tapped - so the details pop-up keeps showing that
+// track even if the song changes (and "previous" moves on) while it's open.
+data class TrackDetails(
+    val title: String,
+    val artist: String,
+    val album: String,
+    val artUrl: String
+)
+
+fun TrackState.previousTrackDetails() = TrackDetails(
+    title = prevTrack,
+    artist = prevArtist,
+    album = prevAlbum,
+    artUrl = prevArtUrl
+)
+
+// Glass pop-up with a track's album art, song title, artist and album -
+// opened by tapping Previous on Now Playing or Cover Flow.
+@Composable
+fun TrackDetailsDialog(
+    heading: String,
+    track: TrackDetails,
+    onDismiss: () -> Unit
+) {
+    GlassDialog(onDismissRequest = onDismiss) {
+        GlassCard(modifier = Modifier.width(380.dp)) {
+            Column(
+                modifier = Modifier
+                    .padding(24.dp)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(heading, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                Box(
+                    modifier = Modifier
+                        .size(300.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = 0.08f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (track.artUrl.isNotBlank()) {
+                        AsyncImage(
+                            model = track.artUrl,
+                            contentDescription = "Album Cover",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.MusicNote,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.size(64.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                Text(
+                    text = track.title,
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (track.artist.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = track.artist,
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 17.sp,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (track.album.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = track.album,
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 15.sp,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+// One of Cover Flow's bottom track cards (Previous / Now Playing / Next Up).
+@Composable
+private fun CoverFlowTrackCard(
+    label: String,
+    title: String,
+    subtitle: String,
+    artUrl: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = Color.Black.copy(alpha = 0.6f),
+        shape = RoundedCornerShape(20.dp),
+        modifier = modifier
+            .width(360.dp)
+            .clickable { onClick() }
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = label,
+                color = Color.White,
+                fontWeight = FontWeight.Black,
+                fontSize = 18.sp,
+                letterSpacing = 1.sp,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (artUrl.isNotBlank()) {
+                    AsyncImage(
+                        model = artUrl,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                }
+                Column {
+                    Text(
+                        text = title,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (subtitle.isNotBlank()) {
+                        Text(
+                            text = subtitle,
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Matched by identity rather than index, since History mode reorders the
+// list (a played album moves to the front). playUri is the stable ID when
+// present; history items without one are identified by their art URL.
+private fun coverFlowInitialPage(
+    albums: List<AlbumHistoryItem>,
+    pageCount: Int,
+    centerAlbum: AlbumHistoryItem?
+): Int {
+    val center = pageCount / 2
+    if (albums.isEmpty() || centerAlbum == null) return center
+    val index = albums.indexOfFirst {
+        if (centerAlbum.playUri.isNotBlank()) it.playUri == centerAlbum.playUri
+        else it.artUrl == centerAlbum.artUrl
+    }
+    if (index < 0) return center
+    return center - (center % albums.size) + index
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AmbientClockScreen(
@@ -2622,10 +3144,22 @@ fun AmbientClockScreen(
     onRemoveAlbum: (String) -> Unit,
     onWakeUp: () -> Unit,
     use24HourClock: Boolean = true,
+    // 0..1 each, from Settings - see SettingsManager.COVER_FLOW_REFLECTION.
+    reflectionStrength: Float = SettingsManager.COVER_FLOW_REFLECTION_DEFAULT,
+    glassTableStrength: Float = SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT,
+    sideLightStrength: Float = SettingsManager.COVER_FLOW_SIDE_LIGHT_DEFAULT,
     // In Favorites mode the X permanently deletes the Sonos Favorite (after
     // a confirmation prompt) instead of just hiding the card.
     isFavoritesMode: Boolean = false,
-    onDeleteFavorite: (AlbumHistoryItem) -> Unit = {}
+    onDeleteFavorite: (AlbumHistoryItem) -> Unit = {},
+    // Album to start centered on, and a callback whenever a new one settles
+    // in the center - lets the caller resume the rotation where it left off.
+    initialCenterAlbum: AlbumHistoryItem? = null,
+    onCenterAlbumChanged: (AlbumHistoryItem) -> Unit = {},
+    // Settings > Display > Cover Flow Track Cards.
+    hidePrevious: Boolean = false,
+    hideNextUp: Boolean = false,
+    hideNowPlaying: Boolean = false
 ) {
     var isFadingOut by remember { mutableStateOf(false) }
     // Favorite awaiting the user's confirm/cancel, and then the one they
@@ -2682,13 +3216,20 @@ fun AmbientClockScreen(
     // effect below) well before it's ever exhausted.
     val internalPageCount = if (albumHistory.isEmpty()) 0 else 100_000
     val pagerState = rememberPagerState(
-        initialPage = internalPageCount / 2,
+        initialPage = coverFlowInitialPage(albumHistory, internalPageCount, initialCenterAlbum),
         pageCount = { internalPageCount }
     )
+
+    LaunchedEffect(pagerState, albumHistory) {
+        snapshotFlow { pagerState.settledPage }.collect { page ->
+            if (albumHistory.isNotEmpty()) onCenterAlbumChanged(albumHistory[page % albumHistory.size])
+        }
+    }
 
     val isDragged by pagerState.interactionSource.collectIsDraggedAsState()
     var isUserInteracting by remember { mutableStateOf(false) }
     var showLabels by remember { mutableStateOf(false) }
+    var previousTrackDetails by remember { mutableStateOf<TrackDetails?>(null) }
 
     LaunchedEffect(isUserInteracting, isDragged) {
         if (isUserInteracting || isDragged) {
@@ -2731,20 +3272,17 @@ fun AmbientClockScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .debugToggleHoldGesture { showDebugInfo = !showDebugInfo }
             .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { onWakeUp() },
-                    onPress = {
-                        try {
-                            withTimeout(DEBUG_TOGGLE_HOLD_MS) { tryAwaitRelease() }
-                        } catch (e: TimeoutCancellationException) {
-                            // Still held after the full timeout, rather than released early.
-                            showDebugInfo = !showDebugInfo
-                        }
-                    }
-                )
+                detectTapGestures(onTap = { onWakeUp() })
             }
     ) {
+        // The "glass table" the cards stand on. At strength 0 it's just the
+        // original faint gradient; turning it up brightens the surface and
+        // adds a lit front edge plus a sheen just below it, like the edge of
+        // a glass shelf catching the light.
+        val glass = glassTableStrength.coerceIn(0f, 1f)
+        val sideLight = sideLightStrength.coerceIn(0f, 1f)
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -2753,9 +3291,75 @@ fun AmbientClockScreen(
                 .alpha(fadeAlpha)
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.05f))
+                        colors = listOf(Color.Transparent, Color.White.copy(alpha = lerp(0.05f, 0.18f, glass)))
                     )
                 )
+                .drawWithContent {
+                    drawContent()
+                    if (glass > 0f) {
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.10f * glass), Color.Transparent),
+                                endY = size.height * 0.25f
+                            )
+                        )
+                        drawLine(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.45f * glass),
+                                    Color.Transparent
+                                )
+                            ),
+                            start = Offset(0f, 0f),
+                            end = Offset(size.width, 0f),
+                            strokeWidth = 1.5.dp.toPx()
+                        )
+                    }
+                    if (sideLight > 0f) {
+                        // Light coming in from the left: a glow pooled where
+                        // it enters the glass near the front edge, a beam
+                        // that skims across the surface and fades out toward
+                        // the right, and a faint spectral fringe along the
+                        // beam where the glass edge splits the light.
+                        drawRect(
+                            brush = Brush.radialGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.22f * sideLight), Color.Transparent),
+                                center = Offset(0f, size.height * 0.12f),
+                                radius = size.width * 0.45f
+                            )
+                        )
+                        // The beam is a round glow stretched sideways into a
+                        // long ellipse, so it fades out softly on every side
+                        // instead of ending in a hard-edged band.
+                        val beamCenter = Offset(0f, size.height * 0.10f)
+                        val beamRadius = size.height * 0.30f
+                        scale(scaleX = size.width * 0.9f / beamRadius, scaleY = 1f, pivot = beamCenter) {
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    0f to Color.White.copy(alpha = 0.16f * sideLight),
+                                    0.5f to Color.White.copy(alpha = 0.05f * sideLight),
+                                    1f to Color.Transparent,
+                                    center = beamCenter,
+                                    radius = beamRadius
+                                ),
+                                radius = beamRadius,
+                                center = beamCenter
+                            )
+                        }
+                        val fringeTop = size.height * 0.04f
+                        drawRect(
+                            brush = Brush.horizontalGradient(
+                                0f to Color(0xFF7FDBFF).copy(alpha = 0.10f * sideLight),
+                                0.18f to Color(0xFFB388FF).copy(alpha = 0.07f * sideLight),
+                                0.36f to Color(0xFFFF80AB).copy(alpha = 0.04f * sideLight),
+                                0.55f to Color.Transparent
+                            ),
+                            topLeft = Offset(0f, fringeTop),
+                            size = Size(size.width, 2.dp.toPx())
+                        )
+                    }
+                }
         )
 
         if (albumHistory.isNotEmpty()) {
@@ -2847,16 +3451,33 @@ fun AmbientClockScreen(
                                 },
                             contentAlignment = Alignment.Center
                         ) {
+                            // Stronger = brighter and sharper (less blur), and
+                            // fading out toward its far edge like a real
+                            // reflection on glass. At 0 it's the original
+                            // faint, evenly-blurred one.
+                            val reflection = reflectionStrength.coerceIn(0f, 1f)
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .offset(y = 460.dp)
                                     .graphicsLayer {
                                         rotationX = 180f
-                                        alpha = 0.12f * (1f - (dropAnim.value / 1000f).coerceIn(0f, 1f))
+                                        alpha = lerp(0.12f, 0.5f, reflection) * (1f - (dropAnim.value / 1000f).coerceIn(0f, 1f))
                                         scaleY = 0.7f
+                                        compositingStrategy = CompositingStrategy.Offscreen
                                     }
-                                    .blur(8.dp)
+                                    .drawWithContent {
+                                        drawContent()
+                                        // Flipped by rotationX, so the local
+                                        // top is the reflection's far end.
+                                        drawRect(
+                                            brush = Brush.verticalGradient(
+                                                colors = listOf(Color.White.copy(alpha = 1f - reflection), Color.White)
+                                            ),
+                                            blendMode = BlendMode.DstIn
+                                        )
+                                    }
+                                    .blur(lerp(8f, 1.5f, reflection).dp)
                             ) {
                                 AsyncImage(
                                     model = albumItem.artUrl,
@@ -2868,12 +3489,14 @@ fun AmbientClockScreen(
 
                             var cardBounds by remember { mutableStateOf(Rect.Zero) }
                             val isPlayable = abs(pageOffset) < 0.2f && showLabels && !isFadingOut
+                            // Square corners, matching the square-edged
+                            // reflection on the glass table below.
                             Card(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RectangleShape,
                                 elevation = CardDefaults.cardElevation(24.dp),
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                                    .border(1.dp, Color.White.copy(alpha = 0.1f), RectangleShape)
                                     .onGloballyPositioned { cardBounds = it.boundsInWindow() }
                                     .then(
                                         // The whole card is tappable-to-play
@@ -2996,55 +3619,80 @@ fun AmbientClockScreen(
             }
         }
 
-        if (trackState.isPlaying) {
-             Surface(
-                color = Color.Black.copy(alpha = 0.6f),
-                shape = RoundedCornerShape(20.dp),
+        // Track cards along the bottom while music plays: Previous on the
+        // left, and on the right Now Playing, which every so often slides
+        // off to the right to make way for Next Up, then slides back. Each
+        // can be hidden in Settings; with only one of the right-hand pair
+        // left (or no next track known), that one just stays put.
+        val hasPrevious = trackState.prevTrack != "None"
+        val hasNext = trackState.nextTrack != "None"
+        val showPreviousCard = trackState.isPlaying && hasPrevious && !hidePrevious
+        val showNowPlayingCard = trackState.isPlaying && !hideNowPlaying
+        val showNextUpCard = trackState.isPlaying && hasNext && !hideNextUp
+
+        AnimatedVisibility(
+            visible = showPreviousCard,
+            enter = fadeIn(tween(600)),
+            exit = fadeOut(tween(600)),
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(24.dp)
+                .alpha(fadeAlpha)
+        ) {
+            CoverFlowTrackCard(
+                label = "PREVIOUS",
+                title = trackState.prevTrack,
+                subtitle = trackState.prevArtist,
+                artUrl = trackState.prevArtUrl,
+                onClick = { previousTrackDetails = trackState.previousTrackDetails() }
+            )
+        }
+
+        if (showNowPlayingCard || showNextUpCard) {
+            var nextUpTurn by remember { mutableStateOf(false) }
+            // Restarts on every track change, so a new song always opens on
+            // its own Now Playing card first.
+            LaunchedEffect(showNowPlayingCard, showNextUpCard, trackState.title) {
+                nextUpTurn = false
+                if (showNowPlayingCard && showNextUpCard) {
+                    while (true) {
+                        delay(12_000)
+                        nextUpTurn = true
+                        delay(6_000)
+                        nextUpTurn = false
+                    }
+                }
+            }
+            val showingNextUp = showNextUpCard && (nextUpTurn || !showNowPlayingCard)
+
+            AnimatedContent(
+                targetState = showingNextUp,
+                transitionSpec = {
+                    (slideInHorizontally(tween(700, easing = FastOutSlowInEasing)) { it } + fadeIn(tween(700))) togetherWith
+                        (slideOutHorizontally(tween(700, easing = FastOutSlowInEasing)) { it } + fadeOut(tween(500)))
+                },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(24.dp)
-                    .width(360.dp)
-                    .alpha(fadeAlpha)
-                    .clickable { onWakeUp() }
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "NOW PLAYING",
-                        color = Color.White,
-                        fontWeight = FontWeight.Black,
-                        fontSize = 18.sp,
-                        letterSpacing = 1.sp,
-                        modifier = Modifier.padding(bottom = 12.dp)
+                    .alpha(fadeAlpha),
+                label = "nowPlayingNextUp"
+            ) { nextUp ->
+                if (nextUp) {
+                    CoverFlowTrackCard(
+                        label = "NEXT UP",
+                        title = trackState.nextTrack,
+                        subtitle = trackState.nextArtist,
+                        artUrl = trackState.nextArtUrl,
+                        onClick = onWakeUp
                     )
-                    
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (trackState.albumArtUrl.isNotBlank()) {
-                            AsyncImage(
-                                model = trackState.albumArtUrl,
-                                contentDescription = null,
-                                modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)),
-                                contentScale = ContentScale.Crop
-                            )
-                            Spacer(modifier = Modifier.width(16.dp))
-                        }
-                        Column {
-                            Text(
-                                text = trackState.title,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = if (trackState.album.isNotBlank()) "${trackState.artist} • ${trackState.album}" else trackState.artist,
-                                color = Color.White.copy(alpha = 0.7f),
-                                fontSize = 13.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
+                } else {
+                    CoverFlowTrackCard(
+                        label = "NOW PLAYING",
+                        title = trackState.title,
+                        subtitle = if (trackState.album.isNotBlank()) "${trackState.artist} • ${trackState.album}" else trackState.artist,
+                        artUrl = trackState.albumArtUrl,
+                        onClick = onWakeUp
+                    )
                 }
             }
         }
@@ -3086,6 +3734,14 @@ fun AmbientClockScreen(
             trackState = trackState,
             onClose = { showDebugInfo = false }
         )
+
+        previousTrackDetails?.let { track ->
+            TrackDetailsDialog(
+                heading = "Previous Track",
+                track = track,
+                onDismiss = { previousTrackDetails = null }
+            )
+        }
 
         // Drawn in-tree rather than as an AlertDialog, since this screen
         // also runs inside SonosDreamService, which isn't an Activity.
@@ -3150,6 +3806,8 @@ fun TvAmbientScreen(
     trackState: TrackState,
     onWakeUp: () -> Unit
 ) {
+    // Only ever shown in TV mode, so a missing artwork always falls back.
+    val artworkUrl = TvFallbackArt.rememberArtworkUrl(isTvMode = true, albumArtUrl = trackState.albumArtUrl)
     var alignment by remember { mutableStateOf(Alignment.Center) }
     var visible by remember { mutableStateOf(true) }
 
@@ -3185,14 +3843,14 @@ fun TvAmbientScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.padding(60.dp)
             ) {
-                if (trackState.albumArtUrl.isNotBlank()) {
+                if (artworkUrl.isNotBlank()) {
                     Card(
                         shape = RoundedCornerShape(12.dp),
                         elevation = CardDefaults.cardElevation(20.dp),
                         modifier = Modifier.size(300.dp)
                     ) {
                         AsyncImage(
-                            model = trackState.albumArtUrl,
+                            model = artworkUrl,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()

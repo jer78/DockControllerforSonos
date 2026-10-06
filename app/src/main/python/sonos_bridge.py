@@ -102,6 +102,10 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
                 # know it for free - the title IS the artist name.
                 if 'musicartist' in item_class:
                     artist = title
+                elif is_p:
+                    # A playlist mixes tracks from many artists, so there's
+                    # no single creator to show.
+                    artist = "Various Artists"
                 else:
                     artist = str(getattr(item, 'creator', "Unknown Artist"))
                     if artist.lower() in ['sonos', 'apple music', 'amazon music']: artist = "Unknown Artist"
@@ -174,6 +178,52 @@ def delete_sonos_favorite(item_id, expected_title="", speaker_name=None):
     except Exception as e:
         return f"FAIL: {str(e)}"
 
+# Per-coordinator cache of the previous/next queue tracks, so the queue is
+# only re-read when the current track actually changes rather than on every
+# 2s poll. Keyed by queue position + track URI + title.
+_ADJACENT_CACHE = {}
+
+def _adjacent_tracks(master, info):
+    """
+    The tracks either side of the current one in the Sonos queue, as
+    {"prev": {...} or None, "next": {...} or None}. Only meaningful while
+    the queue itself is playing - radio, TV, line-in, Spotify Connect and
+    AirPlay don't play from the queue (which may still hold an old, unrelated
+    queue), and in shuffle the queue order isn't the play order - so both
+    are None in those cases rather than showing the wrong tracks.
+    """
+    key = (info.get('playlist_position', ''), info.get('uri', ''), info.get('title', ''))
+    cached = _ADJACENT_CACHE.get(master.uid)
+    if cached and cached[0] == key:
+        return cached[1]
+
+    result = {"prev": None, "next": None}
+    try:
+        pos = int(info.get('playlist_position') or 0)
+        media_uri = master.get_current_media_info().get('uri', '')
+        if pos > 0 and media_uri.startswith('x-rincon-queue:') and 'SHUFFLE' not in master.play_mode:
+            start = max(pos - 2, 0)
+            items = list(master.get_queue(start=start, max_items=3, full_album_art_uri=True))
+            current = pos - 1 - start
+
+            def describe(track):
+                return {
+                    "title": getattr(track, 'title', '') or '',
+                    "artist": getattr(track, 'creator', '') or '',
+                    "album": getattr(track, 'album', '') or '',
+                    "art": get_high_res_art('', '', getattr(track, 'album_art_uri', '') or '')
+                }
+
+            if 0 <= current - 1 < len(items):
+                result["prev"] = describe(items[current - 1])
+            if current + 1 < len(items):
+                result["next"] = describe(items[current + 1])
+    except Exception:
+        pass
+
+    _ADJACENT_CACHE[master.uid] = (key, result)
+    return result
+
 def get_now_playing(speaker_name=None):
     device = get_speaker_instance(speaker_name)
     if not device: return {"error": "No Sonos device found"}
@@ -208,6 +258,9 @@ def get_now_playing(speaker_name=None):
         # it as TV while actually playing, so idle detection (not playing,
         # not TV) can still trigger once the TV source goes quiet.
         is_tv = state in ('PLAYING', 'TRANSITIONING') and master.music_source_from_uri(info.get('uri', '')) == 'TV'
+        adjacent = {"prev": None, "next": None} if is_tv else _adjacent_tracks(master, info)
+        prev_track = adjacent["prev"] or {}
+        next_track = adjacent["next"] or {}
         return {
             "title": info.get('title', 'Not Playing'),
             "artist": info.get('artist', 'Sonos'),
@@ -223,7 +276,16 @@ def get_now_playing(speaker_name=None):
             # for the Kotlin side to parse defensively rather than assumed
             # always-valid here.
             "position": info.get('position', ''),
-            "duration": info.get('duration', '')
+            "duration": info.get('duration', ''),
+            # Blank when there's no previous/next track to show (see
+            # _adjacent_tracks).
+            "prev_title": prev_track.get("title", ""),
+            "prev_artist": prev_track.get("artist", ""),
+            "prev_album": prev_track.get("album", ""),
+            "prev_art": prev_track.get("art", ""),
+            "next_title": next_track.get("title", ""),
+            "next_artist": next_track.get("artist", ""),
+            "next_art": next_track.get("art", "")
         }
     except Exception as e:
         return {"error": str(e)}

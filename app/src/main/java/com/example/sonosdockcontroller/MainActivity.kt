@@ -83,6 +83,14 @@ class MainActivity : ComponentActivity() {
             val spectrumHeightPercent by settingsManager.spectrumHeightPercent.collectAsState(initial = 1f)
             val spectrumConfineToAlbumArt by settingsManager.spectrumConfineToAlbumArt.collectAsState(initial = false)
             val use24HourClock by settingsManager.use24HourClock.collectAsState(initial = true)
+            val coverFlowReflection by settingsManager.coverFlowReflection.collectAsState(initial = SettingsManager.COVER_FLOW_REFLECTION_DEFAULT)
+            val coverFlowGlassTable by settingsManager.coverFlowGlassTable.collectAsState(initial = SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT)
+            val coverFlowSideLight by settingsManager.coverFlowSideLight.collectAsState(initial = SettingsManager.COVER_FLOW_SIDE_LIGHT_DEFAULT)
+            val coverFlowHidePrevious by settingsManager.coverFlowHidePrevious.collectAsState(initial = false)
+            val coverFlowHideNextUp by settingsManager.coverFlowHideNextUp.collectAsState(initial = false)
+            val coverFlowHideNowPlaying by settingsManager.coverFlowHideNowPlaying.collectAsState(initial = false)
+            val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
+            val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
             val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
                 initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
             )
@@ -239,8 +247,16 @@ class MainActivity : ComponentActivity() {
                                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                                 },
                                 use24HourClock = use24HourClock,
+                                reflectionStrength = coverFlowReflection,
+                                glassTableStrength = coverFlowGlassTable,
+                                sideLightStrength = coverFlowSideLight,
                                 isFavoritesMode = coverFlowMode == "favorites",
-                                onDeleteFavorite = { manager.deleteSonosFavorite(it) }
+                                onDeleteFavorite = { manager.deleteSonosFavorite(it) },
+                                initialCenterAlbum = manager.coverFlowCenterAlbum,
+                                onCenterAlbumChanged = { manager.coverFlowCenterAlbum = it },
+                                hidePrevious = coverFlowHidePrevious,
+                                hideNextUp = coverFlowHideNextUp,
+                                hideNowPlaying = coverFlowHideNowPlaying
                             )
                         }
                         DockScreen.NOW_PLAYING -> {
@@ -285,7 +301,9 @@ class MainActivity : ComponentActivity() {
                                 onSetBass = { manager.setBass(it) },
                                 onSetTreble = { manager.setTreble(it) },
                                 onSetLoudness = { manager.setLoudness(it) },
-                                onToggleSubEnabled = { manager.toggleSubEnabled() }
+                                onToggleSubEnabled = { manager.toggleSubEnabled() },
+                                hidePrevious = nowPlayingHidePrevious,
+                                hideNextUp = nowPlayingHideNextUp
                             )
                         }
                     }
@@ -341,7 +359,7 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier
                                 .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
                                 .size(with(density) { width.toDp() }, with(density) { height.toDp() })
-                                .clip(RoundedCornerShape(lerp(12f, 24f, animProgress.value).dp)),
+                                .clip(RoundedCornerShape(lerp(0f, 24f, animProgress.value).dp)),
                             contentScale = ContentScale.Crop
                         )
                     }
@@ -349,12 +367,14 @@ class MainActivity : ComponentActivity() {
             }
 
             val refreshStatus by manager.favoritesRefreshStatus.collectAsState()
+            val refreshCount by manager.favoritesRefreshCount.collectAsState()
 
             if (showSettings) {
                 SettingsModal(
                     discoveredSpeakers = discoveredSpeakers,
                     settingsManager = SettingsManager(this),
                     refreshStatus = refreshStatus,
+                    refreshCount = refreshCount,
                     albumHistoryCount = albumHistory.size,
                     onRefreshFavorites = { a, p, r -> manager.refreshFavorites(a, p, r) },
                     onClearHistory = { manager.clearAlbumHistory() },
