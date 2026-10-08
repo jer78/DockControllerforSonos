@@ -85,6 +85,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -2375,6 +2376,7 @@ fun SettingsModal(
     var selectedClimate by remember { mutableStateOf("") }
     var selectedHaMediaPlayer by remember { mutableStateOf("") }
     var coverFlowMode by remember { mutableStateOf("history") }
+    var coverFlowLimit by remember { mutableIntStateOf(SettingsManager.COVER_FLOW_LIMIT_DEFAULT) }
     var use24HourClock by remember { mutableStateOf(true) }
     var coverFlowReflection by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_REFLECTION_DEFAULT) }
     var coverFlowGlassTable by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT) }
@@ -2398,6 +2400,10 @@ fun SettingsModal(
     var fRadio by remember { mutableStateOf(true) }
 
     var showClearHistoryConfirm by remember { mutableStateOf(false) }
+    // Every saved History album, including any hidden by the Cover Flow
+    // limit - Clear History removes all of them.
+    val savedHistoryCount by remember { settingsManager.albumHistory.map { it.size } }
+        .collectAsState(initial = albumHistoryCount)
 
     val haManager = remember { HomeAssistantManager() }
     var lightEntities by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -2434,6 +2440,7 @@ fun SettingsModal(
         selectedClimate = settingsManager.selectedClimate.first()
         selectedHaMediaPlayer = settingsManager.selectedHaMediaPlayer.first()
         coverFlowMode = settingsManager.coverFlowMode.first()
+        coverFlowLimit = settingsManager.coverFlowLimit.first()
         use24HourClock = settingsManager.use24HourClock.first()
         coverFlowReflection = settingsManager.coverFlowReflection.first()
         coverFlowGlassTable = settingsManager.coverFlowGlassTable.first()
@@ -2611,6 +2618,23 @@ fun SettingsModal(
                                         }
                                     }
 
+                                    Text("Cover Flow Limit:", fontWeight = FontWeight.SemiBold)
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        SettingsManager.COVER_FLOW_LIMIT_OPTIONS.forEach { limit ->
+                                            FilterChip(
+                                                selected = (coverFlowLimit == limit),
+                                                onClick = { coverFlowLimit = limit },
+                                                label = { Text(if (limit == SettingsManager.COVER_FLOW_LIMIT_UNLIMITED) "Unlimited" else "$limit") }
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        if (coverFlowMode == "history") "Shows the most recently captured albums. Older ones are kept, just hidden, until the limit is raised."
+                                        else "Shows the first favorites alphabetically.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+
                                     if (coverFlowMode == "history") {
                                         Text(
                                             "Albums need to be favorited in the Sonos app. This mode just captures the history of when your favorited albums are played.",
@@ -2620,12 +2644,12 @@ fun SettingsModal(
                                         OutlinedButton(
                                             onClick = { showClearHistoryConfirm = true },
                                             modifier = Modifier.fillMaxWidth(),
-                                            enabled = albumHistoryCount > 0,
+                                            enabled = savedHistoryCount > 0,
                                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red)
                                         ) {
                                             Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
                                             Spacer(Modifier.width(8.dp))
-                                            Text("Clear History ($albumHistoryCount)")
+                                            Text("Clear History ($savedHistoryCount)")
                                         }
                                     } else {
                                         Text("Sync Categories:", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
@@ -2977,7 +3001,8 @@ fun SettingsModal(
                         coverFlowMode,
                         fAlbums,
                         fPlaylists,
-                        fRadio
+                        fRadio,
+                        coverFlowLimit
                     )
                     onSettingsSaved()
                     onDismiss()
@@ -2995,7 +3020,7 @@ fun SettingsModal(
         AlertDialog(
             onDismissRequest = { showClearHistoryConfirm = false },
             title = { Text("Clear History?") },
-            text = { Text("This permanently removes all $albumHistoryCount saved history entries. This can't be undone.") },
+            text = { Text("This permanently removes all $savedHistoryCount saved history entries. This can't be undone.") },
             confirmButton = {
                 Button(
                     onClick = {

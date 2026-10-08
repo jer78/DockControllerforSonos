@@ -90,6 +90,9 @@ class SonosDashboardManager private constructor(context: Context) {
         private const val IDLE_POLL_INTERVAL_MS = 6000L
         private const val ACTIVE_HA_POLL_INTERVAL_MS = 5000L
         private const val IDLE_HA_POLL_INTERVAL_MS = 15000L
+        // The bridge pages through every favorite (100 per round trip to
+        // the speaker), so large collections need longer than a single call.
+        private const val FAVORITES_FETCH_TIMEOUT_MS = 20000L
         @Volatile
         private var instance: SonosDashboardManager? = null
 
@@ -105,15 +108,24 @@ class SonosDashboardManager private constructor(context: Context) {
     // or Favorites) is correct for the given mode.
     private suspend fun reloadAlbumSourceForMode(mode: String) {
         if (mode == "history") {
-            val history = settingsManager.albumHistory.first()
-                .sortedWith(compareBy({ it.artist.lowercase() }, { it.albumTitle.lowercase() }))
-            _albumHistory.value = history
+            showHistory(settingsManager.albumHistory.first())
         } else {
             val fAlbums = settingsManager.filterAlbums.first()
             val fPlaylists = settingsManager.filterPlaylists.first()
             val fRadio = settingsManager.filterRadio.first()
             refreshFavorites(fAlbums, fPlaylists, fRadio)
         }
+    }
+
+    // History is stored in the order albums were first played, oldest
+    // first, and never trimmed by the Cover Flow limit - so lowering the
+    // limit only hides the oldest albums, and raising it brings them back.
+    // Cover Flow shows the newest `limit` of them, sorted by artist/album.
+    private suspend fun showHistory(stored: List<AlbumHistoryItem>) {
+        val limit = settingsManager.coverFlowLimit.first()
+        val newest = if (limit == SettingsManager.COVER_FLOW_LIMIT_UNLIMITED) stored else stored.takeLast(limit)
+        _albumHistory.value = newest
+            .sortedWith(compareBy({ it.artist.lowercase() }, { it.albumTitle.lowercase() }))
     }
 
     // Called right after Settings saves, so a reopened Settings dialog shows
@@ -346,8 +358,9 @@ class SonosDashboardManager private constructor(context: Context) {
             val filterString = if (filters.isEmpty()) "none" else filters.joinToString(",")
 
             try {
-                val pyFavs = withTimeoutOrNull(8000) {
-                    pyModule.callAttr("get_sonos_favorites", speaker, filterString).asList()
+                val limit = settingsManager.coverFlowLimit.first()
+                val pyFavs = withTimeoutOrNull(FAVORITES_FETCH_TIMEOUT_MS) {
+                    pyModule.callAttr("get_sonos_favorites", speaker, filterString, limit).asList()
                 }
 
                 if (pyFavs == null) {
@@ -406,8 +419,10 @@ class SonosDashboardManager private constructor(context: Context) {
             if (speaker.isBlank()) return@launch
 
             try {
-                val pyFavs = withTimeoutOrNull(8000) {
-                    pyModule.callAttr("get_sonos_favorites", speaker, "albums").asList()
+                // Always the complete list, whatever the Cover Flow limit -
+                // History can only capture albums found in here.
+                val pyFavs = withTimeoutOrNull(FAVORITES_FETCH_TIMEOUT_MS) {
+                    pyModule.callAttr("get_sonos_favorites", speaker, "albums", SettingsManager.COVER_FLOW_LIMIT_UNLIMITED).asList()
                 } ?: return@launch
 
                 val items = mutableListOf<AlbumHistoryItem>()
@@ -675,13 +690,13 @@ class SonosDashboardManager private constructor(context: Context) {
                                     // duplicate cards in Cover Flow where only
                                     // the most recently captured one actually
                                     // still resolves to a playable favorite.
-                                    if (currentMode == "history" && _albumHistory.value.none { it.albumTitle.equals(match.albumTitle, ignoreCase = true) }) {
-                                        val newItem = match.copy(artist = artist)
-                                        val currentHistory = (_albumHistory.value + newItem)
-                                            .sortedWith(compareBy({ it.artist.lowercase() }, { it.albumTitle.lowercase() }))
-                                            .take(100)
-                                        _albumHistory.value = currentHistory
-                                        settingsManager.saveAlbumHistory(currentHistory)
+                                    if (currentMode == "history") {
+                                        val stored = settingsManager.albumHistory.first()
+                                        if (stored.none { it.albumTitle.equals(match.albumTitle, ignoreCase = true) }) {
+                                            val updated = stored + match.copy(artist = artist)
+                                            settingsManager.saveAlbumHistory(updated)
+                                            showHistory(updated)
+                                        }
                                     }
                                 }
                             }
@@ -886,13 +901,17 @@ class SonosDashboardManager private constructor(context: Context) {
 
     fun removeAlbumFromHistory(artUrl: String) {
         scope.launch {
-            val currentList = _albumHistory.value.toMutableList()
-            val removed = currentList.removeAll { it.artUrl == artUrl }
-            if (removed) {
-                _albumHistory.value = currentList
-                if (_coverFlowMode.value == "history") {
-                    settingsManager.saveAlbumHistory(currentList)
+            if (_coverFlowMode.value == "history") {
+                val stored = settingsManager.albumHistory.first()
+                val updated = stored.filterNot { it.artUrl == artUrl }
+                if (updated.size != stored.size) {
+                    settingsManager.saveAlbumHistory(updated)
+                    // Lets the next-oldest album, if any was over the
+                    // limit, take the removed one's place.
+                    showHistory(updated)
                 }
+            } else {
+                _albumHistory.value = _albumHistory.value.filterNot { it.artUrl == artUrl }
             }
         }
     }

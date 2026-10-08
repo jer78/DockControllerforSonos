@@ -31,6 +31,10 @@ class SettingsManager(private val context: Context) {
 
         val ALBUM_HISTORY_JSON = stringPreferencesKey("album_history_json")
 
+        // Most albums Cover Flow holds, in History and Favorites alike;
+        // 0 = unlimited.
+        val COVER_FLOW_LIMIT = intPreferencesKey("cover_flow_limit")
+
         // Mic-based spectrum analyzer shown behind Now Playing (see SpectrumAnalyzer.kt)
         val SHOW_SPECTRUM_ANALYZER = booleanPreferencesKey("show_spectrum_analyzer")
         // Stores a SpectrumColorScheme's name (see DashboardUI.kt)
@@ -81,6 +85,10 @@ class SettingsManager(private val context: Context) {
         const val TV_SCREENSAVER_DELAY_MAX_SECONDS = 1800
         const val TV_SCREENSAVER_DELAY_DEFAULT_SECONDS = 30
 
+        const val COVER_FLOW_LIMIT_UNLIMITED = 0
+        const val COVER_FLOW_LIMIT_DEFAULT = 100
+        val COVER_FLOW_LIMIT_OPTIONS = listOf(50, 100, 250, 500, COVER_FLOW_LIMIT_UNLIMITED)
+
         const val COVER_FLOW_REFLECTION_DEFAULT = 0f
         const val COVER_FLOW_GLASS_TABLE_DEFAULT = 0f
         const val COVER_FLOW_SIDE_LIGHT_DEFAULT = 0.5f
@@ -94,6 +102,8 @@ class SettingsManager(private val context: Context) {
     val selectedHaMediaPlayer: Flow<String> = context.dataStore.data.map { it[SELECTED_HA_MEDIA_PLAYER] ?: "" }
     val coverFlowMode: Flow<String> = context.dataStore.data.map { it[COVER_FLOW_MODE] ?: "history" }
     
+    val coverFlowLimit: Flow<Int> = context.dataStore.data.map { it[COVER_FLOW_LIMIT] ?: COVER_FLOW_LIMIT_DEFAULT }
+
     val filterAlbums: Flow<Boolean> = context.dataStore.data.map { it[FILTER_ALBUMS] ?: true }
     val filterPlaylists: Flow<Boolean> = context.dataStore.data.map { it[FILTER_PLAYLISTS] ?: true }
     val filterRadio: Flow<Boolean> = context.dataStore.data.map { it[FILTER_RADIO] ?: true }
@@ -222,7 +232,8 @@ class SettingsManager(private val context: Context) {
         mode: String,
         fAlbums: Boolean = true,
         fPlaylists: Boolean = true,
-        fRadio: Boolean = true
+        fRadio: Boolean = true,
+        coverFlowLimit: Int = COVER_FLOW_LIMIT_DEFAULT
     ) {
         context.dataStore.edit { prefs ->
             prefs[SELECTED_SONOS_SPEAKER] = speaker
@@ -235,6 +246,7 @@ class SettingsManager(private val context: Context) {
             prefs[FILTER_ALBUMS] = fAlbums
             prefs[FILTER_PLAYLISTS] = fPlaylists
             prefs[FILTER_RADIO] = fRadio
+            prefs[COVER_FLOW_LIMIT] = coverFlowLimit
         }
     }
 

@@ -42,9 +42,24 @@ def get_high_res_art(artist, album, current_uri=""):
             return re.sub(r'_SL\d+._', '_SL600_', current_uri)
     return current_uri
 
-def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"):
+def _all_favorites(master):
+    # SoCo stops at 100 items unless asked for the complete result.
+    return list(master.music_library.get_sonos_favorites(complete_result=True))
+
+def _browse_all(master, ml_item):
+    # browse() has no complete_result option and also stops at 100 items,
+    # so page through until everything in the folder has been fetched.
+    items = []
+    while True:
+        page = master.music_library.browse(ml_item=ml_item, start=len(items), max_items=100)
+        items.extend(page)
+        if len(page) == 0 or len(items) >= page.total_matches:
+            return items
+
+def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio", limit=100):
     """
     HA-STYLE DISCOVERY: Captures native SoCo references for 100% reliable replay.
+    limit caps how many (alphabetically first) items are returned; 0 = all.
     """
     try:
         device = get_speaker_instance(speaker_name)
@@ -52,7 +67,7 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
         master = device.group.coordinator
 
         # 1. Fetch raw favorites (The HA Method)
-        all_raw = list(master.music_library.get_sonos_favorites())
+        all_raw = _all_favorites(master)
 
         requested = filter_types.split(',')
         results = []
@@ -127,7 +142,7 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
                 # S2 Category Dive
                 if 'container' in fav.item_class.lower() and not getattr(fav, 'uri', None):
                     try:
-                        sub = list(master.music_library.browse(ml_item=fav))
+                        sub = _browse_all(master, fav)
                         for s in sub: process_item(s)
                     except: process_item(fav)
                 else:
@@ -136,7 +151,7 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
 
         if not results: return [{"title": "DIAG", "artist": "No items matched filters."}]
         results.sort(key=lambda x: x['title'].lower())
-        return results[:100]
+        return results[:limit] if limit > 0 else results
     except Exception as e:
         return [{"title": "DIAG", "artist": f"Crawl Error: {str(e)}"}]
 
@@ -306,14 +321,14 @@ def play_album_smart(*args):
         if fav_id:
             # 1. LIVE RESOLUTION (The HA Secret)
             # Fetch the high-level SoCo objects to get the 'reference' attribute
-            all_favs = list(master.music_library.get_sonos_favorites())
+            all_favs = _all_favorites(master)
             target = next((f for f in all_favs if f.item_id == fav_id), None)
 
             if not target:
                 for f in all_favs:
                     if 'container' in f.item_class.lower():
                         try:
-                            sub = list(master.music_library.browse(ml_item=f))
+                            sub = _browse_all(master, f)
                             target = next((s for s in sub if s.item_id == fav_id), None)
                             if target: break
                         except: continue
