@@ -51,7 +51,7 @@ class SettingsManager(private val context: Context) {
 
         // Cover Flow's "glass table" look, each 0..1: how strong/sharp the
         // album reflections are, and how visible the glass surface under
-        // them is. 0 is the original subtle look.
+        // them is. 0 is the original subtle look; both default to 0.85.
         val COVER_FLOW_REFLECTION = floatPreferencesKey("cover_flow_reflection")
         val COVER_FLOW_GLASS_TABLE = floatPreferencesKey("cover_flow_glass_table")
 
@@ -75,6 +75,10 @@ class SettingsManager(private val context: Context) {
         // before dropping into the TV Ambient screensaver, in seconds.
         val TV_SCREENSAVER_DELAY_SECONDS = intPreferencesKey("tv_screensaver_delay_seconds")
 
+        // Filename of the one tv_fallback image TV mode always shows, or ""
+        // to rotate randomly through all of them (see TvFallbackArt.kt).
+        val TV_FALLBACK_IMAGE = stringPreferencesKey("tv_fallback_image")
+
         // Sonos never reports a real artist for album favorites (only
         // title/resource/class), so this caches artist names learned by
         // observing a favorited album actually play, keyed by the
@@ -89,8 +93,8 @@ class SettingsManager(private val context: Context) {
         const val COVER_FLOW_LIMIT_DEFAULT = 100
         val COVER_FLOW_LIMIT_OPTIONS = listOf(50, 100, 250, 500, COVER_FLOW_LIMIT_UNLIMITED)
 
-        const val COVER_FLOW_REFLECTION_DEFAULT = 0f
-        const val COVER_FLOW_GLASS_TABLE_DEFAULT = 0f
+        const val COVER_FLOW_REFLECTION_DEFAULT = 0.85f
+        const val COVER_FLOW_GLASS_TABLE_DEFAULT = 0.85f
         const val COVER_FLOW_SIDE_LIGHT_DEFAULT = 0.5f
     }
 
@@ -201,6 +205,12 @@ class SettingsManager(private val context: Context) {
             it[TV_SCREENSAVER_DELAY_SECONDS] =
                 seconds.coerceIn(TV_SCREENSAVER_DELAY_MIN_SECONDS, TV_SCREENSAVER_DELAY_MAX_SECONDS)
         }
+    }
+
+    val tvFallbackImage: Flow<String> = context.dataStore.data.map { it[TV_FALLBACK_IMAGE] ?: "" }
+
+    suspend fun setTvFallbackImage(name: String) {
+        context.dataStore.edit { it[TV_FALLBACK_IMAGE] = name }
     }
 
     val albumHistory: Flow<List<AlbumHistoryItem>> = context.dataStore.data.map { prefs ->

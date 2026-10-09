@@ -15,6 +15,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
@@ -893,7 +894,7 @@ fun DockDashboardUI(
                         
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "${haState.climateTemp} • ${haState.hvacState.uppercase()}",
+                            text = "${haState.climateTemp} â€¢ ${haState.hvacState.uppercase()}",
                             color = Color.White,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -943,12 +944,20 @@ fun DockDashboardUI(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
+                // Square for album art; in TV mode it slowly letterboxes to
+                // 16:9 (same width, top and bottom closing in), like a movie
+                // starting - and opens back up when music returns.
+                val artAspectRatio by animateFloatAsState(
+                    targetValue = if (isTvMode) 16f / 9f else 1f,
+                    animationSpec = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
+                    label = "artAspectRatio"
+                )
                 Card(
                     shape = RoundedCornerShape(24.dp),
                     elevation = CardDefaults.cardElevation(16.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(1f)
+                        .aspectRatio(artAspectRatio)
                         .onGloballyPositioned { onAlbumArtPositioned(it.boundsInWindow()) }
                 ) {
                     // Wrapped in a Box (rather than leaving Card's default Column
@@ -1082,7 +1091,7 @@ fun DockDashboardUI(
                     modifier = Modifier.padding(top = 4.dp)
                 ) {
                     Text(
-                        text = if (trackState.album.isNotBlank()) "${trackState.artist} — ${trackState.album}" else trackState.artist,
+                        text = if (trackState.album.isNotBlank()) "${trackState.artist} â€” ${trackState.album}" else trackState.artist,
                         fontSize = 20.sp,
                         color = Color.White.copy(alpha = 0.8f),
                         maxLines = 1,
@@ -1390,6 +1399,17 @@ fun GlassDialog(
     onDismissRequest: () -> Unit,
     content: @Composable () -> Unit
 ) {
+    // Inside the screensaver: drawn in the dream's own window, which blurs
+    // what's behind it itself (see InWindowDialogs.kt).
+    if (LocalInWindowDialogHost.current != null) {
+        DockDialog(onDismissRequest = onDismissRequest) {
+            CompositionLocalProvider(LocalGlassBlurActive provides inWindowBlurSupported) {
+                content()
+            }
+        }
+        return
+    }
+
     Dialog(onDismissRequest = onDismissRequest) {
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
         val blurRadiusPx = with(LocalDensity.current) { 30.dp.roundToPx() }
@@ -1614,7 +1634,7 @@ fun ThermostatDialog(
 ) {
     val isRange = haState.targetTempHigh != null && haState.targetTempLow != null
     // HA reports whatever step the integration declares (often 0.1 or 1.0),
-    // but a 0.5° resolution is the natural granularity for Celsius
+    // but a 0.5Â° resolution is the natural granularity for Celsius
     // thermostats - force it regardless of what the entity advertises.
     val effectiveStep = if (haState.temperatureUnit.contains("C", ignoreCase = true)) 0.5 else haState.tempStep
     var localTemp by remember(haState.targetTemp) { mutableStateOf(roundToStep(haState.targetTemp ?: haState.minTemp, effectiveStep)) }
@@ -1705,14 +1725,14 @@ fun ThermostatDialog(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         if (isRange) {
                             Text(
-                                "${formatTemp(localLow)}°–${formatTemp(localHigh)}°",
+                                "${formatTemp(localLow)}Â°â€“${formatTemp(localHigh)}Â°",
                                 color = Color.White,
                                 fontSize = 34.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         } else {
                             Text(
-                                "${formatTemp(localTemp)}°",
+                                "${formatTemp(localTemp)}Â°",
                                 color = Color.White,
                                 fontSize = 52.sp,
                                 fontWeight = FontWeight.Bold
@@ -1720,7 +1740,7 @@ fun ThermostatDialog(
                         }
                         Text(
                             "Current: ${haState.climateTemp}${haState.temperatureUnit}" +
-                                (haState.currentHumidity?.let { " · $it% humidity" } ?: ""),
+                                (haState.currentHumidity?.let { " Â· $it% humidity" } ?: ""),
                             color = Color.White.copy(alpha = 0.6f),
                             fontSize = 12.sp,
                             textAlign = TextAlign.Center
@@ -2316,6 +2336,57 @@ fun EntityAutocompleteField(
     }
 }
 
+// Settings > Now Playing's TV Mode Artwork choice: "Rotate Randomly" (saved
+// as "") followed by a thumbnail of every image in assets/tv_fallback/, so
+// newly added images appear here on their own.
+@Composable
+private fun TvFallbackImagePicker(selected: String, onSelect: (String) -> Unit) {
+    val urls = TvFallbackArt.imageUrls(LocalContext.current)
+    // A saved image that's since been removed falls back to rotating.
+    val effective = if (urls.any { TvFallbackArt.nameOf(it) == selected }) selected else ""
+    val tileModifier = Modifier.size(width = 112.dp, height = 63.dp)
+
+    @Composable
+    fun Tile(isSelected: Boolean, onClick: () -> Unit, content: @Composable () -> Unit) {
+        Box(
+            modifier = tileModifier
+                .clip(RoundedCornerShape(8.dp))
+                .border(
+                    width = if (isSelected) 3.dp else 1.dp,
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            content()
+        }
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Tile(isSelected = effective.isEmpty(), onClick = { onSelect("") }) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(20.dp))
+                Text("Rotate Randomly", fontSize = 11.sp)
+            }
+        }
+        urls.forEach { url ->
+            val name = TvFallbackArt.nameOf(url)
+            Tile(isSelected = effective == name, onClick = { onSelect(name) }) {
+                AsyncImage(
+                    model = url,
+                    contentDescription = name.substringBeforeLast('.'),
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+    }
+}
+
 // Status line beside Settings > Home Assistant's Connect button.
 @Composable
 private fun HaConnectionIndicator(status: HaConnectionStatus, modifier: Modifier = Modifier) {
@@ -2389,6 +2460,7 @@ fun SettingsModal(
     var hideNowPlaying by remember { mutableStateOf(false) }
     var nowPlayingHidePrevious by remember { mutableStateOf(false) }
     var nowPlayingHideNextUp by remember { mutableStateOf(false) }
+    var tvFallbackImage by remember { mutableStateOf("") }
     var showSpectrumAnalyzer by remember { mutableStateOf(false) }
     var spectrumColorScheme by remember { mutableStateOf(SpectrumColorScheme.RAINBOW) }
     var spectrumHeightPercent by remember { mutableFloatStateOf(1f) }
@@ -2451,6 +2523,7 @@ fun SettingsModal(
         hideNowPlaying = settingsManager.coverFlowHideNowPlaying.first()
         nowPlayingHidePrevious = settingsManager.nowPlayingHidePrevious.first()
         nowPlayingHideNextUp = settingsManager.nowPlayingHideNextUp.first()
+        tvFallbackImage = settingsManager.tvFallbackImage.first()
         fAlbums = settingsManager.filterAlbums.first()
         fPlaylists = settingsManager.filterPlaylists.first()
         fRadio = settingsManager.filterRadio.first()
@@ -2485,7 +2558,7 @@ fun SettingsModal(
     // anything taller than this scrolls within the tab.
     val tabContentHeight = (LocalConfiguration.current.screenHeightDp * 0.55f).dp
 
-    AlertDialog(
+    DockAlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.fillMaxWidth(0.94f).widthIn(max = 960.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -2821,6 +2894,18 @@ fun SettingsModal(
                                         nowPlayingHideNextUp = it
                                         scope.launch { settingsManager.setNowPlayingHideNextUp(it) }
                                     }
+                                    HorizontalDivider()
+
+                                    Text("TV Mode Artwork:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "Shown when the TV doesn't provide any artwork.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    TvFallbackImagePicker(selected = tvFallbackImage) { name ->
+                                        tvFallbackImage = name
+                                        scope.launch { settingsManager.setTvFallbackImage(name) }
+                                    }
                                 }
 
                                 Column(
@@ -3017,7 +3102,7 @@ fun SettingsModal(
     )
 
     if (showClearHistoryConfirm) {
-        AlertDialog(
+        DockAlertDialog(
             onDismissRequest = { showClearHistoryConfirm = false },
             title = { Text("Clear History?") },
             text = { Text("This permanently removes all $savedHistoryCount saved history entries. This can't be undone.") },
@@ -3779,7 +3864,7 @@ fun AmbientClockScreen(
                     CoverFlowTrackCard(
                         label = "NOW PLAYING",
                         title = trackState.title,
-                        subtitle = if (trackState.album.isNotBlank()) "${trackState.artist} • ${trackState.album}" else trackState.artist,
+                        subtitle = if (trackState.album.isNotBlank()) "${trackState.artist} â€¢ ${trackState.album}" else trackState.artist,
                         artUrl = trackState.albumArtUrl,
                         onClick = onWakeUp
                     )
