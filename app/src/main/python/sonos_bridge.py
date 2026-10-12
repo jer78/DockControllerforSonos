@@ -305,6 +305,18 @@ def get_now_playing(speaker_name=None):
     except Exception as e:
         return {"error": str(e)}
 
+# Sonos-specific AVTransport error codes SoCo reports as just "Unknown error".
+SONOS_UPNP_ERRORS = {
+    "800": "speaker isn't the group coordinator, or rejected the content",
+    "804": "Sonos couldn't use this favorite's music service link - try re-adding it in the Sonos app",
+}
+
+def _describe_error(e):
+    code = str(getattr(e, 'error_code', '') or '')
+    if code:
+        return f"UPnP Error {code}: {SONOS_UPNP_ERRORS.get(code, getattr(e, 'error_description', '') or 'Unknown error')}"
+    return str(e)
+
 def play_album_smart(*args):
     """
     HA PLAYBACK REPLICATION: Uses native reference injection.
@@ -376,33 +388,64 @@ def play_album_smart(*args):
                 # the "returns SUCCESS but nothing plays" case. Borrow the
                 # favorite's own desc token (it always has the real one) when
                 # the resolved reference is missing it.
-                if media_item is not target and not getattr(media_item, 'desc', None):
+                own_desc = getattr(media_item, 'desc', None)
+                candidates = []
+                if media_item is not target and not own_desc:
                     fav_desc = getattr(target, 'desc', None)
                     if fav_desc:
                         media_item.desc = fav_desc
+                        candidates.append(("reference", media_item.get_uri(), to_didl_string(media_item)))
+                        media_item.desc = own_desc
+                candidates.append(("reference (own desc)", media_item.get_uri(), to_didl_string(media_item)))
+                # Last resort: replay the favorite exactly as the Sonos app
+                # does - its own <res> URI plus the raw resMD Sonos stored
+                # with it, with no SoCo re-serialization in between. Sonos
+                # rejects some re-serialized references (UPnP error 804)
+                # that it accepts in this original form.
+                fav_res = getattr(target, 'resources', None)
+                fav_md = getattr(target, 'resource_meta_data', None)
+                if fav_res and fav_md:
+                    candidates.append(("favorite resMD", fav_res[0].uri, fav_md))
 
-                uri = media_item.get_uri()
                 # HA-STYLE SOURCE DETECTION: classify by the resolved URI,
                 # exactly what music_source_from_uri() uses under the hood.
-                source = master.music_source_from_uri(uri)
+                source = master.music_source_from_uri(candidates[0][1])
 
-                if source == 'RADIO':
-                    master.play_uri(uri, meta=to_didl_string(media_item), title=media_item.title)
-                else:
-                    # Containers/tracks (Albums/Playlists/Songs): Clear -> Add REFERENCE -> Play
-                    master.clear_queue()
-                    master.add_to_queue(media_item)
+                errors = []
+                started = False
+                for label, uri, meta in candidates:
+                    try:
+                        if source == 'RADIO':
+                            master.play_uri(uri, meta=meta, title=media_item.title)
+                        else:
+                            # Containers/tracks (Albums/Playlists/Songs): Clear -> Add REFERENCE -> Play
+                            master.clear_queue()
+                            master.avTransport.AddURIToQueue([
+                                ("InstanceID", 0),
+                                ("EnqueuedURI", uri),
+                                ("EnqueuedURIMetaData", meta),
+                                ("DesiredFirstTrackNumberEnqueued", 0),
+                                ("EnqueueAsNext", 0),
+                            ])
 
-                    # Large cloud playlists/albums can take a moment to
-                    # resolve into actual queue tracks server-side. Poll
-                    # instead of guessing a fixed delay.
-                    waited = 0.0
-                    while master.queue_size in (None, 0) and waited < 4.0:
-                        time.sleep(0.25)
-                        waited += 0.25
+                            # Large cloud playlists/albums can take a moment to
+                            # resolve into actual queue tracks server-side. Poll
+                            # instead of guessing a fixed delay.
+                            waited = 0.0
+                            while master.queue_size in (None, 0) and waited < 4.0:
+                                time.sleep(0.25)
+                                waited += 0.25
 
-                    master.play_from_queue(0)
-                    master.play()
+                            master.play_from_queue(0)
+                            master.play()
+                        started = True
+                        break
+                    except Exception as ce:
+                        errors.append(f"{label}: {_describe_error(ce)}")
+                if not started:
+                    # Report the first attempt's error - it's the real
+                    # rejection; later ones are just the fallbacks failing too.
+                    return f"FAIL: {errors[0].split(': ', 1)[1]}" + (f" (+{len(errors) - 1} fallback(s) failed)" if len(errors) > 1 else "")
 
                 # Verify playback actually started. AVTransport calls can
                 # return success even when the speaker silently rejects or
@@ -420,7 +463,7 @@ def play_album_smart(*args):
 
                 return f"FAIL: Speaker did not start playback (state: {state or 'UNKNOWN'})"
             except Exception as pe:
-                return f"FAIL: {str(pe)}"
+                return f"FAIL: {_describe_error(pe)}"
         return "FAIL: No ID"
     except Exception as e:
         return f"CRITICAL ERR: {str(e)}"

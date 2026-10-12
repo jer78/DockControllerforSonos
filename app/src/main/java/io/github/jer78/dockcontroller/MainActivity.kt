@@ -91,6 +91,7 @@ class MainActivity : ComponentActivity() {
             val coverFlowHideNowPlaying by settingsManager.coverFlowHideNowPlaying.collectAsState(initial = false)
             val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
             val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
+            val nowPlayingShowClock by settingsManager.nowPlayingShowClock.collectAsState(initial = false)
             val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
                 initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
             )
@@ -116,16 +117,9 @@ class MainActivity : ComponentActivity() {
             var lastIsPlaying by remember { mutableStateOf(trackState.isPlaying) }
             var lastIsTvMode by remember { mutableStateOf(isTvMode) }
 
-            // Flash Error Logic
-            var flashErrorMessage by remember { mutableStateOf<String?>(null) }
-            val lastCommand = trackState.lastCommandSent
-            LaunchedEffect(lastCommand) {
-                if (lastCommand.contains("FAIL") || lastCommand.contains("ERR")) {
-                    flashErrorMessage = lastCommand
-                    delay(4000)
-                    flashErrorMessage = null
-                }
-            }
+            // Errors are logged (with timestamps) in the manager; CommandErrorFlash
+            // shows only fresh ones, so re-entering this screen doesn't re-flash an old error.
+            val recentErrors by manager.recentErrors.collectAsState()
 
             // Shared Transition Logic
             var transitioningAlbum by remember { mutableStateOf<AlbumHistoryItem?>(null) }
@@ -303,34 +297,16 @@ class MainActivity : ComponentActivity() {
                                 onSetLoudness = { manager.setLoudness(it) },
                                 onToggleSubEnabled = { manager.toggleSubEnabled() },
                                 hidePrevious = nowPlayingHidePrevious,
-                                hideNextUp = nowPlayingHideNextUp
+                                hideNextUp = nowPlayingHideNextUp,
+                                showClock = nowPlayingShowClock,
+                                use24HourClock = use24HourClock
                             )
                         }
                     }
                 }
 
                 // Error Flash Box
-                AnimatedVisibility(
-                    visible = flashErrorMessage != null,
-                    enter = slideInVertically { -it } + fadeIn(),
-                    exit = slideOutVertically { -it } + fadeOut(),
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 40.dp)
-                ) {
-                    Surface(
-                        color = Color.Red,
-                        shape = RoundedCornerShape(12.dp),
-                        shadowElevation = 12.dp,
-                        modifier = Modifier.padding(horizontal = 24.dp)
-                    ) {
-                        Text(
-                            text = flashErrorMessage ?: "",
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
-                        )
-                    }
-                }
+                CommandErrorFlash(recentErrors.firstOrNull(), Modifier.align(Alignment.TopCenter))
                 
                 // Shared Album Transition Overlay: animates the tapped cover-flow
                 // card's real on-screen rect into the now-playing art's real rect,

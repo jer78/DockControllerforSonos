@@ -29,6 +29,16 @@ data class TrackState(
     val durationSeconds: Int = 0
 )
 
+// A failed command (album play, favorite delete, ...), kept in
+// SonosDashboardManager.recentErrors for the Metadata Debugger. timestampMs
+// lets the error flash show only while it's fresh, instead of re-flashing a
+// stale error every time a screen is (re)composed.
+data class CommandError(
+    val id: Long,
+    val message: String,
+    val timestampMs: Long
+)
+
 data class GroupMemberVolume(
     val name: String,
     val volume: Float,

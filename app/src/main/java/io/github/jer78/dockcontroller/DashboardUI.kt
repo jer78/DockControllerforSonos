@@ -112,6 +112,72 @@ val dockScreenTransitionSpec: AnimatedContentTransitionScope<DockScreen>.() -> C
     }
 }
 
+fun formatClockTime(time: Calendar, use24HourClock: Boolean): String =
+    if (use24HourClock) {
+        String.format(Locale.getDefault(), "%02d:%02d", time.get(Calendar.HOUR_OF_DAY), time.get(Calendar.MINUTE))
+    } else {
+        val hour12 = time.get(Calendar.HOUR).let { if (it == 0) 12 else it }
+        val amPm = if (time.get(Calendar.AM_PM) == Calendar.AM) "AM" else "PM"
+        String.format(Locale.getDefault(), "%d:%02d %s", hour12, time.get(Calendar.MINUTE), amPm)
+    }
+
+// Current time, refreshed right as each minute turns over rather than every
+// second - the Now Playing clock never shows seconds.
+@Composable
+fun rememberMinuteClock(): Calendar {
+    var now by remember { mutableStateOf(Calendar.getInstance()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = Calendar.getInstance()
+            delay(60_000L - System.currentTimeMillis() % 60_000L)
+        }
+    }
+    return now
+}
+
+private const val ERROR_FLASH_MS = 4000L
+
+// Red banner for the newest command error. Driven by the error's own
+// timestamp rather than by "a new value arrived", so it disappears after
+// ERROR_FLASH_MS for good - re-composing a screen (Cover Flow <-> Now
+// Playing, app <-> screensaver) only shows it for whatever time it has left.
+@Composable
+fun CommandErrorFlash(latest: CommandError?, modifier: Modifier = Modifier) {
+    var visible by remember { mutableStateOf(false) }
+    // Kept after hiding so the text doesn't blank out mid exit-animation.
+    var shown by remember { mutableStateOf<CommandError?>(null) }
+    LaunchedEffect(latest?.id) {
+        val error = latest ?: return@LaunchedEffect
+        val remaining = ERROR_FLASH_MS - (System.currentTimeMillis() - error.timestampMs)
+        if (remaining <= 0) return@LaunchedEffect
+        shown = error
+        visible = true
+        delay(remaining)
+        visible = false
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically { -it } + fadeIn(),
+        exit = slideOutVertically { -it } + fadeOut(),
+        modifier = modifier.padding(top = 40.dp)
+    ) {
+        Surface(
+            color = Color.Red,
+            shape = RoundedCornerShape(12.dp),
+            shadowElevation = 12.dp,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        ) {
+            Text(
+                text = shown?.message ?: "",
+                color = Color.White,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp
+            )
+        }
+    }
+}
+
 @Composable
 fun MetadataDebuggerOverlay(
     show: Boolean,
@@ -134,6 +200,25 @@ fun MetadataDebuggerOverlay(
                 
                 Text("LAST COMMAND STATUS:", color = Color.Blue, fontWeight = FontWeight.Bold)
                 Text(trackState.lastCommandSent, color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+
+                HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color.Black.copy(alpha = 0.2f))
+
+                val context = LocalContext.current
+                val recentErrors by remember { SonosDashboardManager.getInstance(context) }
+                    .recentErrors.collectAsState()
+                Text("RECENT ERRORS (LAST 5):", color = Color.Blue, fontWeight = FontWeight.Bold)
+                if (recentErrors.isEmpty()) {
+                    Text("None", color = Color.DarkGray)
+                } else {
+                    val timeFormat = remember { java.text.SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
+                    recentErrors.forEach { error ->
+                        Text(
+                            "${timeFormat.format(java.util.Date(error.timestampMs))}  ${error.message}",
+                            color = Color(0xFFC62828),
+                            fontSize = 14.sp
+                        )
+                    }
+                }
                 
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color.Black.copy(alpha = 0.2f))
                 
@@ -763,6 +848,9 @@ fun DockDashboardUI(
     // Settings > Now Playing > Track Info.
     hidePrevious: Boolean = false,
     hideNextUp: Boolean = false,
+    // Settings > Now Playing > Clock.
+    showClock: Boolean = false,
+    use24HourClock: Boolean = true,
     onToggleNightMode: () -> Unit = {},
     onToggleDialogMode: () -> Unit = {},
     onSetBass: (Int) -> Unit = {},
@@ -952,6 +1040,18 @@ fun DockDashboardUI(
                     animationSpec = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
                     label = "artAspectRatio"
                 )
+                if (showClock) {
+                    val currentTime = rememberMinuteClock()
+                    Text(
+                        text = formatClockTime(currentTime, use24HourClock),
+                        fontSize = 64.sp,
+                        fontWeight = FontWeight.Light,
+                        color = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .padding(bottom = 12.dp)
+                    )
+                }
                 Card(
                     shape = RoundedCornerShape(24.dp),
                     elevation = CardDefaults.cardElevation(16.dp),
@@ -2459,6 +2559,7 @@ fun SettingsModal(
     var hideNextUp by remember { mutableStateOf(false) }
     var hideNowPlaying by remember { mutableStateOf(false) }
     var nowPlayingHidePrevious by remember { mutableStateOf(false) }
+    var nowPlayingShowClock by remember { mutableStateOf(false) }
     var nowPlayingHideNextUp by remember { mutableStateOf(false) }
     var tvFallbackImage by remember { mutableStateOf("") }
     var showSpectrumAnalyzer by remember { mutableStateOf(false) }
@@ -2523,6 +2624,7 @@ fun SettingsModal(
         hideNowPlaying = settingsManager.coverFlowHideNowPlaying.first()
         nowPlayingHidePrevious = settingsManager.nowPlayingHidePrevious.first()
         nowPlayingHideNextUp = settingsManager.nowPlayingHideNextUp.first()
+        nowPlayingShowClock = settingsManager.nowPlayingShowClock.first()
         tvFallbackImage = settingsManager.tvFallbackImage.first()
         fAlbums = settingsManager.filterAlbums.first()
         fPlaylists = settingsManager.filterPlaylists.first()
@@ -2893,6 +2995,18 @@ fun SettingsModal(
                                     SettingsToggleRow("Hide Next Up", nowPlayingHideNextUp) {
                                         nowPlayingHideNextUp = it
                                         scope.launch { settingsManager.setNowPlayingHideNextUp(it) }
+                                    }
+                                    HorizontalDivider()
+
+                                    Text("Clock:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "The current time, shown above the artwork. Follows the 12/24-hour clock setting.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    SettingsToggleRow("Show Clock", nowPlayingShowClock) {
+                                        nowPlayingShowClock = it
+                                        scope.launch { settingsManager.setNowPlayingShowClock(it) }
                                     }
                                     HorizontalDivider()
 
@@ -3887,13 +4001,7 @@ fun AmbientClockScreen(
                     }
                 ) {
                     Text(
-                        text = if (use24HourClock) {
-                            String.format(Locale.getDefault(), "%02d:%02d", currentTime.get(Calendar.HOUR_OF_DAY), currentTime.get(Calendar.MINUTE))
-                        } else {
-                            val hour12 = currentTime.get(Calendar.HOUR).let { if (it == 0) 12 else it }
-                            val amPm = if (currentTime.get(Calendar.AM_PM) == Calendar.AM) "AM" else "PM"
-                            String.format(Locale.getDefault(), "%d:%02d %s", hour12, currentTime.get(Calendar.MINUTE), amPm)
-                        },
+                        text = formatClockTime(currentTime, use24HourClock),
                         fontSize = 90.sp, fontWeight = FontWeight.ExtraLight, color = Color.White.copy(alpha = 0.5f)
                     )
                     Text(

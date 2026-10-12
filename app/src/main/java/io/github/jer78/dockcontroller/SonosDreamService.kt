@@ -6,6 +6,9 @@ import android.view.KeyEvent
 import android.content.pm.PackageManager
 import android.service.dreams.DreamService
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -120,6 +123,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     val coverFlowHideNowPlaying by settingsManager.coverFlowHideNowPlaying.collectAsState(initial = false)
                     val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
                     val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
+                    val nowPlayingShowClock by settingsManager.nowPlayingShowClock.collectAsState(initial = false)
                     val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
                         initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
                     )
@@ -135,16 +139,9 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     var isTvAmbientMode by remember { mutableStateOf(false) }
                     var showSettings by remember { mutableStateOf(false) }
 
-                    // Flash Error Logic (matches MainActivity)
-                    var flashErrorMessage by remember { mutableStateOf<String?>(null) }
-                    val lastCommand = trackState.lastCommandSent
-                    LaunchedEffect(lastCommand) {
-                        if (lastCommand.contains("FAIL") || lastCommand.contains("ERR")) {
-                            flashErrorMessage = lastCommand
-                            delay(4000)
-                            flashErrorMessage = null
-                        }
-                    }
+                    // Errors are logged (with timestamps) in the manager; CommandErrorFlash
+                    // shows only fresh ones, so re-entering this screen doesn't re-flash an old error.
+                    val recentErrors by manager.recentErrors.collectAsState()
 
                     // Dims the screen in a dark room instead of always running
                     // at full system brightness (see AmbientBrightnessController)
@@ -318,34 +315,16 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onSetLoudness = { manager.setLoudness(it) },
                                         onToggleSubEnabled = { manager.toggleSubEnabled() },
                                         hidePrevious = nowPlayingHidePrevious,
-                                        hideNextUp = nowPlayingHideNextUp
+                                        hideNextUp = nowPlayingHideNextUp,
+                                        showClock = nowPlayingShowClock,
+                                        use24HourClock = use24HourClock
                                     )
                                 }
                             }
                         }
 
                         // Error Flash Box
-                        AnimatedVisibility(
-                            visible = flashErrorMessage != null,
-                            enter = slideInVertically { -it } + fadeIn(),
-                            exit = slideOutVertically { -it } + fadeOut(),
-                            modifier = Modifier.align(Alignment.TopCenter).padding(top = 40.dp)
-                        ) {
-                            Surface(
-                                color = Color.Red,
-                                shape = RoundedCornerShape(12.dp),
-                                shadowElevation = 12.dp,
-                                modifier = Modifier.padding(horizontal = 24.dp)
-                            ) {
-                                Text(
-                                    text = flashErrorMessage ?: "",
-                                    color = Color.White,
-                                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 18.sp
-                                )
-                            }
-                        }
+                        CommandErrorFlash(recentErrors.firstOrNull(), Modifier.align(Alignment.TopCenter))
 
                         // Shared Album Transition Overlay (see MainActivity for the
                         // matching implementation / rationale). Only while the
@@ -409,6 +388,19 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
             }
         }
         setContentView(composeView)
+
+        // isFullscreen alone only hides the status bar - a swipe down from the
+        // top still pulls the notification shade straight open, hijacking the
+        // swipe-down-to-Cover-Flow gesture. Immersive mode (same as
+        // MainActivity) makes a top-edge swipe just peek the system bars;
+        // the shade then needs a second, deliberate swipe from the very top.
+        window?.let { window ->
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            WindowInsetsControllerCompat(window, window.decorView).apply {
+                hide(WindowInsetsCompat.Type.systemBars())
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        }
     }
 
     override fun onDetachedFromWindow() {

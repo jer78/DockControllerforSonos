@@ -16,6 +16,11 @@ class SonosDashboardManager private constructor(context: Context) {
     private val _trackState = MutableStateFlow(TrackState())
     val trackState: StateFlow<TrackState> = _trackState.asStateFlow()
 
+    // Most recent first, capped at MAX_RECENT_ERRORS.
+    private val _recentErrors = MutableStateFlow<List<CommandError>>(emptyList())
+    val recentErrors: StateFlow<List<CommandError>> = _recentErrors.asStateFlow()
+    private var nextErrorId = 0L
+
     private val _haState = MutableStateFlow(HAState())
     val haState: StateFlow<HAState> = _haState.asStateFlow()
 
@@ -93,6 +98,7 @@ class SonosDashboardManager private constructor(context: Context) {
         // The bridge pages through every favorite (100 per round trip to
         // the speaker), so large collections need longer than a single call.
         private const val FAVORITES_FETCH_TIMEOUT_MS = 20000L
+        private const val MAX_RECENT_ERRORS = 5
         @Volatile
         private var instance: SonosDashboardManager? = null
 
@@ -875,20 +881,35 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
+    private fun reportError(message: String) {
+        _recentErrors.update { errors ->
+            val error = synchronized(this) {
+                CommandError(nextErrorId++, message, System.currentTimeMillis())
+            }
+            (listOf(error) + errors).take(MAX_RECENT_ERRORS)
+        }
+    }
+
     fun playAlbum(album: AlbumHistoryItem) {
         scope.launch {
             val py = Python.getInstance()
             val speaker = settingsManager.sonosSpeaker.first()
             _trackState.update { it.copy(lastCommandSent = "Attempting: '${album.albumTitle}'...") }
-            val result = py.getModule("sonos_bridge").callAttr(
-                "play_album_smart", 
-                album.albumTitle, 
-                album.artist, 
-                album.playUri, 
-                album.playMetadata, 
-                speaker
-            ).toString()
-            _trackState.update { it.copy(lastCommandSent = "$result: '${album.albumTitle}'") }
+            val result = try {
+                py.getModule("sonos_bridge").callAttr(
+                    "play_album_smart",
+                    album.albumTitle,
+                    album.artist,
+                    album.playUri,
+                    album.playMetadata,
+                    speaker
+                ).toString()
+            } catch (e: Exception) {
+                "CRITICAL ERR: ${e.message}"
+            }
+            val status = "$result: '${album.albumTitle}'"
+            _trackState.update { it.copy(lastCommandSent = status) }
+            if (result.contains("FAIL") || result.contains("ERR")) reportError(status)
         }
     }
 
@@ -940,7 +961,7 @@ class SonosDashboardManager private constructor(context: Context) {
                 "Deleted \"${item.albumTitle}\" from Sonos Favorites"
             } else {
                 reloadAlbumSourceForMode(_coverFlowMode.value)
-                "Couldn't delete: ${result.removePrefix("FAIL: ")}"
+                "Couldn't delete: ${result.removePrefix("FAIL: ")}".also { reportError("$it: '${item.albumTitle}'") }
             }
             withContext(Dispatchers.Main) {
                 Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()

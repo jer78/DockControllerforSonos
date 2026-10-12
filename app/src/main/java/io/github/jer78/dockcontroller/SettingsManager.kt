@@ -70,6 +70,7 @@ class SettingsManager(private val context: Context) {
         // track chips - independent of Cover Flow's own cards above.
         val NOW_PLAYING_HIDE_PREVIOUS = booleanPreferencesKey("now_playing_hide_previous")
         val NOW_PLAYING_HIDE_NEXT_UP = booleanPreferencesKey("now_playing_hide_next_up")
+        val NOW_PLAYING_SHOW_CLOCK = booleanPreferencesKey("now_playing_show_clock")
 
         // How long TV mode sits on the Now Playing screen (actively playing)
         // before dropping into the TV Ambient screensaver, in seconds.
@@ -194,6 +195,12 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setNowPlayingHideNextUp(hide: Boolean) {
         context.dataStore.edit { it[NOW_PLAYING_HIDE_NEXT_UP] = hide }
+    }
+
+    val nowPlayingShowClock: Flow<Boolean> = context.dataStore.data.map { it[NOW_PLAYING_SHOW_CLOCK] ?: false }
+
+    suspend fun setNowPlayingShowClock(show: Boolean) {
+        context.dataStore.edit { it[NOW_PLAYING_SHOW_CLOCK] = show }
     }
 
     val tvScreensaverDelaySeconds: Flow<Int> = context.dataStore.data.map {
