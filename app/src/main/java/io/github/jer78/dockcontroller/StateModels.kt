@@ -6,8 +6,9 @@ package io.github.jer78.dockcontroller
 enum class DockScreen { NOW_PLAYING, COVER_FLOW, TV_AMBIENT }
 
 // How Now Playing was left for Cover Flow, so the transition can follow the
-// gesture: a swipe right brings Cover Flow in FROM_LEFT, a swipe left
-// FROM_RIGHT; everything else (swipe down, the button, timers) is VERTICAL.
+// gesture: a swipe right or the Cover Flow button brings Cover Flow in
+// FROM_LEFT, a swipe left FROM_RIGHT; everything else (swipe down, timers)
+// is VERTICAL.
 enum class ScreenSlide { VERTICAL, FROM_LEFT, FROM_RIGHT }
 
 data class TrackState(

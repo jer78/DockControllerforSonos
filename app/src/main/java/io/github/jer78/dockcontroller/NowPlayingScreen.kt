@@ -263,7 +263,9 @@ fun DockDashboardUI(
             LabeledIconButton(
                 icon = Icons.Default.BurstMode,
                 label = "Cover Flow",
-                onClick = { onEnterAmbient(ScreenSlide.VERTICAL) }
+                // Same slide as a swipe right, so the button and the
+                // sideways swipes feel like one gesture.
+                onClick = { onEnterAmbient(ScreenSlide.FROM_LEFT) }
             )
 
             LabeledIconButton(

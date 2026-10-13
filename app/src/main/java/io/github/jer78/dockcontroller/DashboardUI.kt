@@ -72,7 +72,8 @@ import kotlin.math.roundToInt
 // rises away above, Now Playing rises into place from below).
 //
 // Exception: Cover Flow reached by a sideways swipe on Now Playing slides in
-// from the side the finger came from (and back out the same way) - `slide`
+// from the side the finger came from, or from the left for the Cover Flow
+// button (and back out the same way) - `slide`
 // is how the last Now Playing -> Cover Flow switch was triggered.
 fun dockScreenTransitionSpec(slide: ScreenSlide): AnimatedContentTransitionScope<DockScreen>.() -> ContentTransform = {
     val spec = tween<IntOffset>(550, easing = FastOutSlowInEasing)
