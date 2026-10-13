@@ -228,6 +228,20 @@ class HomeAssistantManager {
         })
     }
 
+    fun seekMediaPlayer(url: String, token: String, entityId: String, positionSeconds: Int) {
+        if (entityId.isBlank()) return
+        val json = JSONObject().put("entity_id", entityId).put("seek_position", positionSeconds)
+        val request = Request.Builder()
+            .url(getFullUrl(url, "/api/services/media_player/media_seek"))
+            .post(json.toString().toRequestBody("application/json".toMediaType()))
+            .addHeader("Authorization", "Bearer $token")
+            .build()
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
+        })
+    }
+
     fun fetchTemperatureUnit(url: String, token: String, callback: (String) -> Unit) {
         val fullUrl = getFullUrl(url, "/api/config")
         val request = Request.Builder()

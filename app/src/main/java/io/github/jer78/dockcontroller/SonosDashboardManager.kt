@@ -6,6 +6,7 @@ import android.widget.Toast
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 
 class SonosDashboardManager private constructor(context: Context) {
@@ -96,6 +97,13 @@ class SonosDashboardManager private constructor(context: Context) {
         private const val IDLE_POLL_INTERVAL_MS = 6000L
         private const val ACTIVE_HA_POLL_INTERVAL_MS = 5000L
         private const val IDLE_HA_POLL_INTERVAL_MS = 15000L
+        // Fallback refresh while speaker events are flowing - events cover
+        // every real change, this just catches anything missed. Playback
+        // position ticks along locally in the UI in between.
+        private const val ACTIVE_EVENT_FALLBACK_MS = 10000L
+        private const val IDLE_EVENT_FALLBACK_MS = 30000L
+        private const val FAVORITES_REFRESH_INTERVAL_MS = 60 * 60 * 1000L
+        private const val GROUPS_REFRESH_INTERVAL_MS = 10000L
         // The bridge pages through every favorite (100 per round trip to
         // the speaker), so large collections need longer than a single call.
         private const val FAVORITES_FETCH_TIMEOUT_MS = 20000L
@@ -104,9 +112,9 @@ class SonosDashboardManager private constructor(context: Context) {
         // coming back from a commercial - well clear of poll/clock jitter,
         // well under the minutes a show and an ad typically differ by.
         private const val AD_END_REMAINING_JUMP_SECONDS = 10
-        // How close to the end of the final queue track the last PLAYING
-        // poll must be for a following STOPPED to count as the album ending
-        // - a few 2s polls of slack, plus Sonos reporting whole seconds.
+        // How early before the final queue track's predicted end a STOPPED
+        // still counts as the album ending - slack for Sonos reporting whole
+        // seconds and refresh timing.
         private const val ALBUM_END_WINDOW_SECONDS = 10
         @Volatile
         private var instance: SonosDashboardManager? = null
@@ -148,6 +156,10 @@ class SonosDashboardManager private constructor(context: Context) {
     // stale data lingers until pollSonos's next 2s cycle catches the mode
     // change on its own.
     fun refreshAfterSettingsSave() {
+        // The speaker may have just been picked (first-time setup) or
+        // changed - History matching and "Continue With a Random Album" both
+        // need this list, which otherwise only loads at startup and hourly.
+        refreshFavoriteAlbumsRef()
         scope.launch {
             val mode = settingsManager.coverFlowMode.first()
             _coverFlowMode.value = mode
@@ -188,6 +200,18 @@ class SonosDashboardManager private constructor(context: Context) {
         if (activeHostCount > 0) return
         pollingJob?.cancel()
         pollingJob = null
+        haEvents.stop()
+        // The poll loop may be blocked in wait_for_change - wake it so it
+        // sees the cancellation now, and drop the speaker subscriptions.
+        scope.launch {
+            try {
+                val bridge = Python.getInstance().getModule("sonos_bridge")
+                bridge.callAttr("notify_change")
+                bridge.callAttr("stop_events")
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     fun triggerDiscovery() {
@@ -353,13 +377,21 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
-    fun refreshFavorites(fAlbums: Boolean, fPlaylists: Boolean, fRadio: Boolean) {
+    // speakerOverride/limitOverride: Settings' unsaved picks (see
+    // SettingsModal's onRefreshFavorites); null uses the saved settings.
+    fun refreshFavorites(
+        fAlbums: Boolean,
+        fPlaylists: Boolean,
+        fRadio: Boolean,
+        speakerOverride: String? = null,
+        limitOverride: Int? = null
+    ) {
         scope.launch {
             _favoritesRefreshStatus.value = "Starting Instant Scan..."
             _favoritesRefreshCount.value = null
             val py = Python.getInstance()
             val pyModule = py.getModule("sonos_bridge")
-            val speaker = settingsManager.sonosSpeaker.first()
+            val speaker = speakerOverride?.takeIf { it.isNotBlank() } ?: settingsManager.sonosSpeaker.first()
             
             if (speaker.isBlank()) {
                 _favoritesRefreshStatus.value = "Error: Select a speaker first"
@@ -373,7 +405,7 @@ class SonosDashboardManager private constructor(context: Context) {
             val filterString = if (filters.isEmpty()) "none" else filters.joinToString(",")
 
             try {
-                val limit = settingsManager.coverFlowLimit.first()
+                val limit = limitOverride ?: settingsManager.coverFlowLimit.first()
                 val pyFavs = withTimeoutOrNull(FAVORITES_FETCH_TIMEOUT_MS) {
                     pyModule.callAttr("get_sonos_favorites", speaker, filterString, limit).asList()
                 }
@@ -496,10 +528,11 @@ class SonosDashboardManager private constructor(context: Context) {
         val py = Python.getInstance()
         val pyModule = py.getModule("sonos_bridge")
 
-        var favoritePollCounter = 0
+        var lastFavoritesRefreshMs = System.currentTimeMillis()
+        var lastGroupsRefreshMs = 0L
         var lastKnownMode: String? = null
 
-        while (true) {
+        while (currentCoroutineContext().isActive) {
             try {
                 val speaker = settingsManager.sonosSpeaker.first()
                 if (speaker.isNotBlank()) {
@@ -519,10 +552,12 @@ class SonosDashboardManager private constructor(context: Context) {
                     }
                     lastKnownMode = currentMode
 
-                    if (favoritePollCounter >= 1800) {
-                        // Once an hour (1800 cycles * 2s) - needed regardless
-                        // of mode: History matches plays against it, and
-                        // Favorites' artist-learning below needs it too.
+                    val now = System.currentTimeMillis()
+                    if (now - lastFavoritesRefreshMs >= FAVORITES_REFRESH_INTERVAL_MS) {
+                        // Hourly - needed regardless of mode: History matches
+                        // plays against it, and Favorites' artist-learning
+                        // below needs it too. Timed, not counted in loops,
+                        // since the loop runs as often as events arrive.
                         refreshFavoriteAlbumsRef()
                         if (currentMode == "favorites") {
                             val fAlbums = settingsManager.filterAlbums.first()
@@ -530,13 +565,13 @@ class SonosDashboardManager private constructor(context: Context) {
                             val fRadio = settingsManager.filterRadio.first()
                             refreshFavorites(fAlbums, fPlaylists, fRadio)
                         }
-                        favoritePollCounter = 0
+                        lastFavoritesRefreshMs = now
                     }
-                    favoritePollCounter++
 
-                    if (favoritePollCounter % 5 == 0) {
+                    if (now - lastGroupsRefreshMs >= GROUPS_REFRESH_INTERVAL_MS) {
                         refreshSpeakerGroups()
                         refreshAudioSettings()
+                        lastGroupsRefreshMs = now
                     }
 
                     val pyDict = pyModule.callAttr("get_now_playing", speaker).asMap()
@@ -545,10 +580,11 @@ class SonosDashboardManager private constructor(context: Context) {
                         val tvDetected = pyDict[PyObject.fromJava("is_tv")]?.toBoolean() ?: false
                         val vol = pyDict[PyObject.fromJava("volume")]?.toString()?.toFloatOrNull() ?: 30f
                         val muted = pyDict[PyObject.fromJava("mute")]?.toBoolean() ?: false
+                        val grouped = pyDict[PyObject.fromJava("is_grouped")]?.toBoolean() ?: false
 
                         _isTvMode.value = tvDetected
                         _currentVolume.value = vol
-                        _trackState.update { it.copy(isMuted = muted) }
+                        _trackState.update { it.copy(isMuted = muted, isGrouped = grouped) }
 
                         val groupList = pyDict[PyObject.fromJava("group_members")]?.asList() ?: emptyList()
                         val memberVolumes = groupList.map { 
@@ -651,6 +687,7 @@ class SonosDashboardManager private constructor(context: Context) {
                                 durationSeconds = duration,
                                 shuffleAvailable = fromQueue,
                                 isShuffled = shuffled,
+                                repeatMode = pyDict[PyObject.fromJava("repeat")]?.toString() ?: "OFF",
                                 prevTrack = previous.title,
                                 prevArtist = previous.artist,
                                 prevAlbum = previous.album,
@@ -735,7 +772,38 @@ class SonosDashboardManager private constructor(context: Context) {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-            delay(if (_isIdleScreen.value) IDLE_POLL_INTERVAL_MS else ACTIVE_POLL_INTERVAL_MS)
+            waitForSonosChange(pyModule)
+        }
+    }
+
+    // True while speaker events are confirmed to be arriving - shown in the
+    // Metadata Debugger.
+    private val _instantUpdates = MutableStateFlow(false)
+    val instantUpdates: StateFlow<Boolean> = _instantUpdates.asStateFlow()
+
+    // Sleeps until the next refresh is due: straight away when the speaker
+    // reports a change (see ensure_events in sonos_bridge.py), otherwise
+    // after a fallback interval - long once events are known to be flowing,
+    // the old 2s/6s poll when they aren't (or in TV mode, whose title, art
+    // and position come from Home Assistant rather than speaker events).
+    private suspend fun waitForSonosChange(pyModule: PyObject) {
+        val speaker = settingsManager.sonosSpeaker.first()
+        val eventsActive = speaker.isNotBlank() && try {
+            pyModule.callAttr("ensure_events", speaker).toBoolean()
+        } catch (e: Exception) {
+            false
+        }
+        _instantUpdates.value = eventsActive
+        val idle = _isIdleScreen.value
+        val waitMs = if (eventsActive && !_isTvMode.value) {
+            if (idle) IDLE_EVENT_FALLBACK_MS else ACTIVE_EVENT_FALLBACK_MS
+        } else {
+            if (idle) IDLE_POLL_INTERVAL_MS else ACTIVE_POLL_INTERVAL_MS
+        }
+        try {
+            pyModule.callAttr("wait_for_change", waitMs / 1000.0)
+        } catch (e: Exception) {
+            delay(waitMs)
         }
     }
 
@@ -744,12 +812,33 @@ class SonosDashboardManager private constructor(context: Context) {
     private var cachedTemperatureUnit = "°C"
     private var cachedTemperatureUnitFor = ""
 
+    private val haEvents = HomeAssistantEvents()
+    val haInstantUpdates: Boolean get() = haEvents.isReceiving
+    // Woken by Home Assistant pushing a change to the light or climate entity.
+    private val haWake = Channel<Unit>(Channel.CONFLATED)
+
     private suspend fun pollHA() {
-        while (true) {
+        while (currentCoroutineContext().isActive) {
             val url = settingsManager.haUrl.first()
             val token = settingsManager.haToken.first()
             val light = settingsManager.selectedLight.first()
             val climate = settingsManager.selectedClimate.first()
+            val haMedia = settingsManager.selectedHaMediaPlayer.first()
+            haEvents.ensure(url, token, listOf(light, climate, haMedia)) { entityId ->
+                if (entityId == haMedia) {
+                    // TV mode's title/art/position come from this entity,
+                    // fetched by the Sonos loop - wake that one instead.
+                    if (_isTvMode.value) {
+                        try {
+                            Python.getInstance().getModule("sonos_bridge").callAttr("notify_change")
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                } else {
+                    haWake.trySend(Unit)
+                }
+            }
             if (url.isNotBlank() && token.isNotBlank()) {
                 val cacheKey = "$url|$token"
                 if (cachedTemperatureUnitFor != cacheKey) {
@@ -762,7 +851,15 @@ class SonosDashboardManager private constructor(context: Context) {
                     _haState.value = newState
                 }
             }
-            delay(if (_isIdleScreen.value) IDLE_HA_POLL_INTERVAL_MS else ACTIVE_HA_POLL_INTERVAL_MS)
+            // Pushed changes refresh right away; the timed refresh is only a
+            // fallback, so it can be much slower while the WebSocket is live.
+            val idle = _isIdleScreen.value
+            val waitMs = if (haEvents.isReceiving) {
+                if (idle) IDLE_EVENT_FALLBACK_MS * 2 else ACTIVE_EVENT_FALLBACK_MS * 3
+            } else {
+                if (idle) IDLE_HA_POLL_INTERVAL_MS else ACTIVE_HA_POLL_INTERVAL_MS
+            }
+            withTimeoutOrNull(waitMs) { haWake.receive() }
         }
     }
 
@@ -843,6 +940,42 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
+    // Off -> All -> One -> Off, like the Sonos app.
+    fun cycleRepeat() {
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            if (speaker.isBlank()) return@launch
+            val next = when (_trackState.value.repeatMode) {
+                "OFF" -> "ALL"
+                "ALL" -> "ONE"
+                else -> "OFF"
+            }
+            _trackState.update { it.copy(lastCommandSent = "Action: repeat $next") }
+            val ok = Python.getInstance().getModule("sonos_bridge")
+                .callAttr("set_repeat", next, speaker).toBoolean()
+            if (ok) _trackState.update { it.copy(repeatMode = next) }
+        }
+    }
+
+    // From tapping/dragging the progress bar. TV mode seeks the HA media
+    // player feeding the TV instead, like the other transport controls.
+    fun seekTo(positionSeconds: Int) {
+        scope.launch {
+            _trackState.update { it.copy(positionSeconds = positionSeconds, lastCommandSent = "Action: seek ${positionSeconds}s") }
+            if (_isTvMode.value) {
+                val haMedia = settingsManager.selectedHaMediaPlayer.first()
+                if (haMedia.isNotBlank()) {
+                    haManager.seekMediaPlayer(settingsManager.haUrl.first(), settingsManager.haToken.first(), haMedia, positionSeconds)
+                }
+            } else {
+                val speaker = settingsManager.sonosSpeaker.first()
+                if (speaker.isNotBlank()) {
+                    Python.getInstance().getModule("sonos_bridge").callAttr("seek", positionSeconds, speaker)
+                }
+            }
+        }
+    }
+
     fun setSpeakerVolume(speakerName: String, volume: Float) {
         scope.launch {
             val py = Python.getInstance()
@@ -860,7 +993,16 @@ class SonosDashboardManager private constructor(context: Context) {
         scope.launch {
             val speaker = settingsManager.sonosSpeaker.first()
             if (speaker.isNotBlank()) {
-                setSpeakerVolume(speaker, volume)
+                if (_trackState.value.isGrouped) {
+                    // Whole group - Sonos scales each room, keeping their
+                    // levels relative to each other. Rooms are re-read on
+                    // the next poll.
+                    val ok = Python.getInstance().getModule("sonos_bridge")
+                        .callAttr("set_group_volume", volume.toInt(), speaker).toBoolean()
+                    if (ok) _currentVolume.value = volume
+                } else {
+                    setSpeakerVolume(speaker, volume)
+                }
                 // A device's mute flag is independent of its volume level in
                 // Sonos/SoCo - changing volume alone doesn't clear it, so the
                 // speaker would stay silent even as the slider/label move.
@@ -1033,12 +1175,14 @@ class SonosDashboardManager private constructor(context: Context) {
 
     // Settings > General > Continue With a Random Album. Mid-queue track
     // changes stay PLAYING (maybe TRANSITIONING) - only running out of queue
-    // goes to STOPPED. So "the final track was in its last seconds, then
-    // STOPPED" means the album played to its end, as opposed to a pause
-    // (PAUSED_PLAYBACK) or a stop pressed mid-album. In shuffle the queue
-    // position isn't the play order, so any track can be the final one.
-    // Radio, TV etc. never play from the queue, so never arm this.
-    private var albumEndArmed = false
+    // goes to STOPPED. So "STOPPED right when the final track was due to
+    // end" means the album played to its end, as opposed to a pause
+    // (PAUSED_PLAYBACK) or a stop pressed mid-album. The end time is
+    // predicted from the last PLAYING refresh, since with speaker events
+    // those can be many seconds apart. In shuffle the queue position isn't
+    // the play order, so any track can be the final one. Radio, TV etc.
+    // never play from the queue, so never arm this.
+    private var finalTrackEndsAtMs: Long? = null
 
     private fun maybeContinueWithRandomAlbum(
         state: String,
@@ -1049,12 +1193,16 @@ class SonosDashboardManager private constructor(context: Context) {
         durationSeconds: Int,
         enabled: Boolean
     ) {
+        val now = System.currentTimeMillis()
         when (state) {
-            "PLAYING" -> albumEndArmed = fromQueue && (onLastTrack || shuffled) &&
-                durationSeconds > 0 && durationSeconds - positionSeconds <= ALBUM_END_WINDOW_SECONDS
+            "PLAYING" -> finalTrackEndsAtMs =
+                if (fromQueue && (onLastTrack || shuffled) && durationSeconds > 0) {
+                    now + (durationSeconds - positionSeconds) * 1000L
+                } else null
             "TRANSITIONING" -> Unit
             "STOPPED" -> {
-                if (albumEndArmed && enabled) {
+                val endsAt = finalTrackEndsAtMs
+                if (enabled && endsAt != null && now >= endsAt - ALBUM_END_WINDOW_SECONDS * 1000L) {
                     val current = _trackState.value.album
                     val candidates = _favoriteAlbumsRef.value.filter {
                         it.playUri.isNotBlank() && !it.albumTitle.equals(current, ignoreCase = true)
@@ -1065,9 +1213,9 @@ class SonosDashboardManager private constructor(context: Context) {
                         playAlbum(if (artist != null) album.copy(artist = artist) else album)
                     }
                 }
-                albumEndArmed = false
+                finalTrackEndsAtMs = null
             }
-            else -> albumEndArmed = false
+            else -> finalTrackEndsAtMs = null
         }
     }
 
@@ -1084,10 +1232,13 @@ class SonosDashboardManager private constructor(context: Context) {
     // restoring volume, so the actual volume level is left untouched and
     // stays correct even if the speaker gets muted/unmuted from elsewhere
     // (Sonos app, Alexa, a physical button).
+    // Mutes the whole group when rooms are grouped (matching the group
+    // volume slider), otherwise just this speaker.
     private fun setMute(speakerName: String, muted: Boolean) {
         scope.launch {
             val py = Python.getInstance()
-            val ok = py.getModule("sonos_bridge").callAttr("set_mute", muted, speakerName).toBoolean()
+            val function = if (_trackState.value.isGrouped) "set_group_mute" else "set_mute"
+            val ok = py.getModule("sonos_bridge").callAttr(function, muted, speakerName).toBoolean()
             if (ok) {
                 _trackState.update { it.copy(isMuted = muted) }
             }

@@ -318,6 +318,8 @@ class MainActivity : ComponentActivity() {
                                 onSpeakerVolumeChange = { name, vol -> manager.setSpeakerVolume(name, vol) },
                                 onToggleMute = { manager.toggleMute() },
                                 onToggleShuffle = { manager.toggleShuffle() },
+                                onCycleRepeat = { manager.cycleRepeat() },
+                                onSeek = { manager.seekTo(it) },
                                 onBrightnessChange = { manager.setLightBrightness(it) },
                                 onEnterAmbient = { slide ->
                                     screenSlide = slide
@@ -409,7 +411,7 @@ class MainActivity : ComponentActivity() {
                     refreshStatus = refreshStatus,
                     refreshCount = refreshCount,
                     albumHistoryCount = albumHistory.size,
-                    onRefreshFavorites = { a, p, r -> manager.refreshFavorites(a, p, r) },
+                    onRefreshFavorites = { speaker, limit, a, p, r -> manager.refreshFavorites(a, p, r, speaker, limit) },
                     onClearHistory = { manager.clearAlbumHistory() },
                     onSettingsSaved = { manager.refreshAfterSettingsSave() },
                     onDismiss = { showSettings = false },

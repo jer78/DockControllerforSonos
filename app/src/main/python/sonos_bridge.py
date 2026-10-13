@@ -301,13 +301,25 @@ def get_now_playing(speaker_name=None):
         # not TV) can still trigger once the TV source goes quiet.
         is_tv = state in ('PLAYING', 'TRANSITIONING') and master.music_source_from_uri(info.get('uri', '')) == 'TV'
         from_queue, on_last_track = (False, False) if is_tv else _plays_from_queue(master, info)
-        shuffle = False
+        shuffle, repeat = False, "OFF"
         if from_queue:
             try:
                 # NORMAL, REPEAT_ALL, REPEAT_ONE, SHUFFLE, SHUFFLE_NOREPEAT,
                 # SHUFFLE_REPEAT_ONE - read every poll since it can be
                 # changed from the Sonos app at any time.
-                shuffle = 'SHUFFLE' in master.play_mode
+                play_mode = master.play_mode
+                shuffle = 'SHUFFLE' in play_mode
+                repeat = "ONE" if play_mode.endswith('REPEAT_ONE') else                     "ALL" if play_mode in ('REPEAT_ALL', 'SHUFFLE') else "OFF"
+            except Exception:
+                pass
+        # Grouped rooms: the main slider and mute act on the whole group
+        # (Sonos keeps each room's level relative to the others), like the
+        # Sonos app's group volume. Single room: just this speaker.
+        is_grouped = len(group_members) > 1
+        volume, mute = device.volume, bool(device.mute)
+        if is_grouped:
+            try:
+                volume, mute = master.group.volume, bool(master.group.mute)
             except Exception:
                 pass
         adjacent = {"prev": None, "next": None} if is_tv else _adjacent_tracks(master, info, from_queue, shuffle)
@@ -319,13 +331,16 @@ def get_now_playing(speaker_name=None):
             "album": info.get('album', 'Station'),
             "album_art": current_art,
             "state": state,
-            "volume": device.volume,
-            "mute": bool(device.mute),
+            "volume": volume,
+            "mute": mute,
+            "is_grouped": is_grouped,
             "group_members": group_members,
             "is_tv": is_tv,
             # Only the queue can be shuffled - radio etc. hide the button.
             "shuffle_available": from_queue,
             "shuffle": shuffle,
+            # "OFF" / "ALL" / "ONE" (only meaningful with shuffle_available).
+            "repeat": repeat,
             # Last track of the queue - lets the app spot an album ending
             # (see SonosDashboardManager.maybeContinueWithRandomAlbum).
             "on_last_track": on_last_track,
@@ -532,6 +547,40 @@ def set_shuffle(enabled, speaker_name=None):
         return True
     except: return False
 
+def set_repeat(mode, speaker_name=None):
+    """mode: "OFF", "ALL" or "ONE". SoCo's repeat setter keeps shuffle."""
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        device.group.coordinator.repeat = {"ALL": True, "ONE": "ONE"}.get(mode, False)
+        return True
+    except: return False
+
+def seek(position_seconds, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        t = max(0, int(position_seconds))
+        device.group.coordinator.seek(f"{t // 3600}:{t // 60 % 60:02d}:{t % 60:02d}")
+        return True
+    except: return False
+
+def set_group_volume(vol, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        device.group.volume = int(vol)
+        return True
+    except: return False
+
+def set_group_mute(muted, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        device.group.mute = bool(muted)
+        return True
+    except: return False
+
 def set_volume(vol, speaker_name=None):
     try:
         device = by_name(speaker_name) if speaker_name else None
@@ -690,6 +739,98 @@ def toggle_speaker_join(master_name, other_name, join=True):
         else: other.unjoin()
         return True
     except: return False
+
+# ---------------------------------------------------------------------------
+# Instant updates. Instead of only polling every couple of seconds, subscribe
+# to the speakers' UPnP events: Sonos pushes a NOTIFY to SoCo's small event
+# server (port 1400 on this device) whenever playback, volume/mute, the group
+# volume or the grouping changes. Each event just wakes the app's poll loop
+# (wait_for_change), which then re-reads everything through get_now_playing -
+# so events only decide WHEN to refresh, never what's shown, and polling
+# carries on (more slowly) as a fallback if events stop arriving.
+# ---------------------------------------------------------------------------
+import threading
+import time
+
+_change = threading.Event()
+_subs = []
+_subs_key = None
+_subscribed_at = 0.0
+_last_event_at = 0.0
+
+def _on_event(event):
+    global _last_event_at
+    _last_event_at = time.time()
+    _change.set()
+
+def _unsubscribe_all():
+    global _subs, _subs_key
+    for sub in _subs:
+        try:
+            sub.unsubscribe()
+        except Exception:
+            pass
+    _subs, _subs_key = [], None
+
+def ensure_events(speaker_name=None):
+    """
+    Keeps subscriptions for the selected speaker and its group coordinator,
+    re-subscribing when the speaker or coordinator changes (rooms grouped or
+    ungrouped) or a subscription lapsed. Returns True when events are
+    actually arriving - a successful subscribe alone doesn't prove the
+    speaker can reach this device, but Sonos sends an initial event straight
+    after subscribing, so having received one since does.
+    """
+    global _subs, _subs_key, _subscribed_at
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device:
+            _unsubscribe_all()
+            return False
+        master = device.group.coordinator
+        key = (device.uid, master.uid)
+        if key != _subs_key or not all(sub.is_subscribed for sub in _subs):
+            _unsubscribe_all()
+            # Group volume is subscribed even for a single room, so a room
+            # joining later is already covered without a re-subscribe.
+            services = [master.avTransport, master.groupRenderingControl,
+                        device.renderingControl, device.zoneGroupTopology]
+            for service in services:
+                sub = service.subscribe(auto_renew=True)
+                sub.callback = _on_event
+                _subs.append(sub)
+            _subs_key = key
+            _subscribed_at = time.time()
+        return _last_event_at >= _subscribed_at
+    except Exception:
+        _unsubscribe_all()
+        return False
+
+def wait_for_change(timeout_seconds):
+    """
+    Blocks until a speaker event arrives (or notify_change is called), or
+    timeout_seconds pass. Returns True if woken by a change. Events tend to
+    come in bursts (track change + volume + group volume), so it lingers a
+    moment to coalesce them into one refresh.
+    """
+    woke = _change.wait(timeout_seconds)
+    if woke:
+        time.sleep(0.15)
+    _change.clear()
+    return woke
+
+def notify_change():
+    """Wakes wait_for_change early - e.g. Home Assistant's TV media player
+    changed, or the app is shutting the poll loop down."""
+    _change.set()
+
+def stop_events():
+    _unsubscribe_all()
+    try:
+        from soco.events import event_listener
+        event_listener.stop()
+    except Exception:
+        pass
 
 def discover_speakers():
     try:

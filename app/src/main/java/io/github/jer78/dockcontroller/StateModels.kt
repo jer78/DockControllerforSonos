@@ -35,7 +35,12 @@ data class TrackState(
     // Only the Sonos queue can be shuffled (not radio, TV, line-in, ...) -
     // the shuffle button hides when this is false.
     val shuffleAvailable: Boolean = false,
-    val isShuffled: Boolean = false
+    val isShuffled: Boolean = false,
+    // "OFF" / "ALL" / "ONE" - shown alongside shuffle, same availability.
+    val repeatMode: String = "OFF",
+    // More than one room playing together: isMuted and the main volume
+    // slider are the whole group's, not just the selected speaker's.
+    val isGrouped: Boolean = false
 )
 
 // A failed command (album play, favorite delete, ...), kept in
