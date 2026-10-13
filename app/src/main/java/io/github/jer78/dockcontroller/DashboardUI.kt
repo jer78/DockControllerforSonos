@@ -101,9 +101,24 @@ import kotlin.math.roundToInt
 // for a screensaver drops down (new screen enters from above, old one falls
 // away below); coming back to Now Playing reverses that (old screensaver
 // rises away above, Now Playing rises into place from below).
-val dockScreenTransitionSpec: AnimatedContentTransitionScope<DockScreen>.() -> ContentTransform = {
+//
+// Exception: Cover Flow reached by a sideways swipe on Now Playing slides in
+// from the side the finger came from (and back out the same way) - `slide`
+// is how the last Now Playing -> Cover Flow switch was triggered.
+fun dockScreenTransitionSpec(slide: ScreenSlide): AnimatedContentTransitionScope<DockScreen>.() -> ContentTransform = {
     val spec = tween<IntOffset>(550, easing = FastOutSlowInEasing)
-    if (targetState == DockScreen.NOW_PLAYING) {
+    val nowPlayingAndCoverFlow = setOf(initialState, targetState) == setOf(DockScreen.NOW_PLAYING, DockScreen.COVER_FLOW)
+    if (nowPlayingAndCoverFlow && slide != ScreenSlide.VERTICAL) {
+        // Which side Cover Flow sits off-screen: -1 left, +1 right.
+        val coverFlowSide = if (slide == ScreenSlide.FROM_LEFT) -1 else 1
+        if (targetState == DockScreen.COVER_FLOW) {
+            slideInHorizontally(animationSpec = spec) { fullWidth -> coverFlowSide * fullWidth } togetherWith
+                slideOutHorizontally(animationSpec = spec) { fullWidth -> -coverFlowSide * fullWidth }
+        } else {
+            slideInHorizontally(animationSpec = spec) { fullWidth -> -coverFlowSide * fullWidth } togetherWith
+                slideOutHorizontally(animationSpec = spec) { fullWidth -> coverFlowSide * fullWidth }
+        }
+    } else if (targetState == DockScreen.NOW_PLAYING) {
         slideInVertically(animationSpec = spec) { fullHeight -> fullHeight } togetherWith
             slideOutVertically(animationSpec = spec) { fullHeight -> -fullHeight }
     } else {
@@ -329,7 +344,7 @@ fun LargeVolumeSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
     isMuted: Boolean = false,
-    fillColor: Color = Color.White,
+    fillColor: Color = Color.White.copy(alpha = 0.6f),
     height: Dp = 80.dp,
     fontSize: TextUnit = 24.sp,
     modifier: Modifier = Modifier
@@ -369,7 +384,8 @@ fun LargeVolumeSlider(
     } else 1f
     val effectiveFillColor = if (isMuted) SonosMuteGreen.copy(alpha = muteFlashAlpha) else fillColor
     val labelColorOnFill = if (isMuted) Color.White else Color.Black
-    val labelColorOnTrack = if (isMuted) SonosMuteGreen.copy(alpha = muteFlashAlpha) else fillColor
+    // Fill may be semi-transparent (the default) - keep the label solid.
+    val labelColorOnTrack = if (isMuted) SonosMuteGreen.copy(alpha = muteFlashAlpha) else fillColor.copy(alpha = 1f)
 
     Box(
         modifier = modifier
@@ -840,8 +856,9 @@ fun DockDashboardUI(
     onVolumeChange: (Float) -> Unit,
     onSpeakerVolumeChange: (String, Float) -> Unit,
     onToggleMute: () -> Unit,
+    onToggleShuffle: () -> Unit = {},
     onBrightnessChange: (Int) -> Unit,
-    onEnterAmbient: () -> Unit,
+    onEnterAmbient: (ScreenSlide) -> Unit,
     albumHistory: List<AlbumHistoryItem>,
     onOpenSettings: () -> Unit,
     speakerGroups: List<SonosSpeakerGroup>,
@@ -856,6 +873,7 @@ fun DockDashboardUI(
     onSetLightColorTemp: (Int) -> Unit = {},
     showSpectrumAnalyzer: Boolean = false,
     micPermissionGranted: Boolean = false,
+    onRequestMicPermission: () -> Unit = {},
     spectrumColorScheme: SpectrumColorScheme = SpectrumColorScheme.RAINBOW,
     spectrumHeightPercent: Float = 1f,
     spectrumConfineToAlbumArt: Boolean = false,
@@ -929,8 +947,10 @@ fun DockDashboardUI(
                     },
                     onDragEnd = {
                         val isSideways = abs(totalX) > abs(totalY)
-                        if ((isSideways && abs(totalX) > thresholdPx) || (!isSideways && totalY > thresholdPx)) {
-                            onEnterAmbient()
+                        if (isSideways && abs(totalX) > thresholdPx) {
+                            onEnterAmbient(if (totalX > 0) ScreenSlide.FROM_LEFT else ScreenSlide.FROM_RIGHT)
+                        } else if (!isSideways && totalY > thresholdPx) {
+                            onEnterAmbient(ScreenSlide.VERTICAL)
                         }
                     }
                 )
@@ -1036,10 +1056,20 @@ fun DockDashboardUI(
                 .padding(24.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // Visualizer is switched on but has no mic to listen with - offer
+            // the fix right here rather than silently showing nothing.
+            if (showSpectrumAnalyzer && !micPermissionGranted) {
+                LabeledIconButton(
+                    icon = Icons.Default.MicOff,
+                    label = "Turn On Mic for Visualizer",
+                    onClick = onRequestMicPermission
+                )
+            }
+
             LabeledIconButton(
                 icon = Icons.Default.BurstMode,
                 label = "Cover Flow",
-                onClick = onEnterAmbient
+                onClick = { onEnterAmbient(ScreenSlide.VERTICAL) }
             )
 
             LabeledIconButton(
@@ -1306,6 +1336,26 @@ fun DockDashboardUI(
                             .background(Color.White.copy(alpha = 0.2f), CircleShape)
                     ) {
                         Icon(Icons.Default.SkipNext, "Next", tint = Color.White)
+                    }
+
+                    // Only the Sonos queue can be shuffled, so no button for
+                    // radio, line-in, TV etc. Filled white while on.
+                    if (!isTvMode && trackState.shuffleAvailable) {
+                        IconButton(
+                            onClick = onToggleShuffle,
+                            modifier = Modifier
+                                .size(56.dp)
+                                .background(
+                                    if (trackState.isShuffled) Color.White else Color.White.copy(alpha = 0.2f),
+                                    CircleShape
+                                )
+                        ) {
+                            Icon(
+                                Icons.Default.Shuffle,
+                                if (trackState.isShuffled) "Shuffle on" else "Shuffle off",
+                                tint = if (trackState.isShuffled) Color.Black else Color.White
+                            )
+                        }
                     }
                 }
 
@@ -2586,6 +2636,7 @@ fun SettingsModal(
     var nowPlayingHidePrevious by remember { mutableStateOf(false) }
     var nowPlayingClockMode by remember { mutableStateOf(NowPlayingClockMode.OFF) }
     var autoUnmuteAfterAds by remember { mutableStateOf(false) }
+    var continueWithRandomAlbum by remember { mutableStateOf(false) }
     var nowPlayingHideNextUp by remember { mutableStateOf(false) }
     var tvFallbackImage by remember { mutableStateOf("") }
     var showSpectrumAnalyzer by remember { mutableStateOf(false) }
@@ -2652,6 +2703,7 @@ fun SettingsModal(
         nowPlayingHideNextUp = settingsManager.nowPlayingHideNextUp.first()
         nowPlayingClockMode = settingsManager.nowPlayingClockMode.first()
         autoUnmuteAfterAds = settingsManager.autoUnmuteAfterAds.first()
+        continueWithRandomAlbum = settingsManager.continueWithRandomAlbum.first()
         tvFallbackImage = settingsManager.tvFallbackImage.first()
         fAlbums = settingsManager.filterAlbums.first()
         fPlaylists = settingsManager.filterPlaylists.first()
@@ -2794,6 +2846,18 @@ fun SettingsModal(
                                         steps = (SettingsManager.TV_SCREENSAVER_DELAY_MAX_SECONDS -
                                             SettingsManager.TV_SCREENSAVER_DELAY_MIN_SECONDS) / 30 - 1
                                     )
+                                    HorizontalDivider()
+
+                                    Text("When an Album Ends:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "Starts another random album from your Sonos Favorites. Doesn't apply to radio.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    SettingsToggleRow("Continue With a Random Album", continueWithRandomAlbum) {
+                                        continueWithRandomAlbum = it
+                                        scope.launch { settingsManager.setContinueWithRandomAlbum(it) }
+                                    }
                                 }
                             }
                         }

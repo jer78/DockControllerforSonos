@@ -164,6 +164,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
 
                     // Shared Transition Logic
                     var transitioningAlbum by remember { mutableStateOf<AlbumHistoryItem?>(null) }
+                    // How Now Playing was last left for Cover Flow (see dockScreenTransitionSpec).
+                    var screenSlide by remember { mutableStateOf(ScreenSlide.VERTICAL) }
                     var transitionSourceRect by remember { mutableStateOf(Rect.Zero) }
                     var nowPlayingArtRect by remember { mutableStateOf<Rect?>(null) }
 
@@ -238,9 +240,14 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                             isAmbientMode -> DockScreen.COVER_FLOW
                             else -> DockScreen.NOW_PLAYING
                         }
+                        // The swipe direction only shapes the trip to Cover Flow and back -
+                        // once Now Playing is reached again, later switches are vertical.
+                        LaunchedEffect(currentScreen) {
+                            if (currentScreen == DockScreen.NOW_PLAYING) screenSlide = ScreenSlide.VERTICAL
+                        }
                         AnimatedContent(
                             targetState = currentScreen,
-                            transitionSpec = dockScreenTransitionSpec,
+                            transitionSpec = dockScreenTransitionSpec(screenSlide),
                             modifier = Modifier.fillMaxSize(),
                             label = "screenTransition"
                         ) { screen ->
@@ -285,8 +292,9 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onVolumeChange = { vol -> manager.setSonosVolume(vol) },
                                         onSpeakerVolumeChange = { name, vol -> manager.setSpeakerVolume(name, vol) },
                                         onToggleMute = { manager.toggleMute() },
+                                        onToggleShuffle = { manager.toggleShuffle() },
                                         onBrightnessChange = { manager.setLightBrightness(it) },
-                                        onEnterAmbient = { isAmbientMode = true; transitioningAlbum = null },
+                                        onEnterAmbient = { slide -> screenSlide = slide; isAmbientMode = true; transitioningAlbum = null },
                                         albumHistory = albumHistory,
                                         onOpenSettings = {
                                             manager.triggerDiscovery()
@@ -304,6 +312,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onSetLightColorTemp = { manager.setLightColorTempKelvin(it) },
                                         showSpectrumAnalyzer = showSpectrumAnalyzer,
                                         micPermissionGranted = micPermissionGranted,
+                                        onRequestMicPermission = { requestMicPermissionViaApp() },
                                         spectrumColorScheme = spectrumColorScheme,
                                         spectrumHeightPercent = spectrumHeightPercent,
                                         spectrumConfineToAlbumArt = spectrumConfineToAlbumArt,
@@ -371,15 +380,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                             onSettingsSaved = { manager.refreshAfterSettingsSave() },
                             onDismiss = { showSettings = false },
                             micPermissionGranted = micPermissionGranted,
-                            // A dream can't show the runtime permission prompt, so
-                            // hand off to the app, which can.
-                            onRequestMicPermission = {
-                                startActivity(
-                                    Intent(this@SonosDreamService, MainActivity::class.java)
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                )
-                                finish()
-                            }
+                            onRequestMicPermission = { requestMicPermissionViaApp() }
                         )
                     }
 
@@ -401,6 +402,19 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                 systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         }
+    }
+
+    // A dream can't show the runtime permission prompt, so hand off to the
+    // app, which asks straight away (see MainActivity.EXTRA_REQUEST_MIC).
+    // CLEAR_TOP + SINGLE_TOP so an already-running app gets the request via
+    // onNewIntent instead of just being brought forward without it.
+    private fun requestMicPermissionViaApp() {
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(MainActivity.EXTRA_REQUEST_MIC, true)
+        )
+        finish()
     }
 
     override fun onDetachedFromWindow() {

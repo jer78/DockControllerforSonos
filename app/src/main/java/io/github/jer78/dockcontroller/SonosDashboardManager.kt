@@ -104,6 +104,10 @@ class SonosDashboardManager private constructor(context: Context) {
         // coming back from a commercial - well clear of poll/clock jitter,
         // well under the minutes a show and an ad typically differ by.
         private const val AD_END_REMAINING_JUMP_SECONDS = 10
+        // How close to the end of the final queue track the last PLAYING
+        // poll must be for a following STOPPED to count as the album ending
+        // - a few 2s polls of slack, plus Sonos reporting whole seconds.
+        private const val ALBUM_END_WINDOW_SECONDS = 10
         @Volatile
         private var instance: SonosDashboardManager? = null
 
@@ -576,7 +580,8 @@ class SonosDashboardManager private constructor(context: Context) {
                                         nextTrack = "None",
                                         groupMembers = memberVolumes,
                                         positionSeconds = haTrack.positionSeconds,
-                                        durationSeconds = haTrack.durationSeconds
+                                        durationSeconds = haTrack.durationSeconds,
+                                        shuffleAvailable = false
                                     )}
                                 }
                             } else {
@@ -587,7 +592,8 @@ class SonosDashboardManager private constructor(context: Context) {
                                     isPlaying = true,
                                     groupMembers = memberVolumes,
                                     positionSeconds = 0,
-                                    durationSeconds = 0
+                                    durationSeconds = 0,
+                                    shuffleAvailable = false
                                 )}
                             }
                         } else {
@@ -599,6 +605,13 @@ class SonosDashboardManager private constructor(context: Context) {
                             val state = pyDict[PyObject.fromJava("state")]?.toString() ?: "STOPPED"
                             val position = parseSonosTime(pyDict[PyObject.fromJava("position")]?.toString())
                             val duration = parseSonosTime(pyDict[PyObject.fromJava("duration")]?.toString())
+                            val fromQueue = pyDict[PyObject.fromJava("shuffle_available")]?.toBoolean() ?: false
+                            val shuffled = pyDict[PyObject.fromJava("shuffle")]?.toBoolean() ?: false
+                            val onLastTrack = pyDict[PyObject.fromJava("on_last_track")]?.toBoolean() ?: false
+                            maybeContinueWithRandomAlbum(
+                                state, fromQueue, shuffled, onLastTrack, position, duration,
+                                settingsManager.continueWithRandomAlbum.first()
+                            )
                             // "None" is TrackState's existing "nothing to show"
                             // marker for these, which the UI checks for.
                             fun pyString(key: String) = pyDict[PyObject.fromJava(key)]?.toString() ?: ""
@@ -636,6 +649,8 @@ class SonosDashboardManager private constructor(context: Context) {
                                 groupMembers = memberVolumes,
                                 positionSeconds = position,
                                 durationSeconds = duration,
+                                shuffleAvailable = fromQueue,
+                                isShuffled = shuffled,
                                 prevTrack = previous.title,
                                 prevArtist = previous.artist,
                                 prevAlbum = previous.album,
@@ -811,6 +826,20 @@ class SonosDashboardManager private constructor(context: Context) {
                     py.getModule("sonos_bridge").callAttr("control_playback", action, speaker)
                 }
             }
+        }
+    }
+
+    fun toggleShuffle() {
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            if (speaker.isBlank()) return@launch
+            val shuffled = !_trackState.value.isShuffled
+            _trackState.update { it.copy(lastCommandSent = "Action: shuffle ${if (shuffled) "on" else "off"}") }
+            val ok = Python.getInstance().getModule("sonos_bridge")
+                .callAttr("set_shuffle", shuffled, speaker).toBoolean()
+            // Reflect it right away rather than waiting up to 2s for the
+            // next poll to report it.
+            if (ok) _trackState.update { it.copy(isShuffled = shuffled) }
         }
     }
 
@@ -999,6 +1028,46 @@ class SonosDashboardManager private constructor(context: Context) {
         if (enabled && muted && previous != null && remaining - previous > AD_END_REMAINING_JUMP_SECONDS) {
             Log.i("SonosDashboard", "Auto-unmute: time remaining jumped ${previous}s -> ${remaining}s")
             setMute(speaker, false)
+        }
+    }
+
+    // Settings > General > Continue With a Random Album. Mid-queue track
+    // changes stay PLAYING (maybe TRANSITIONING) - only running out of queue
+    // goes to STOPPED. So "the final track was in its last seconds, then
+    // STOPPED" means the album played to its end, as opposed to a pause
+    // (PAUSED_PLAYBACK) or a stop pressed mid-album. In shuffle the queue
+    // position isn't the play order, so any track can be the final one.
+    // Radio, TV etc. never play from the queue, so never arm this.
+    private var albumEndArmed = false
+
+    private fun maybeContinueWithRandomAlbum(
+        state: String,
+        fromQueue: Boolean,
+        shuffled: Boolean,
+        onLastTrack: Boolean,
+        positionSeconds: Int,
+        durationSeconds: Int,
+        enabled: Boolean
+    ) {
+        when (state) {
+            "PLAYING" -> albumEndArmed = fromQueue && (onLastTrack || shuffled) &&
+                durationSeconds > 0 && durationSeconds - positionSeconds <= ALBUM_END_WINDOW_SECONDS
+            "TRANSITIONING" -> Unit
+            "STOPPED" -> {
+                if (albumEndArmed && enabled) {
+                    val current = _trackState.value.album
+                    val candidates = _favoriteAlbumsRef.value.filter {
+                        it.playUri.isNotBlank() && !it.albumTitle.equals(current, ignoreCase = true)
+                    }
+                    candidates.randomOrNull()?.let { album ->
+                        Log.i("SonosDashboard", "Album finished - continuing with '${album.albumTitle}'")
+                        val artist = _favoriteArtistCache.value[normalizeAlbumTitle(album.albumTitle)]
+                        playAlbum(if (artist != null) album.copy(artist = artist) else album)
+                    }
+                }
+                albumEndArmed = false
+            }
+            else -> albumEndArmed = false
         }
     }
 

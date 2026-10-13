@@ -193,21 +193,49 @@ def delete_sonos_favorite(item_id, expected_title="", speaker_name=None):
     except Exception as e:
         return f"FAIL: {str(e)}"
 
-# Per-coordinator cache of the previous/next queue tracks, so the queue is
-# only re-read when the current track actually changes rather than on every
-# 2s poll. Keyed by queue position + track URI + title.
+# Per-coordinator caches of the previous/next queue tracks and of whether the
+# queue is the source, so these are only re-read when the current track
+# actually changes rather than on every 2s poll. Keyed by queue position +
+# track URI + title (+ shuffle state for the adjacent tracks).
 _ADJACENT_CACHE = {}
+_FROM_QUEUE_CACHE = {}
 
-def _adjacent_tracks(master, info):
+def _track_key(info):
+    return (info.get('playlist_position', ''), info.get('uri', ''), info.get('title', ''))
+
+def _plays_from_queue(master, info):
+    """
+    (from_queue, on_last_track): whether the Sonos queue is what's playing,
+    and if so whether the current track is the queue's last one. Radio, TV,
+    line-in, Spotify Connect and AirPlay don't play from the queue (which
+    may still hold an old, unrelated queue) - and the queue is the only
+    thing Sonos can shuffle or show previous/next tracks for.
+    """
+    key = _track_key(info)
+    cached = _FROM_QUEUE_CACHE.get(master.uid)
+    if cached and cached[0] == key:
+        return cached[1]
+    from_queue, on_last_track = False, False
+    try:
+        from_queue = master.get_current_media_info().get('uri', '').startswith('x-rincon-queue:')
+        if from_queue:
+            pos = int(info.get('playlist_position') or 0)
+            on_last_track = pos > 0 and pos == master.queue_size
+    except Exception:
+        pass
+    result = (from_queue, on_last_track)
+    _FROM_QUEUE_CACHE[master.uid] = (key, result)
+    return result
+
+def _adjacent_tracks(master, info, from_queue, shuffle):
     """
     The tracks either side of the current one in the Sonos queue, as
     {"prev": {...} or None, "next": {...} or None}. Only meaningful while
-    the queue itself is playing - radio, TV, line-in, Spotify Connect and
-    AirPlay don't play from the queue (which may still hold an old, unrelated
-    queue), and in shuffle the queue order isn't the play order - so both
-    are None in those cases rather than showing the wrong tracks.
+    the queue itself is playing (see _plays_from_queue), and in shuffle the
+    queue order isn't the play order - so both are None in those cases
+    rather than showing the wrong tracks.
     """
-    key = (info.get('playlist_position', ''), info.get('uri', ''), info.get('title', ''))
+    key = _track_key(info) + (from_queue, shuffle)
     cached = _ADJACENT_CACHE.get(master.uid)
     if cached and cached[0] == key:
         return cached[1]
@@ -215,8 +243,7 @@ def _adjacent_tracks(master, info):
     result = {"prev": None, "next": None}
     try:
         pos = int(info.get('playlist_position') or 0)
-        media_uri = master.get_current_media_info().get('uri', '')
-        if pos > 0 and media_uri.startswith('x-rincon-queue:') and 'SHUFFLE' not in master.play_mode:
+        if pos > 0 and from_queue and not shuffle:
             start = max(pos - 2, 0)
             items = list(master.get_queue(start=start, max_items=3, full_album_art_uri=True))
             current = pos - 1 - start
@@ -273,7 +300,17 @@ def get_now_playing(speaker_name=None):
         # it as TV while actually playing, so idle detection (not playing,
         # not TV) can still trigger once the TV source goes quiet.
         is_tv = state in ('PLAYING', 'TRANSITIONING') and master.music_source_from_uri(info.get('uri', '')) == 'TV'
-        adjacent = {"prev": None, "next": None} if is_tv else _adjacent_tracks(master, info)
+        from_queue, on_last_track = (False, False) if is_tv else _plays_from_queue(master, info)
+        shuffle = False
+        if from_queue:
+            try:
+                # NORMAL, REPEAT_ALL, REPEAT_ONE, SHUFFLE, SHUFFLE_NOREPEAT,
+                # SHUFFLE_REPEAT_ONE - read every poll since it can be
+                # changed from the Sonos app at any time.
+                shuffle = 'SHUFFLE' in master.play_mode
+            except Exception:
+                pass
+        adjacent = {"prev": None, "next": None} if is_tv else _adjacent_tracks(master, info, from_queue, shuffle)
         prev_track = adjacent["prev"] or {}
         next_track = adjacent["next"] or {}
         return {
@@ -286,6 +323,12 @@ def get_now_playing(speaker_name=None):
             "mute": bool(device.mute),
             "group_members": group_members,
             "is_tv": is_tv,
+            # Only the queue can be shuffled - radio etc. hide the button.
+            "shuffle_available": from_queue,
+            "shuffle": shuffle,
+            # Last track of the queue - lets the app spot an album ending
+            # (see SonosDashboardManager.maybeContinueWithRandomAlbum).
+            "on_last_track": on_last_track,
             # "H:MM:SS" - live streams/radio report "NOT_IMPLEMENTED" or
             # "0:00:00" for one or both, so these are left as raw strings
             # for the Kotlin side to parse defensively rather than assumed
@@ -477,6 +520,15 @@ def control_playback(action, speaker_name=None):
         elif action == "pause": master.pause()
         elif action == "next": master.next()
         elif action == "previous": master.previous()
+        return True
+    except: return False
+
+def set_shuffle(enabled, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        # SoCo's shuffle setter keeps the current repeat mode.
+        device.group.coordinator.shuffle = bool(enabled)
         return True
     except: return False
 

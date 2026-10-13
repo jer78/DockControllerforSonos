@@ -5,6 +5,11 @@ package io.github.jer78.dockcontroller
 // unordered `when` (see DashboardUI.kt's SonosScreenTransitionSpec).
 enum class DockScreen { NOW_PLAYING, COVER_FLOW, TV_AMBIENT }
 
+// How Now Playing was left for Cover Flow, so the transition can follow the
+// gesture: a swipe right brings Cover Flow in FROM_LEFT, a swipe left
+// FROM_RIGHT; everything else (swipe down, the button, timers) is VERTICAL.
+enum class ScreenSlide { VERTICAL, FROM_LEFT, FROM_RIGHT }
+
 data class TrackState(
     val title: String = "Not Playing",
     val artist: String = "Connect Sonos",
@@ -26,7 +31,11 @@ data class TrackState(
     // parseSonosTime in SonosDashboardManager.kt) - 0/0 for radio/live
     // streams and anything SoCo can't report a real position for.
     val positionSeconds: Int = 0,
-    val durationSeconds: Int = 0
+    val durationSeconds: Int = 0,
+    // Only the Sonos queue can be shuffled (not radio, TV, line-in, ...) -
+    // the shuffle button hides when this is false.
+    val shuffleAvailable: Boolean = false,
+    val isShuffled: Boolean = false
 )
 
 // A failed command (album play, favorite delete, ...), kept in

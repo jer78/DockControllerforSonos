@@ -1,8 +1,11 @@
 package io.github.jer78.dockcontroller
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -47,6 +50,49 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted -> micPermissionGranted = granted }
 
+    // Asks for the mic, or - once Android has stopped showing the prompt
+    // (denied before, or "Don't allow" twice) - opens this app's page in
+    // system Settings so it can be switched on there. onResume picks up the
+    // change on the way back.
+    private fun requestMicPermission() {
+        if (micPermissionGranted) return
+        val prefs = getSharedPreferences("permissions", MODE_PRIVATE)
+        val askedBefore = prefs.getBoolean("mic_asked", false)
+        if (askedBefore && !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+            startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+            )
+        } else {
+            prefs.edit().putBoolean("mic_asked", true).apply()
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun handleMicRequestIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_REQUEST_MIC, false) == true) {
+            intent.removeExtra(EXTRA_REQUEST_MIC)
+            requestMicPermission()
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleMicRequestIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        micPermissionGranted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    companion object {
+        // Set by SonosDreamService, which can't show a permission prompt
+        // itself, to have the app ask for the mic as soon as it opens.
+        const val EXTRA_REQUEST_MIC = "request_mic"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -67,6 +113,7 @@ class MainActivity : ComponentActivity() {
         }
         
         manager.startPolling()
+        handleMicRequestIntent(intent)
 
         setContent {
             val trackState by manager.trackState.collectAsState()
@@ -123,6 +170,8 @@ class MainActivity : ComponentActivity() {
 
             // Shared Transition Logic
             var transitioningAlbum by remember { mutableStateOf<AlbumHistoryItem?>(null) }
+            // How Now Playing was last left for Cover Flow (see dockScreenTransitionSpec).
+            var screenSlide by remember { mutableStateOf(ScreenSlide.VERTICAL) }
             var transitionSourceRect by remember { mutableStateOf(Rect.Zero) }
             var nowPlayingArtRect by remember { mutableStateOf<Rect?>(null) }
 
@@ -210,9 +259,14 @@ class MainActivity : ComponentActivity() {
                     isAmbientMode -> DockScreen.COVER_FLOW
                     else -> DockScreen.NOW_PLAYING
                 }
+                // The swipe direction only shapes the trip to Cover Flow and back -
+                // once Now Playing is reached again, later switches are vertical.
+                LaunchedEffect(currentScreen) {
+                    if (currentScreen == DockScreen.NOW_PLAYING) screenSlide = ScreenSlide.VERTICAL
+                }
                 AnimatedContent(
                     targetState = currentScreen,
-                    transitionSpec = dockScreenTransitionSpec,
+                    transitionSpec = dockScreenTransitionSpec(screenSlide),
                     modifier = Modifier.fillMaxSize(),
                     label = "screenTransition"
                 ) { screen ->
@@ -263,8 +317,10 @@ class MainActivity : ComponentActivity() {
                                 onVolumeChange = { manager.setSonosVolume(it) },
                                 onSpeakerVolumeChange = { name, vol -> manager.setSpeakerVolume(name, vol) },
                                 onToggleMute = { manager.toggleMute() },
+                                onToggleShuffle = { manager.toggleShuffle() },
                                 onBrightnessChange = { manager.setLightBrightness(it) },
-                                onEnterAmbient = {
+                                onEnterAmbient = { slide ->
+                                    screenSlide = slide
                                     isAmbientMode = true
                                     transitioningAlbum = null
                                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -286,6 +342,7 @@ class MainActivity : ComponentActivity() {
                                 onSetLightColorTemp = { manager.setLightColorTempKelvin(it) },
                                 showSpectrumAnalyzer = showSpectrumAnalyzer,
                                 micPermissionGranted = micPermissionGranted,
+                                onRequestMicPermission = { requestMicPermission() },
                                 spectrumColorScheme = spectrumColorScheme,
                                 spectrumHeightPercent = spectrumHeightPercent,
                                 spectrumConfineToAlbumArt = spectrumConfineToAlbumArt,
@@ -357,7 +414,7 @@ class MainActivity : ComponentActivity() {
                     onSettingsSaved = { manager.refreshAfterSettingsSave() },
                     onDismiss = { showSettings = false },
                     micPermissionGranted = micPermissionGranted,
-                    onRequestMicPermission = { micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+                    onRequestMicPermission = { requestMicPermission() }
                 )
             }
         }

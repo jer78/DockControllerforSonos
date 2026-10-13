@@ -81,6 +81,10 @@ class SettingsManager(private val context: Context) {
         // ended (see SonosDashboardManager.maybeAutoUnmuteAfterAds).
         val AUTO_UNMUTE_AFTER_ADS = booleanPreferencesKey("auto_unmute_after_ads")
 
+        // When a queued album plays to the end, start another random album
+        // from Sonos Favorites (see SonosDashboardManager.maybeContinueWithRandomAlbum).
+        val CONTINUE_WITH_RANDOM_ALBUM = booleanPreferencesKey("continue_with_random_album")
+
         // How long TV mode sits on the Now Playing screen (actively playing)
         // before dropping into the TV Ambient screensaver, in seconds.
         val TV_SCREENSAVER_DELAY_SECONDS = intPreferencesKey("tv_screensaver_delay_seconds")
@@ -222,6 +226,12 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setAutoUnmuteAfterAds(enabled: Boolean) {
         context.dataStore.edit { it[AUTO_UNMUTE_AFTER_ADS] = enabled }
+    }
+
+    val continueWithRandomAlbum: Flow<Boolean> = context.dataStore.data.map { it[CONTINUE_WITH_RANDOM_ALBUM] ?: false }
+
+    suspend fun setContinueWithRandomAlbum(enabled: Boolean) {
+        context.dataStore.edit { it[CONTINUE_WITH_RANDOM_ALBUM] = enabled }
     }
 
     val tvScreensaverDelaySeconds: Flow<Int> = context.dataStore.data.map {
