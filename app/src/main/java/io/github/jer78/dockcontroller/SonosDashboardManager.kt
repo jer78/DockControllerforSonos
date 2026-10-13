@@ -1,6 +1,7 @@
 package io.github.jer78.dockcontroller
 
 import android.content.Context
+import android.util.Log
 import android.widget.Toast
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
@@ -99,6 +100,10 @@ class SonosDashboardManager private constructor(context: Context) {
         // the speaker), so large collections need longer than a single call.
         private const val FAVORITES_FETCH_TIMEOUT_MS = 20000L
         private const val MAX_RECENT_ERRORS = 5
+        // How far time remaining must jump UP between TV polls to count as
+        // coming back from a commercial - well clear of poll/clock jitter,
+        // well under the minutes a show and an ad typically differ by.
+        private const val AD_END_REMAINING_JUMP_SECONDS = 10
         @Volatile
         private var instance: SonosDashboardManager? = null
 
@@ -556,9 +561,11 @@ class SonosDashboardManager private constructor(context: Context) {
                             val url = settingsManager.haUrl.first()
                             val token = settingsManager.haToken.first()
                             val haMedia = settingsManager.selectedHaMediaPlayer.first()
-                            
+                            val autoUnmute = settingsManager.autoUnmuteAfterAds.first()
+
                             if (haMedia.isNotBlank()) {
                                 haManager.fetchHAMediaPlayer(url, token, haMedia) { haTrack ->
+                                    maybeAutoUnmuteAfterAds(haTrack, speaker, muted, autoUnmute)
                                     _trackState.update { it.copy(
                                         title = haTrack.title,
                                         artist = haTrack.artist,
@@ -584,6 +591,7 @@ class SonosDashboardManager private constructor(context: Context) {
                                 )}
                             }
                         } else {
+                            lastTvRemainingSeconds = null
                             val title = pyDict[PyObject.fromJava("title")]?.toString() ?: ""
                             val artist = pyDict[PyObject.fromJava("artist")]?.toString() ?: ""
                             val album = pyDict[PyObject.fromJava("album")]?.toString() ?: ""
@@ -966,6 +974,31 @@ class SonosDashboardManager private constructor(context: Context) {
             withContext(Dispatchers.Main) {
                 Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
             }
+        }
+    }
+
+    // Experimental (Settings > Home Assistant > Auto-Unmute After Commercials).
+    // While a show plays, its time remaining only ticks down (~2s per poll),
+    // but coming back from a commercial break the TV reports the show's
+    // remaining time again - noticeably MORE than the ad had left. Treat that
+    // upward jump as "the ad is over" and unmute. Written from OkHttp's
+    // callback thread, hence @Volatile.
+    @Volatile
+    private var lastTvRemainingSeconds: Int? = null
+
+    private fun maybeAutoUnmuteAfterAds(haTrack: TrackState, speaker: String, muted: Boolean, enabled: Boolean) {
+        if (haTrack.durationSeconds <= 0 || !haTrack.isPlaying) {
+            // Failed fetch, paused, or no timing info - start fresh next time
+            // rather than comparing across the gap.
+            lastTvRemainingSeconds = null
+            return
+        }
+        val remaining = haTrack.durationSeconds - haTrack.positionSeconds
+        val previous = lastTvRemainingSeconds
+        lastTvRemainingSeconds = remaining
+        if (enabled && muted && previous != null && remaining - previous > AD_END_REMAINING_JUMP_SECONDS) {
+            Log.i("SonosDashboard", "Auto-unmute: time remaining jumped ${previous}s -> ${remaining}s")
+            setMute(speaker, false)
         }
     }
 

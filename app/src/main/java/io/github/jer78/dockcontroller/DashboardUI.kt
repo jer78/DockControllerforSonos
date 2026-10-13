@@ -121,6 +121,21 @@ fun formatClockTime(time: Calendar, use24HourClock: Boolean): String =
         String.format(Locale.getDefault(), "%d:%02d %s", hour12, time.get(Calendar.MINUTE), amPm)
     }
 
+// Settings > Now Playing > Clock: which playback modes show the clock.
+enum class NowPlayingClockMode(val label: String) {
+    TV_ONLY("TV Mode Only"),
+    MUSIC_ONLY("Music Mode Only"),
+    ALL_MODES("All Modes"),
+    OFF("Off");
+
+    fun showsClock(isTvMode: Boolean): Boolean = when (this) {
+        TV_ONLY -> isTvMode
+        MUSIC_ONLY -> !isTvMode
+        ALL_MODES -> true
+        OFF -> false
+    }
+}
+
 // Current time, refreshed right as each minute turns over rather than every
 // second - the Now Playing clock never shows seconds.
 @Composable
@@ -849,7 +864,7 @@ fun DockDashboardUI(
     hidePrevious: Boolean = false,
     hideNextUp: Boolean = false,
     // Settings > Now Playing > Clock.
-    showClock: Boolean = false,
+    clockMode: NowPlayingClockMode = NowPlayingClockMode.OFF,
     use24HourClock: Boolean = true,
     onToggleNightMode: () -> Unit = {},
     onToggleDialogMode: () -> Unit = {},
@@ -895,18 +910,28 @@ fun DockDashboardUI(
             .background(Color.Black)
             .debugToggleHoldGesture { showDebugInfo = !showDebugInfo }
             .pointerInput(Unit) {
-                // Swipe down anywhere on the background to jump to Cover
-                // Flow, same as the button below - a descendant control
-                // (volume slider, buttons, etc.) that starts its own drag/
-                // click already consumes the touch, so this only fires for
-                // swipes starting on empty background.
+                // Swipe down, left or right anywhere on the background to
+                // jump to Cover Flow, same as the button below - a descendant
+                // control (volume slider, buttons, etc.) that starts its own
+                // drag/click already consumes the touch, so this only fires
+                // for swipes starting on empty background. Sideways matters
+                // for the screensaver: there, SystemUI's dream overlay
+                // (Pixel Tablet) claims every swipe down for the
+                // notification shade before the app ever sees it.
                 val thresholdPx = 100.dp.toPx()
-                var totalDrag = 0f
-                detectVerticalDragGestures(
-                    onDragStart = { totalDrag = 0f },
-                    onVerticalDrag = { _, dragAmount -> totalDrag += dragAmount },
+                var totalX = 0f
+                var totalY = 0f
+                detectDragGestures(
+                    onDragStart = { totalX = 0f; totalY = 0f },
+                    onDrag = { _, dragAmount ->
+                        totalX += dragAmount.x
+                        totalY += dragAmount.y
+                    },
                     onDragEnd = {
-                        if (totalDrag > thresholdPx) onEnterAmbient()
+                        val isSideways = abs(totalX) > abs(totalY)
+                        if ((isSideways && abs(totalX) > thresholdPx) || (!isSideways && totalY > thresholdPx)) {
+                            onEnterAmbient()
+                        }
                     }
                 )
             }
@@ -982,7 +1007,7 @@ fun DockDashboardUI(
                         
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "${haState.climateTemp} â€¢ ${haState.hvacState.uppercase()}",
+                            text = "${haState.climateTemp} • ${haState.hvacState.uppercase()}",
                             color = Color.White,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -1040,7 +1065,7 @@ fun DockDashboardUI(
                     animationSpec = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
                     label = "artAspectRatio"
                 )
-                if (showClock) {
+                if (clockMode.showsClock(isTvMode)) {
                     val currentTime = rememberMinuteClock()
                     Text(
                         text = formatClockTime(currentTime, use24HourClock),
@@ -1191,7 +1216,7 @@ fun DockDashboardUI(
                     modifier = Modifier.padding(top = 4.dp)
                 ) {
                     Text(
-                        text = if (trackState.album.isNotBlank()) "${trackState.artist} â€” ${trackState.album}" else trackState.artist,
+                        text = if (trackState.album.isNotBlank()) "${trackState.artist} — ${trackState.album}" else trackState.artist,
                         fontSize = 20.sp,
                         color = Color.White.copy(alpha = 0.8f),
                         maxLines = 1,
@@ -1734,7 +1759,7 @@ fun ThermostatDialog(
 ) {
     val isRange = haState.targetTempHigh != null && haState.targetTempLow != null
     // HA reports whatever step the integration declares (often 0.1 or 1.0),
-    // but a 0.5Â° resolution is the natural granularity for Celsius
+    // but a 0.5° resolution is the natural granularity for Celsius
     // thermostats - force it regardless of what the entity advertises.
     val effectiveStep = if (haState.temperatureUnit.contains("C", ignoreCase = true)) 0.5 else haState.tempStep
     var localTemp by remember(haState.targetTemp) { mutableStateOf(roundToStep(haState.targetTemp ?: haState.minTemp, effectiveStep)) }
@@ -1825,14 +1850,14 @@ fun ThermostatDialog(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         if (isRange) {
                             Text(
-                                "${formatTemp(localLow)}Â°â€“${formatTemp(localHigh)}Â°",
+                                "${formatTemp(localLow)}°–${formatTemp(localHigh)}°",
                                 color = Color.White,
                                 fontSize = 34.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         } else {
                             Text(
-                                "${formatTemp(localTemp)}Â°",
+                                "${formatTemp(localTemp)}°",
                                 color = Color.White,
                                 fontSize = 52.sp,
                                 fontWeight = FontWeight.Bold
@@ -1840,7 +1865,7 @@ fun ThermostatDialog(
                         }
                         Text(
                             "Current: ${haState.climateTemp}${haState.temperatureUnit}" +
-                                (haState.currentHumidity?.let { " Â· $it% humidity" } ?: ""),
+                                (haState.currentHumidity?.let { " · $it% humidity" } ?: ""),
                             color = Color.White.copy(alpha = 0.6f),
                             fontSize = 12.sp,
                             textAlign = TextAlign.Center
@@ -2559,7 +2584,8 @@ fun SettingsModal(
     var hideNextUp by remember { mutableStateOf(false) }
     var hideNowPlaying by remember { mutableStateOf(false) }
     var nowPlayingHidePrevious by remember { mutableStateOf(false) }
-    var nowPlayingShowClock by remember { mutableStateOf(false) }
+    var nowPlayingClockMode by remember { mutableStateOf(NowPlayingClockMode.OFF) }
+    var autoUnmuteAfterAds by remember { mutableStateOf(false) }
     var nowPlayingHideNextUp by remember { mutableStateOf(false) }
     var tvFallbackImage by remember { mutableStateOf("") }
     var showSpectrumAnalyzer by remember { mutableStateOf(false) }
@@ -2624,7 +2650,8 @@ fun SettingsModal(
         hideNowPlaying = settingsManager.coverFlowHideNowPlaying.first()
         nowPlayingHidePrevious = settingsManager.nowPlayingHidePrevious.first()
         nowPlayingHideNextUp = settingsManager.nowPlayingHideNextUp.first()
-        nowPlayingShowClock = settingsManager.nowPlayingShowClock.first()
+        nowPlayingClockMode = settingsManager.nowPlayingClockMode.first()
+        autoUnmuteAfterAds = settingsManager.autoUnmuteAfterAds.first()
         tvFallbackImage = settingsManager.tvFallbackImage.first()
         fAlbums = settingsManager.filterAlbums.first()
         fPlaylists = settingsManager.filterPlaylists.first()
@@ -3004,9 +3031,17 @@ fun SettingsModal(
                                         fontSize = 12.sp,
                                         color = Color.Gray
                                     )
-                                    SettingsToggleRow("Show Clock", nowPlayingShowClock) {
-                                        nowPlayingShowClock = it
-                                        scope.launch { settingsManager.setNowPlayingShowClock(it) }
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        NowPlayingClockMode.entries.forEach { mode ->
+                                            FilterChip(
+                                                selected = (nowPlayingClockMode == mode),
+                                                onClick = {
+                                                    nowPlayingClockMode = mode
+                                                    scope.launch { settingsManager.setNowPlayingClockMode(mode) }
+                                                },
+                                                label = { Text(mode.label) }
+                                            )
+                                        }
                                     }
                                     HorizontalDivider()
 
@@ -3182,6 +3217,18 @@ fun SettingsModal(
                                 suggestions = mediaPlayerEntities,
                                 modifier = Modifier.fillMaxWidth()
                             )
+                            HorizontalDivider()
+
+                            Text("Experimental:", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "In TV mode, unmutes the speaker when the media player's time remaining jumps up - usually a sign a commercial break just ended.",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                            SettingsToggleRow("Auto-Unmute After Commercials", autoUnmuteAfterAds) {
+                                autoUnmuteAfterAds = it
+                                scope.launch { settingsManager.setAutoUnmuteAfterAds(it) }
+                            }
                         }
                     }
                 }
@@ -3978,7 +4025,7 @@ fun AmbientClockScreen(
                     CoverFlowTrackCard(
                         label = "NOW PLAYING",
                         title = trackState.title,
-                        subtitle = if (trackState.album.isNotBlank()) "${trackState.artist} â€¢ ${trackState.album}" else trackState.artist,
+                        subtitle = if (trackState.album.isNotBlank()) "${trackState.artist} • ${trackState.album}" else trackState.artist,
                         artUrl = trackState.albumArtUrl,
                         onClick = onWakeUp
                     )

@@ -123,7 +123,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     val coverFlowHideNowPlaying by settingsManager.coverFlowHideNowPlaying.collectAsState(initial = false)
                     val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
                     val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
-                    val nowPlayingShowClock by settingsManager.nowPlayingShowClock.collectAsState(initial = false)
+                    val nowPlayingClockMode by settingsManager.nowPlayingClockMode.collectAsState(initial = NowPlayingClockMode.OFF)
                     val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
                         initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
                     )
@@ -316,7 +316,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onToggleSubEnabled = { manager.toggleSubEnabled() },
                                         hidePrevious = nowPlayingHidePrevious,
                                         hideNextUp = nowPlayingHideNextUp,
-                                        showClock = nowPlayingShowClock,
+                                        clockMode = nowPlayingClockMode,
                                         use24HourClock = use24HourClock
                                     )
                                 }
@@ -389,11 +389,11 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
         }
         setContentView(composeView)
 
-        // isFullscreen alone only hides the status bar - a swipe down from the
-        // top still pulls the notification shade straight open, hijacking the
-        // swipe-down-to-Cover-Flow gesture. Immersive mode (same as
-        // MainActivity) makes a top-edge swipe just peek the system bars;
-        // the shade then needs a second, deliberate swipe from the very top.
+        // Immersive mode, same as MainActivity, so the system bars stay
+        // hidden. It does NOT stop swipe-down opening the shade here: on
+        // devices with SystemUI's dream overlay (Pixel Tablet) the overlay
+        // intercepts any downward swipe over a dream, so Now Playing also
+        // accepts a sideways swipe to reach Cover Flow.
         window?.let { window ->
             WindowCompat.setDecorFitsSystemWindows(window, false)
             WindowInsetsControllerCompat(window, window.decorView).apply {

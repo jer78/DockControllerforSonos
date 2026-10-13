@@ -70,7 +70,16 @@ class SettingsManager(private val context: Context) {
         // track chips - independent of Cover Flow's own cards above.
         val NOW_PLAYING_HIDE_PREVIOUS = booleanPreferencesKey("now_playing_hide_previous")
         val NOW_PLAYING_HIDE_NEXT_UP = booleanPreferencesKey("now_playing_hide_next_up")
+        // Legacy on/off clock toggle, superseded by NOW_PLAYING_CLOCK_MODE
+        // (read only to migrate: on -> ALL_MODES, off -> OFF).
         val NOW_PLAYING_SHOW_CLOCK = booleanPreferencesKey("now_playing_show_clock")
+        // Stores a NowPlayingClockMode's name (see DashboardUI.kt)
+        val NOW_PLAYING_CLOCK_MODE = stringPreferencesKey("now_playing_clock_mode")
+
+        // Experimental: in TV mode, unmute the speaker when the HA media
+        // player's time remaining jumps up - a sign a commercial break just
+        // ended (see SonosDashboardManager.maybeAutoUnmuteAfterAds).
+        val AUTO_UNMUTE_AFTER_ADS = booleanPreferencesKey("auto_unmute_after_ads")
 
         // How long TV mode sits on the Now Playing screen (actively playing)
         // before dropping into the TV Ambient screensaver, in seconds.
@@ -197,10 +206,22 @@ class SettingsManager(private val context: Context) {
         context.dataStore.edit { it[NOW_PLAYING_HIDE_NEXT_UP] = hide }
     }
 
-    val nowPlayingShowClock: Flow<Boolean> = context.dataStore.data.map { it[NOW_PLAYING_SHOW_CLOCK] ?: false }
+    // Stored as the enum's name; when unset, carries over the old on/off
+    // toggle so anyone who had the clock on keeps seeing it everywhere.
+    val nowPlayingClockMode: Flow<NowPlayingClockMode> = context.dataStore.data.map { prefs ->
+        val name = prefs[NOW_PLAYING_CLOCK_MODE]
+        NowPlayingClockMode.entries.find { it.name == name }
+            ?: if (prefs[NOW_PLAYING_SHOW_CLOCK] == true) NowPlayingClockMode.ALL_MODES else NowPlayingClockMode.OFF
+    }
 
-    suspend fun setNowPlayingShowClock(show: Boolean) {
-        context.dataStore.edit { it[NOW_PLAYING_SHOW_CLOCK] = show }
+    suspend fun setNowPlayingClockMode(mode: NowPlayingClockMode) {
+        context.dataStore.edit { it[NOW_PLAYING_CLOCK_MODE] = mode.name }
+    }
+
+    val autoUnmuteAfterAds: Flow<Boolean> = context.dataStore.data.map { it[AUTO_UNMUTE_AFTER_ADS] ?: false }
+
+    suspend fun setAutoUnmuteAfterAds(enabled: Boolean) {
+        context.dataStore.edit { it[AUTO_UNMUTE_AFTER_ADS] = enabled }
     }
 
     val tvScreensaverDelaySeconds: Flow<Int> = context.dataStore.data.map {

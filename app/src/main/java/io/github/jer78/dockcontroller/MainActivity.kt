@@ -91,7 +91,7 @@ class MainActivity : ComponentActivity() {
             val coverFlowHideNowPlaying by settingsManager.coverFlowHideNowPlaying.collectAsState(initial = false)
             val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
             val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
-            val nowPlayingShowClock by settingsManager.nowPlayingShowClock.collectAsState(initial = false)
+            val nowPlayingClockMode by settingsManager.nowPlayingClockMode.collectAsState(initial = NowPlayingClockMode.OFF)
             val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
                 initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
             )
@@ -298,7 +298,7 @@ class MainActivity : ComponentActivity() {
                                 onToggleSubEnabled = { manager.toggleSubEnabled() },
                                 hidePrevious = nowPlayingHidePrevious,
                                 hideNextUp = nowPlayingHideNextUp,
-                                showClock = nowPlayingShowClock,
+                                clockMode = nowPlayingClockMode,
                                 use24HourClock = use24HourClock
                             )
                         }
