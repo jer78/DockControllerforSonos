@@ -267,13 +267,27 @@ fun AmbientClockScreen(
     val screenWidth = LocalConfiguration.current.screenWidthDp
     val hPadding = ((screenWidth - 450) / 2).coerceAtLeast(0).dp
 
+    // Window bounds of every album card currently laid out (keyed by pager
+    // page), so a tap on or near artwork never wakes to Now Playing - even
+    // if it lands in the gap around the X, or just as the play/X controls
+    // time out and disappear (they're the only things that would otherwise
+    // consume it). Read only from the tap handler, so a plain map is enough.
+    val cardBoundsByPage = remember { HashMap<Int, Rect>() }
+    var screenOrigin by remember { mutableStateOf(Offset.Zero) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .onGloballyPositioned { screenOrigin = it.boundsInWindow().topLeft }
             .debugToggleHoldGesture { showDebugInfo = !showDebugInfo }
             .pointerInput(Unit) {
-                detectTapGestures(onTap = { onWakeUp() })
+                val artworkMarginPx = 32.dp.toPx()
+                detectTapGestures(onTap = { offset ->
+                    val tap = screenOrigin + offset
+                    val onArtwork = cardBoundsByPage.values.any { it.inflate(artworkMarginPx).contains(tap) }
+                    if (!onArtwork) onWakeUp()
+                })
             }
     ) {
         // The "glass table" the cards stand on. At strength 0 it's just the
@@ -487,6 +501,9 @@ fun AmbientClockScreen(
                             }
 
                             var cardBounds by remember { mutableStateOf(Rect.Zero) }
+                            DisposableEffect(page) {
+                                onDispose { cardBoundsByPage.remove(page) }
+                            }
                             val isPlayable = abs(pageOffset) < 0.2f && showLabels && !isFadingOut
                             // Square corners, matching the square-edged
                             // reflection on the glass table below.
@@ -496,7 +513,10 @@ fun AmbientClockScreen(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .border(1.dp, Color.White.copy(alpha = 0.1f), RectangleShape)
-                                    .onGloballyPositioned { cardBounds = it.boundsInWindow() }
+                                    .onGloballyPositioned {
+                                        cardBounds = it.boundsInWindow()
+                                        cardBoundsByPage[page] = cardBounds
+                                    }
                                     .then(
                                         // The whole card is tappable-to-play
                                         // whenever the play button is showing
