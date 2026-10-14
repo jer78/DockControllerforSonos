@@ -338,195 +338,154 @@ class HomeAssistantManager {
         })
     }
 
-    fun pollHAState(url: String, token: String, lightId: String, climateId: String, temperatureUnit: String, callback: (HAState) -> Unit) {
-        var lightOn = false
-        var lightBrightness = 0
-        var climateTemp = "0"
-        var hvacState = "off"
-        var isFanRunning = false
-        var targetTemp: Double? = null
-        var targetTempHigh: Double? = null
-        var targetTempLow: Double? = null
-        var currentHumidity: Int? = null
-        var hvacAction = "idle"
-        var hvacModes: List<String> = emptyList()
-        var fanMode = ""
-        var fanModes: List<String> = emptyList()
-        var presetMode = ""
-        var presetModes: List<String> = emptyList()
-        var minTemp = 10.0
-        var maxTemp = 35.0
-        var tempStep = 0.5
-        var lightColorModes: List<String> = emptyList()
-        var lightRgbColor: List<Int>? = null
-        var lightColorTempKelvin: Int? = null
-        var lightMinColorTempKelvin = 2000
-        var lightMaxColorTempKelvin = 6500
-
-        val latch = CountDownLatch(2)
-
-        fun fetchLight() {
-            if (lightId.isBlank()) {
-                latch.countDown()
-                return
-            }
-            val fullUrl = getFullUrl(url, "/api/states/$lightId")
-            val request = Request.Builder()
-                .url(fullUrl)
-                .addHeader("Authorization", "Bearer $token")
-                .build()
-            client.newCall(request).enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) { latch.countDown() }
-                override fun onResponse(call: Call, response: Response) {
-                    try {
-                        if (response.isSuccessful) {
-                            response.body?.string()?.let {
-                                val json = JSONObject(it)
-                                lightOn = json.optString("state") == "on"
-                                val attrs = json.optJSONObject("attributes")
-                                lightBrightness = attrs?.optInt("brightness", 0) ?: 0
-
-                                val modesArray = attrs?.optJSONArray("supported_color_modes")
-                                if (modesArray != null) {
-                                    lightColorModes = (0 until modesArray.length()).map { i -> modesArray.getString(i) }
-                                }
-
-                                val rgbArray = attrs?.optJSONArray("rgb_color")
-                                if (rgbArray != null && rgbArray.length() == 3) {
-                                    lightRgbColor = listOf(rgbArray.getInt(0), rgbArray.getInt(1), rgbArray.getInt(2))
-                                }
-
-                                if (attrs != null && attrs.has("color_temp_kelvin") && !attrs.isNull("color_temp_kelvin")) {
-                                    lightColorTempKelvin = attrs.optInt("color_temp_kelvin")
-                                }
-                                lightMinColorTempKelvin = attrs?.optInt("min_color_temp_kelvin", 2000) ?: 2000
-                                lightMaxColorTempKelvin = attrs?.optInt("max_color_temp_kelvin", 6500) ?: 6500
-                            }
-                        }
-                    } catch (e: Exception) { }
-                    latch.countDown()
-                }
-            })
+    // Reads the current state of each widget entity in parallel, parsed by
+    // its domain (light./climate./cover.). Entities that fail to load are
+    // left out of the result, so their widget waits rather than showing
+    // made-up values.
+    fun fetchEntityStates(
+        url: String,
+        token: String,
+        entityIds: List<String>,
+        temperatureUnit: String,
+        callback: (Map<String, HaEntityState>) -> Unit
+    ) {
+        val ids = entityIds.filter { it.isNotBlank() }.distinct()
+        if (ids.isEmpty()) {
+            callback(emptyMap())
+            return
         }
+        val results = java.util.concurrent.ConcurrentHashMap<String, HaEntityState>()
+        val latch = CountDownLatch(ids.size)
 
-        fun fetchClimate() {
-            if (climateId.isBlank()) {
-                latch.countDown()
-                return
-            }
-            val fullUrl = getFullUrl(url, "/api/states/$climateId")
+        ids.forEach { entityId ->
             val request = Request.Builder()
-                .url(fullUrl)
+                .url(getFullUrl(url, "/api/states/$entityId"))
                 .addHeader("Authorization", "Bearer $token")
                 .build()
             client.newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) { latch.countDown() }
                 override fun onResponse(call: Call, response: Response) {
-                    try {
-                        if (response.isSuccessful) {
-                            response.body?.string()?.let {
-                                val json = JSONObject(it)
-                                hvacState = json.optString("state", "off")
-                                val attrs = json.optJSONObject("attributes")
-                                climateTemp = attrs?.optString("current_temperature") ?: json.optString("state", "0")
-
-                                hvacAction = attrs?.optString("hvac_action", "idle") ?: "idle"
-                                if (hvacAction == "fan" || hvacAction == "cooling" || hvacAction == "heating") {
-                                    isFanRunning = true
-                                }
-
-                                if (attrs != null && attrs.has("temperature") && !attrs.isNull("temperature")) {
-                                    targetTemp = attrs.optDouble("temperature")
-                                }
-                                if (attrs != null && attrs.has("target_temp_high") && !attrs.isNull("target_temp_high")) {
-                                    targetTempHigh = attrs.optDouble("target_temp_high")
-                                }
-                                if (attrs != null && attrs.has("target_temp_low") && !attrs.isNull("target_temp_low")) {
-                                    targetTempLow = attrs.optDouble("target_temp_low")
-                                }
-                                if (attrs != null && attrs.has("current_humidity") && !attrs.isNull("current_humidity")) {
-                                    currentHumidity = attrs.optInt("current_humidity")
-                                }
-
-                                val modesArray = attrs?.optJSONArray("hvac_modes")
-                                if (modesArray != null) {
-                                    hvacModes = (0 until modesArray.length()).map { i -> modesArray.getString(i) }
-                                }
-
-                                fanMode = attrs?.optString("fan_mode", "") ?: ""
-                                val fanModesArray = attrs?.optJSONArray("fan_modes")
-                                if (fanModesArray != null) {
-                                    fanModes = (0 until fanModesArray.length()).map { i -> fanModesArray.getString(i) }
-                                }
-
-                                presetMode = attrs?.optString("preset_mode", "") ?: ""
-                                val presetModesArray = attrs?.optJSONArray("preset_modes")
-                                if (presetModesArray != null) {
-                                    presetModes = (0 until presetModesArray.length()).map { i -> presetModesArray.getString(i) }
-                                }
-
-                                minTemp = attrs?.optDouble("min_temp", 10.0) ?: 10.0
-                                maxTemp = attrs?.optDouble("max_temp", 35.0) ?: 35.0
-                                tempStep = attrs?.optDouble("target_temp_step", 0.5) ?: 0.5
+                    response.use {
+                        try {
+                            if (response.isSuccessful) {
+                                val json = JSONObject(response.body?.string().orEmpty())
+                                parseEntityState(entityId, json, temperatureUnit)?.let { results[entityId] = it }
                             }
+                        } catch (e: Exception) {
+                            Log.e("HAManager", "Parse $entityId failed", e)
                         }
-                    } catch (e: Exception) { }
+                    }
                     latch.countDown()
                 }
             })
         }
 
         Thread {
-            fetchLight()
-            fetchClimate()
             try {
                 latch.await(5, TimeUnit.SECONDS)
             } catch (e: Exception) { }
-            callback(HAState(
-                climateTemp = climateTemp,
-                hvacState = hvacState,
-                lightOn = lightOn,
-                lightBrightness = lightBrightness,
-                isFanRunning = isFanRunning,
-                targetTemp = targetTemp,
-                targetTempHigh = targetTempHigh,
-                targetTempLow = targetTempLow,
-                currentHumidity = currentHumidity,
-                hvacAction = hvacAction,
-                hvacModes = hvacModes,
-                fanMode = fanMode,
-                fanModes = fanModes,
-                presetMode = presetMode,
-                presetModes = presetModes,
-                minTemp = minTemp,
-                maxTemp = maxTemp,
-                tempStep = tempStep,
-                temperatureUnit = temperatureUnit,
-                lightColorModes = lightColorModes,
-                lightRgbColor = lightRgbColor,
-                lightColorTempKelvin = lightColorTempKelvin,
-                lightMinColorTempKelvin = lightMinColorTempKelvin,
-                lightMaxColorTempKelvin = lightMaxColorTempKelvin
-            ))
+            callback(HashMap(results))
         }.start()
     }
 
-    fun toggleLight(url: String, token: String, entityId: String) {
+    private fun parseEntityState(entityId: String, json: JSONObject, temperatureUnit: String): HaEntityState? {
+        val attrs = json.optJSONObject("attributes") ?: JSONObject()
+        val state = json.optString("state")
+        val name = attrs.optString("friendly_name", "").ifBlank { entityId }
+        return when (HaWidgetType.fromDomain(entityId.substringBefore('.'))) {
+            HaWidgetType.LIGHT -> parseLight(entityId, name, state, attrs)
+            HaWidgetType.CLIMATE -> parseClimate(entityId, name, state, attrs, temperatureUnit)
+            HaWidgetType.COVER -> parseCover(entityId, name, state, attrs)
+            null -> null
+        }
+    }
+
+    private fun JSONObject.stringList(key: String): List<String> =
+        optJSONArray(key)?.let { array -> (0 until array.length()).map { array.getString(it) } } ?: emptyList()
+
+    private fun JSONObject.doubleOrNull(key: String): Double? =
+        if (has(key) && !isNull(key)) optDouble(key).takeIf { !it.isNaN() } else null
+
+    private fun JSONObject.intOrNull(key: String): Int? =
+        if (has(key) && !isNull(key)) optInt(key) else null
+
+    private fun parseLight(entityId: String, name: String, state: String, attrs: JSONObject): HaLightState {
+        val rgb = attrs.optJSONArray("rgb_color")
+        return HaLightState(
+            entityId = entityId,
+            name = name,
+            isOn = state == "on",
+            brightness = attrs.optInt("brightness", 0),
+            colorModes = attrs.stringList("supported_color_modes"),
+            rgbColor = if (rgb != null && rgb.length() == 3) listOf(rgb.getInt(0), rgb.getInt(1), rgb.getInt(2)) else null,
+            colorTempKelvin = attrs.intOrNull("color_temp_kelvin"),
+            minColorTempKelvin = attrs.optInt("min_color_temp_kelvin", 2000),
+            maxColorTempKelvin = attrs.optInt("max_color_temp_kelvin", 6500)
+        )
+    }
+
+    private fun parseClimate(entityId: String, name: String, state: String, attrs: JSONObject, temperatureUnit: String): HaClimateState {
+        val hvacAction = attrs.optString("hvac_action", "idle")
+        return HaClimateState(
+            entityId = entityId,
+            name = name,
+            climateTemp = attrs.optString("current_temperature", ""),
+            hvacState = state.ifBlank { "off" },
+            isFanRunning = hvacAction == "fan" || hvacAction == "cooling" || hvacAction == "heating",
+            targetTemp = attrs.doubleOrNull("temperature"),
+            targetTempHigh = attrs.doubleOrNull("target_temp_high"),
+            targetTempLow = attrs.doubleOrNull("target_temp_low"),
+            currentHumidity = attrs.intOrNull("current_humidity"),
+            hvacAction = hvacAction,
+            hvacModes = attrs.stringList("hvac_modes"),
+            fanMode = attrs.optString("fan_mode", ""),
+            fanModes = attrs.stringList("fan_modes"),
+            presetMode = attrs.optString("preset_mode", ""),
+            presetModes = attrs.stringList("preset_modes"),
+            minTemp = attrs.optDouble("min_temp", 10.0),
+            maxTemp = attrs.optDouble("max_temp", 35.0),
+            tempStep = attrs.optDouble("target_temp_step", 0.5),
+            temperatureUnit = temperatureUnit
+        )
+    }
+
+    private fun parseCover(entityId: String, name: String, state: String, attrs: JSONObject): HaCoverState =
+        HaCoverState(
+            entityId = entityId,
+            name = name,
+            state = state.ifBlank { "unknown" },
+            deviceClass = attrs.optString("device_class", ""),
+            position = attrs.intOrNull("current_position"),
+            supportedFeatures = attrs.optInt("supported_features", 0)
+        )
+
+    // Fire-and-forget call to a HA service on one entity, e.g.
+    // ("cover", "open_cover"). Pushed state changes refresh the widget.
+    private fun callService(url: String, token: String, domain: String, service: String, entityId: String, data: JSONObject = JSONObject()) {
         if (entityId.isBlank()) return
-        val fullUrl = getFullUrl(url, "/api/services/light/toggle")
-        val json = JSONObject().put("entity_id", entityId)
-        val body = json.toString().toRequestBody("application/json".toMediaType())
+        val body = data.put("entity_id", entityId).toString().toRequestBody("application/json".toMediaType())
         val request = Request.Builder()
-            .url(fullUrl)
+            .url(getFullUrl(url, "/api/services/$domain/$service"))
             .post(body)
             .addHeader("Authorization", "Bearer $token")
             .build()
-        
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
         })
     }
+
+    fun openCover(url: String, token: String, entityId: String) =
+        callService(url, token, "cover", "open_cover", entityId)
+
+    fun closeCover(url: String, token: String, entityId: String) =
+        callService(url, token, "cover", "close_cover", entityId)
+
+    fun stopCover(url: String, token: String, entityId: String) =
+        callService(url, token, "cover", "stop_cover", entityId)
+
+    fun setCoverPosition(url: String, token: String, entityId: String, position: Int) =
+        callService(url, token, "cover", "set_cover_position", entityId, JSONObject().put("position", position.coerceIn(0, 100)))
 
     fun setLightBrightness(url: String, token: String, entityId: String, brightness: Int) {
         if (entityId.isBlank()) return

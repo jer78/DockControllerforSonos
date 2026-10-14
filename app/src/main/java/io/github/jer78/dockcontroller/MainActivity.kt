@@ -320,7 +320,6 @@ class MainActivity : ComponentActivity() {
                                 onToggleShuffle = { manager.toggleShuffle() },
                                 onCycleRepeat = { manager.cycleRepeat() },
                                 onSeek = { manager.seekTo(it) },
-                                onBrightnessChange = { manager.setLightBrightness(it) },
                                 onEnterAmbient = { slide ->
                                     screenSlide = slide
                                     isAmbientMode = true
@@ -335,13 +334,7 @@ class MainActivity : ComponentActivity() {
                                 speakerGroups = speakerGroups,
                                 onToggleJoin = { name, join -> manager.toggleSpeakerJoin(name, join) },
                                 onAlbumArtPositioned = { nowPlayingArtRect = it },
-                                onSetClimateTemp = { temp, high, low -> manager.setClimateTemperature(temp, high, low) },
-                                onSetClimateMode = { manager.setClimateHvacMode(it) },
-                                onSetClimateFan = { manager.setClimateFanMode(it) },
-                                onSetClimatePreset = { manager.setClimatePresetMode(it) },
-                                onSetLightOn = { manager.setLightOn(it) },
-                                onSetLightColorRgb = { r, g, b -> manager.setLightColorRgb(r, g, b) },
-                                onSetLightColorTemp = { manager.setLightColorTempKelvin(it) },
+                                onHaCommand = { manager.sendHaCommand(it) },
                                 showSpectrumAnalyzer = showSpectrumAnalyzer,
                                 micPermissionGranted = micPermissionGranted,
                                 onRequestMicPermission = { requestMicPermission() },

@@ -814,17 +814,25 @@ class SonosDashboardManager private constructor(context: Context) {
 
     private val haEvents = HomeAssistantEvents()
     val haInstantUpdates: Boolean get() = haEvents.isReceiving
-    // Woken by Home Assistant pushing a change to the light or climate entity.
+    // Woken by Home Assistant pushing a change to a widget's entity, or by
+    // the widget list changing in Settings.
     private val haWake = Channel<Unit>(Channel.CONFLATED)
 
     private suspend fun pollHA() {
+        coroutineScope {
+            launch { settingsManager.haWidgets.distinctUntilChanged().drop(1).collect { haWake.trySend(Unit) } }
+            pollHALoop()
+        }
+    }
+
+    private suspend fun pollHALoop() {
         while (currentCoroutineContext().isActive) {
             val url = settingsManager.haUrl.first()
             val token = settingsManager.haToken.first()
-            val light = settingsManager.selectedLight.first()
-            val climate = settingsManager.selectedClimate.first()
+            val widgets = settingsManager.haWidgets.first().filterNotNull()
+            val widgetEntities = widgets.map { it.entityId }.distinct()
             val haMedia = settingsManager.selectedHaMediaPlayer.first()
-            haEvents.ensure(url, token, listOf(light, climate, haMedia)) { entityId ->
+            haEvents.ensure(url, token, widgetEntities + haMedia) { entityId ->
                 if (entityId == haMedia) {
                     // TV mode's title/art/position come from this entity,
                     // fetched by the Sonos loop - wake that one instead.
@@ -847,9 +855,21 @@ class SonosDashboardManager private constructor(context: Context) {
                         cachedTemperatureUnitFor = cacheKey
                     }
                 }
-                haManager.pollHAState(url, token, light, climate, cachedTemperatureUnit) { newState ->
-                    _haState.value = newState
+                haManager.fetchEntityStates(url, token, widgetEntities, cachedTemperatureUnit) { entities ->
+                    // Keep the last known state of anything that failed to
+                    // load this time, so a dropped request doesn't make its
+                    // widget blink out.
+                    _haState.update { old ->
+                        HAState(
+                            widgets = widgets,
+                            entities = widgetEntities.mapNotNull { id ->
+                                (entities[id] ?: old.entities[id])?.let { id to it }
+                            }.toMap()
+                        )
+                    }
                 }
+            } else {
+                _haState.value = HAState()
             }
             // Pushed changes refresh right away; the timed refresh is only a
             // fallback, so it can be much slower while the WebSocket is live.
@@ -863,39 +883,27 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
-    fun setClimateTemperature(temp: Double? = null, tempHigh: Double? = null, tempLow: Double? = null) {
+    // From Now Playing's Home Assistant widgets and their dialogs. Each
+    // command names its own entity, since several widgets can share a type.
+    fun sendHaCommand(command: HaCommand) {
         scope.launch {
             val url = settingsManager.haUrl.first()
             val token = settingsManager.haToken.first()
-            val climate = settingsManager.selectedClimate.first()
-            haManager.setClimateTemperature(url, token, climate, temp, tempHigh, tempLow)
-        }
-    }
-
-    fun setClimateHvacMode(hvacMode: String) {
-        scope.launch {
-            val url = settingsManager.haUrl.first()
-            val token = settingsManager.haToken.first()
-            val climate = settingsManager.selectedClimate.first()
-            haManager.setClimateHvacMode(url, token, climate, hvacMode)
-        }
-    }
-
-    fun setClimateFanMode(fanMode: String) {
-        scope.launch {
-            val url = settingsManager.haUrl.first()
-            val token = settingsManager.haToken.first()
-            val climate = settingsManager.selectedClimate.first()
-            haManager.setClimateFanMode(url, token, climate, fanMode)
-        }
-    }
-
-    fun setClimatePresetMode(presetMode: String) {
-        scope.launch {
-            val url = settingsManager.haUrl.first()
-            val token = settingsManager.haToken.first()
-            val climate = settingsManager.selectedClimate.first()
-            haManager.setClimatePresetMode(url, token, climate, presetMode)
+            val id = command.entityId
+            when (command) {
+                is HaCommand.SetClimateTemperature -> haManager.setClimateTemperature(url, token, id, command.temp, command.high, command.low)
+                is HaCommand.SetHvacMode -> haManager.setClimateHvacMode(url, token, id, command.mode)
+                is HaCommand.SetFanMode -> haManager.setClimateFanMode(url, token, id, command.mode)
+                is HaCommand.SetPresetMode -> haManager.setClimatePresetMode(url, token, id, command.mode)
+                is HaCommand.SetLightOn -> haManager.setLightOn(url, token, id, command.on)
+                is HaCommand.SetLightBrightness -> haManager.setLightBrightness(url, token, id, command.brightness)
+                is HaCommand.SetLightRgb -> haManager.setLightColorRgb(url, token, id, command.r, command.g, command.b)
+                is HaCommand.SetLightColorTemp -> haManager.setLightColorTempKelvin(url, token, id, command.kelvin)
+                is HaCommand.OpenCover -> haManager.openCover(url, token, id)
+                is HaCommand.CloseCover -> haManager.closeCover(url, token, id)
+                is HaCommand.StopCover -> haManager.stopCover(url, token, id)
+                is HaCommand.SetCoverPosition -> haManager.setCoverPosition(url, token, id, command.position)
+            }
         }
     }
 
@@ -1012,51 +1020,6 @@ class SonosDashboardManager private constructor(context: Context) {
                     setMute(speaker, false)
                 }
             }
-        }
-    }
-
-    fun toggleLight() {
-        scope.launch {
-            val url = settingsManager.haUrl.first()
-            val token = settingsManager.haToken.first()
-            val light = settingsManager.selectedLight.first()
-            haManager.toggleLight(url, token, light)
-        }
-    }
-
-    fun setLightBrightness(brightness: Int) {
-        scope.launch {
-            val url = settingsManager.haUrl.first()
-            val token = settingsManager.haToken.first()
-            val light = settingsManager.selectedLight.first()
-            haManager.setLightBrightness(url, token, light, brightness)
-        }
-    }
-
-    fun setLightOn(on: Boolean) {
-        scope.launch {
-            val url = settingsManager.haUrl.first()
-            val token = settingsManager.haToken.first()
-            val light = settingsManager.selectedLight.first()
-            haManager.setLightOn(url, token, light, on)
-        }
-    }
-
-    fun setLightColorRgb(r: Int, g: Int, b: Int) {
-        scope.launch {
-            val url = settingsManager.haUrl.first()
-            val token = settingsManager.haToken.first()
-            val light = settingsManager.selectedLight.first()
-            haManager.setLightColorRgb(url, token, light, r, g, b)
-        }
-    }
-
-    fun setLightColorTempKelvin(kelvin: Int) {
-        scope.launch {
-            val url = settingsManager.haUrl.first()
-            val token = settingsManager.haToken.first()
-            val light = settingsManager.selectedLight.first()
-            haManager.setLightColorTempKelvin(url, token, light, kelvin)
         }
     }
 

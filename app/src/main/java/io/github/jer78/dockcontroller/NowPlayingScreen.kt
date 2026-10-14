@@ -51,20 +51,13 @@ fun DockDashboardUI(
     onToggleShuffle: () -> Unit = {},
     onCycleRepeat: () -> Unit = {},
     onSeek: (Int) -> Unit = {},
-    onBrightnessChange: (Int) -> Unit,
     onEnterAmbient: (ScreenSlide) -> Unit,
     albumHistory: List<AlbumHistoryItem>,
     onOpenSettings: () -> Unit,
     speakerGroups: List<SonosSpeakerGroup>,
     onToggleJoin: (String, Boolean) -> Unit,
     onAlbumArtPositioned: (Rect) -> Unit = {},
-    onSetClimateTemp: (Double?, Double?, Double?) -> Unit = { _, _, _ -> },
-    onSetClimateMode: (String) -> Unit = {},
-    onSetClimateFan: (String) -> Unit = {},
-    onSetClimatePreset: (String) -> Unit = {},
-    onSetLightOn: (Boolean) -> Unit = {},
-    onSetLightColorRgb: (Int, Int, Int) -> Unit = { _, _, _ -> },
-    onSetLightColorTemp: (Int) -> Unit = {},
+    onHaCommand: (HaCommand) -> Unit = {},
     showSpectrumAnalyzer: Boolean = false,
     micPermissionGranted: Boolean = false,
     onRequestMicPermission: () -> Unit = {},
@@ -87,8 +80,8 @@ fun DockDashboardUI(
 ) {
     var showDebugInfo by remember { mutableStateOf(false) }
     var showGroupingModal by remember { mutableStateOf(false) }
-    var showThermostat by remember { mutableStateOf(false) }
-    var showLightDialog by remember { mutableStateOf(false) }
+    // Entity id of the Home Assistant widget whose pop-up is open.
+    var openHaEntity by remember { mutableStateOf<String?>(null) }
     var showSoundSettings by remember { mutableStateOf(false) }
     var previousTrackDetails by remember { mutableStateOf<TrackDetails?>(null) }
 
@@ -188,60 +181,7 @@ fun DockDashboardUI(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Surface(
-                    color = Color.Black.copy(alpha = 0.4f),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.clickable { showThermostat = true }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (haState.isFanRunning) {
-                            val infiniteTransition = rememberInfiniteTransition(label = "fan")
-                            val rotation by infiniteTransition.animateFloat(
-                                initialValue = 0f,
-                                targetValue = 360f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(1500, easing = LinearEasing),
-                                    repeatMode = RepeatMode.Restart
-                                ),
-                                label = "fanRotation"
-                            )
-                            Icon(
-                                Icons.Default.Cyclone,
-                                contentDescription = null,
-                                tint = Color.Cyan,
-                                modifier = Modifier.rotate(rotation)
-                            )
-                        } else {
-                            Icon(Icons.Default.Thermostat, contentDescription = null, tint = Color.White)
-                        }
-                        
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "${haState.climateTemp} • ${haState.hvacState.uppercase()}",
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-
-                Surface(
-                    color = if (haState.lightOn) Color.Yellow.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.4f),
-                    shape = CircleShape,
-                    modifier = Modifier.clickable { showLightDialog = true }
-                ) {
-                    Box(modifier = Modifier.padding(10.dp)) {
-                        Icon(
-                            Icons.Default.Lightbulb,
-                            contentDescription = "Light",
-                            tint = if (haState.lightOn) Color.Black else Color.White
-                        )
-                    }
-                }
-            }
+            HaWidgetRow(haState = haState, onOpen = { openHaEntity = it })
         }
 
         Row(
@@ -742,25 +682,11 @@ fun DockDashboardUI(
             )
         }
 
-        if (showThermostat) {
-            ThermostatDialog(
-                haState = haState,
-                onSetTemp = onSetClimateTemp,
-                onSetMode = onSetClimateMode,
-                onSetFan = onSetClimateFan,
-                onSetPreset = onSetClimatePreset,
-                onDismiss = { showThermostat = false }
-            )
-        }
-
-        if (showLightDialog) {
-            LightDialog(
-                haState = haState,
-                onSetOn = onSetLightOn,
-                onSetBrightness = onBrightnessChange,
-                onSetColorRgb = onSetLightColorRgb,
-                onSetColorTemp = onSetLightColorTemp,
-                onDismiss = { showLightDialog = false }
+        openHaEntity?.let { haState.entities[it] }?.let { entity ->
+            HaWidgetDialog(
+                entity = entity,
+                onHaCommand = onHaCommand,
+                onDismiss = { openHaEntity = null }
             )
         }
 

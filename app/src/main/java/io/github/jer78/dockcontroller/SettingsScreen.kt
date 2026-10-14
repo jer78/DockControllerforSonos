@@ -161,6 +161,77 @@ private fun HaConnectionIndicator(status: HaConnectionStatus, modifier: Modifier
     }
 }
 
+// One Settings > Home Assistant widget position: what kind of widget sits
+// there (or None), and which entity it controls.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HaWidgetSlotRow(
+    position: Int,
+    type: HaWidgetType?,
+    entityId: String,
+    suggestions: List<String>,
+    onTypeChange: (HaWidgetType?) -> Unit,
+    onEntityChange: (String) -> Unit,
+    // -1 = up, +1 = down.
+    onMove: (Int) -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text("$position", fontWeight = FontWeight.Bold, modifier = Modifier.width(16.dp))
+
+        var expanded by remember { mutableStateOf(false) }
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it },
+            modifier = Modifier.width(150.dp)
+        ) {
+            OutlinedTextField(
+                value = type?.label ?: "None",
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Type") },
+                singleLine = true,
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier.menuAnchor()
+            )
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                (listOf(null) + HaWidgetType.entries).forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option?.label ?: "None") },
+                        onClick = {
+                            onTypeChange(option)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+
+        if (type != null) {
+            EntityAutocompleteField(
+                label = "${type.label} Entity",
+                value = entityId,
+                onValueChange = onEntityChange,
+                suggestions = suggestions,
+                modifier = Modifier.weight(1f)
+            )
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
+
+        // The top position can only move down, the bottom one only up.
+        IconButton(onClick = { onMove(-1) }, enabled = position > 1) {
+            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move position $position up")
+        }
+        IconButton(onClick = { onMove(1) }, enabled = position < MAX_HA_WIDGETS) {
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move position $position down")
+        }
+    }
+}
+
 // Compact label + switch row for the Settings dialog.
 @Composable
 private fun SettingsToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
@@ -196,8 +267,10 @@ fun SettingsModal(
     var selectedSpeaker by remember { mutableStateOf("") }
     var haUrl by remember { mutableStateOf("") }
     var haToken by remember { mutableStateOf("") }
-    var selectedLight by remember { mutableStateOf("") }
-    var selectedClimate by remember { mutableStateOf("") }
+    // Home Assistant widget positions, as edited here: a type (null = empty)
+    // and an entity id for each.
+    val widgetTypes = remember { mutableStateListOf<HaWidgetType?>().apply { repeat(MAX_HA_WIDGETS) { add(null) } } }
+    val widgetEntities = remember { mutableStateListOf<String>().apply { repeat(MAX_HA_WIDGETS) { add("") } } }
     var selectedHaMediaPlayer by remember { mutableStateOf("") }
     var coverFlowMode by remember { mutableStateOf("history") }
     var coverFlowLimit by remember { mutableIntStateOf(SettingsManager.COVER_FLOW_LIMIT_DEFAULT) }
@@ -234,8 +307,8 @@ fun SettingsModal(
         .collectAsState(initial = albumHistoryCount)
 
     val haManager = remember { HomeAssistantManager() }
-    var lightEntities by remember { mutableStateOf<List<String>>(emptyList()) }
-    var climateEntities by remember { mutableStateOf<List<String>>(emptyList()) }
+    // Entity ids on the connected server, by widget type.
+    var widgetEntityOptions by remember { mutableStateOf<Map<HaWidgetType, List<String>>>(emptyMap()) }
     var mediaPlayerEntities by remember { mutableStateOf<List<String>>(emptyList()) }
 
     var haConnection by remember { mutableStateOf<HaConnectionStatus>(HaConnectionStatus.NotTested) }
@@ -252,8 +325,9 @@ fun SettingsModal(
             haConnection = status
             if (status is HaConnectionStatus.Connected) {
                 haManager.fetchEntities(url, token) { all ->
-                    lightEntities = all.filter { it.startsWith("light.") }.sorted()
-                    climateEntities = all.filter { it.startsWith("climate.") }.sorted()
+                    widgetEntityOptions = HaWidgetType.entries.associateWith { type ->
+                        all.filter { it.startsWith("${type.domain}.") }.sorted()
+                    }
                     mediaPlayerEntities = all.filter { it.startsWith("media_player.") }.sorted()
                 }
             }
@@ -264,8 +338,10 @@ fun SettingsModal(
         selectedSpeaker = settingsManager.sonosSpeaker.first()
         haUrl = settingsManager.haUrl.first()
         haToken = settingsManager.haToken.first()
-        selectedLight = settingsManager.selectedLight.first()
-        selectedClimate = settingsManager.selectedClimate.first()
+        settingsManager.haWidgets.first().forEachIndexed { i, slot ->
+            widgetTypes[i] = slot?.type
+            widgetEntities[i] = slot?.entityId ?: ""
+        }
         selectedHaMediaPlayer = settingsManager.selectedHaMediaPlayer.first()
         coverFlowMode = settingsManager.coverFlowMode.first()
         coverFlowLimit = settingsManager.coverFlowLimit.first()
@@ -836,21 +912,35 @@ fun SettingsModal(
                                 HaConnectionIndicator(haConnection, modifier = Modifier.weight(1f))
                             }
 
-                            EntityAutocompleteField(
-                                label = "Light Entity",
-                                value = selectedLight,
-                                onValueChange = { selectedLight = it },
-                                suggestions = lightEntities,
-                                modifier = Modifier.fillMaxWidth()
+                            HorizontalDivider()
+                            Text("Now Playing Widgets:", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Up to $MAX_HA_WIDGETS, shown left to right across the top of Now Playing in this order.",
+                                fontSize = 12.sp,
+                                color = Color.Gray
                             )
-
-                            EntityAutocompleteField(
-                                label = "Climate Entity",
-                                value = selectedClimate,
-                                onValueChange = { selectedClimate = it },
-                                suggestions = climateEntities,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            for (i in 0 until MAX_HA_WIDGETS) {
+                                HaWidgetSlotRow(
+                                    position = i + 1,
+                                    type = widgetTypes[i],
+                                    entityId = widgetEntities[i],
+                                    suggestions = widgetTypes[i]?.let { widgetEntityOptions[it] } ?: emptyList(),
+                                    onTypeChange = { type ->
+                                        // Keep the entity only if it still fits the new type.
+                                        if (type == null || !widgetEntities[i].startsWith("${type.domain}.")) widgetEntities[i] = ""
+                                        widgetTypes[i] = type
+                                    },
+                                    onEntityChange = { widgetEntities[i] = it },
+                                    // Swaps with the neighboring position, so
+                                    // empty positions move around too.
+                                    onMove = { offset ->
+                                        val j = i + offset
+                                        widgetTypes[i] = widgetTypes[j].also { widgetTypes[j] = widgetTypes[i] }
+                                        widgetEntities[i] = widgetEntities[j].also { widgetEntities[j] = widgetEntities[i] }
+                                    }
+                                )
+                            }
+                            HorizontalDivider()
 
                             EntityAutocompleteField(
                                 label = "Fallback Media Player",
@@ -883,8 +973,7 @@ fun SettingsModal(
                         selectedSpeaker,
                         haUrl,
                         haToken,
-                        selectedLight,
-                        selectedClimate,
+                        List(MAX_HA_WIDGETS) { i -> widgetTypes[i]?.let { HaWidgetSlot(it, widgetEntities[i]) } },
                         selectedHaMediaPlayer,
                         coverFlowMode,
                         fAlbums,

@@ -19,8 +19,14 @@ class SettingsManager(private val context: Context) {
         val SELECTED_SONOS_SPEAKER = stringPreferencesKey("sonos_speaker")
         val HA_SERVER_URL = stringPreferencesKey("ha_url")
         val HA_ACCESS_TOKEN = stringPreferencesKey("ha_token")
+        // Legacy single light/climate pickers, superseded by HA_WIDGETS
+        // (read only to migrate: climate -> position 1, light -> position 2,
+        // the order they used to appear in).
         val SELECTED_LIGHT_ENTITY = stringPreferencesKey("ha_light_entity")
         val SELECTED_CLIMATE_ENTITY = stringPreferencesKey("ha_climate_entity")
+        // Now Playing's Home Assistant widgets: a JSON array of
+        // MAX_HA_WIDGETS positions, each null or {"type": <domain>, "entity": <id>}.
+        val HA_WIDGETS = stringPreferencesKey("ha_widgets")
         val SELECTED_HA_MEDIA_PLAYER = stringPreferencesKey("ha_media_player")
         val COVER_FLOW_MODE = stringPreferencesKey("cover_flow_mode") // "history" or "favorites"
         
@@ -115,8 +121,26 @@ class SettingsManager(private val context: Context) {
     val sonosSpeaker: Flow<String> = context.dataStore.data.map { it[SELECTED_SONOS_SPEAKER] ?: "" }
     val haUrl: Flow<String> = context.dataStore.data.map { it[HA_SERVER_URL] ?: "" }
     val haToken: Flow<String> = context.dataStore.data.map { it[HA_ACCESS_TOKEN] ?: "" }
-    val selectedLight: Flow<String> = context.dataStore.data.map { it[SELECTED_LIGHT_ENTITY] ?: "" }
-    val selectedClimate: Flow<String> = context.dataStore.data.map { it[SELECTED_CLIMATE_ENTITY] ?: "" }
+    // Always MAX_HA_WIDGETS long, null for an empty position.
+    val haWidgets: Flow<List<HaWidgetSlot?>> = context.dataStore.data.map { prefs ->
+        val json = prefs[HA_WIDGETS]
+        if (json == null) {
+            val legacy = listOfNotNull(
+                prefs[SELECTED_CLIMATE_ENTITY]?.takeIf { it.isNotBlank() }?.let { HaWidgetSlot(HaWidgetType.CLIMATE, it) },
+                prefs[SELECTED_LIGHT_ENTITY]?.takeIf { it.isNotBlank() }?.let { HaWidgetSlot(HaWidgetType.LIGHT, it) }
+            )
+            List(MAX_HA_WIDGETS) { legacy.getOrNull(it) }
+        } else {
+            val array = try { JSONArray(json) } catch (e: Exception) { JSONArray() }
+            List(MAX_HA_WIDGETS) { i ->
+                array.optJSONObject(i)?.let { obj ->
+                    val type = HaWidgetType.fromDomain(obj.optString("type"))
+                    val entity = obj.optString("entity")
+                    if (type != null && entity.isNotBlank()) HaWidgetSlot(type, entity) else null
+                }
+            }
+        }
+    }
     val selectedHaMediaPlayer: Flow<String> = context.dataStore.data.map { it[SELECTED_HA_MEDIA_PLAYER] ?: "" }
     val coverFlowMode: Flow<String> = context.dataStore.data.map { it[COVER_FLOW_MODE] ?: "history" }
     
@@ -274,8 +298,7 @@ class SettingsManager(private val context: Context) {
         speaker: String,
         url: String,
         token: String,
-        light: String,
-        climate: String,
+        haWidgets: List<HaWidgetSlot?>,
         haMediaPlayer: String,
         mode: String,
         fAlbums: Boolean = true,
@@ -287,8 +310,12 @@ class SettingsManager(private val context: Context) {
             prefs[SELECTED_SONOS_SPEAKER] = speaker
             prefs[HA_SERVER_URL] = url
             prefs[HA_ACCESS_TOKEN] = token
-            prefs[SELECTED_LIGHT_ENTITY] = light
-            prefs[SELECTED_CLIMATE_ENTITY] = climate
+            prefs[HA_WIDGETS] = JSONArray().apply {
+                for (i in 0 until MAX_HA_WIDGETS) {
+                    val slot = haWidgets.getOrNull(i)?.takeIf { it.entityId.isNotBlank() }
+                    put(slot?.let { JSONObject().put("type", it.type.domain).put("entity", it.entityId.trim()) } ?: JSONObject.NULL)
+                }
+            }.toString()
             prefs[SELECTED_HA_MEDIA_PLAYER] = haMediaPlayer
             prefs[COVER_FLOW_MODE] = mode
             prefs[FILTER_ALBUMS] = fAlbums

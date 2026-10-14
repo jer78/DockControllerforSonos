@@ -11,8 +11,8 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 // Instant updates from Home Assistant. Holds a WebSocket to HA's
-// /api/websocket and subscribes (subscribe_entities) to just the light,
-// climate and media player entities in use; HA then pushes a message the
+// /api/websocket and subscribes (subscribe_entities) to just the widget
+// (light/climate/cover) and media player entities in use; HA pushes a message the
 // moment any of them changes. Like the Sonos speaker events, a message only
 // says WHICH entity changed - the manager reacts by re-reading state through
 // the existing REST calls, and keeps polling (more slowly) as a fallback.

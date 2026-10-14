@@ -36,8 +36,12 @@ sits on its dock.
 - Drops into a TV screensaver after a configurable delay
 
 **Home Assistant**
+- Up to 5 widgets across the top of Now Playing, each a light, climate or
+  cover, in whatever order you choose
 - Light: on/off, brightness, colour or colour temperature
 - Climate: target temperature, mode, fan and preset
+- Cover: open, close, stop and position, with an icon matching the kind of
+  cover (blind, shade, curtain, garage door, gate, ...)
 
 **Everywhere**
 - Works as an Android screensaver (Daydream), with Settings available from it
@@ -48,7 +52,7 @@ sits on its dock.
 - Android 8.0 (API 26) or newer, on an arm64 or x86_64 device
 - Sonos speakers on the same Wi-Fi network as the device
 - Optional: a Home Assistant server and a long-lived access token, for the
-  light, climate and TV mode features
+  widgets and TV mode features
 
 Any music service connected to your Sonos system works; see
 [Music services](#music-services) for the small differences.
@@ -61,7 +65,8 @@ Any music service connected to your Sonos system works; see
    **Refresh Favorites**.
 4. **Home Assistant** (optional): enter your server URL and a long-lived access
    token (Home Assistant → your profile → Security → Long-lived access tokens),
-   then pick your light, climate and media player entities.
+   then choose a type (light, climate or cover) and an entity for each widget
+   position, plus your media player entity.
 5. Tap **Save & Apply**.
 
 To use it as a screensaver: Android Settings → Display → Screen saver → choose

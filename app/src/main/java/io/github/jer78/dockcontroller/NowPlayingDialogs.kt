@@ -211,23 +211,23 @@ private fun hvacModeColor(mode: String): Color = when (mode) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ThermostatDialog(
-    haState: HAState,
+    climate: HaClimateState,
     onSetTemp: (Double?, Double?, Double?) -> Unit,
     onSetMode: (String) -> Unit,
     onSetFan: (String) -> Unit,
     onSetPreset: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val isRange = haState.targetTempHigh != null && haState.targetTempLow != null
+    val isRange = climate.targetTempHigh != null && climate.targetTempLow != null
     // HA reports whatever step the integration declares (often 0.1 or 1.0),
     // but a 0.5° resolution is the natural granularity for Celsius
     // thermostats - force it regardless of what the entity advertises.
-    val effectiveStep = if (haState.temperatureUnit.contains("C", ignoreCase = true)) 0.5 else haState.tempStep
-    var localTemp by remember(haState.targetTemp) { mutableStateOf(roundToStep(haState.targetTemp ?: haState.minTemp, effectiveStep)) }
-    var localHigh by remember(haState.targetTempHigh) { mutableStateOf(roundToStep(haState.targetTempHigh ?: haState.maxTemp, effectiveStep)) }
-    var localLow by remember(haState.targetTempLow) { mutableStateOf(roundToStep(haState.targetTempLow ?: haState.minTemp, effectiveStep)) }
+    val effectiveStep = if (climate.temperatureUnit.contains("C", ignoreCase = true)) 0.5 else climate.tempStep
+    var localTemp by remember(climate.targetTemp) { mutableStateOf(roundToStep(climate.targetTemp ?: climate.minTemp, effectiveStep)) }
+    var localHigh by remember(climate.targetTempHigh) { mutableStateOf(roundToStep(climate.targetTempHigh ?: climate.maxTemp, effectiveStep)) }
+    var localLow by remember(climate.targetTempLow) { mutableStateOf(roundToStep(climate.targetTempLow ?: climate.minTemp, effectiveStep)) }
 
-    val modeColor = hvacModeColor(haState.hvacState)
+    val modeColor = hvacModeColor(climate.hvacState)
     val scope = rememberCoroutineScope()
     var pendingSend by remember { mutableStateOf<Job?>(null) }
 
@@ -252,7 +252,7 @@ fun ThermostatDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Climate", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(climate.name, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
                     }
@@ -270,7 +270,7 @@ fun ThermostatDialog(
                         val sweepAngle = 270f
                         val arcSize = Size(size.width - strokeWidth, size.height - strokeWidth)
                         val topLeft = Offset(strokeWidth / 2, strokeWidth / 2)
-                        val range = (haState.maxTemp - haState.minTemp).coerceAtLeast(0.1)
+                        val range = (climate.maxTemp - climate.minTemp).coerceAtLeast(0.1)
 
                         drawArc(
                             color = Color.White.copy(alpha = 0.12f),
@@ -283,8 +283,8 @@ fun ThermostatDialog(
                         )
 
                         if (isRange) {
-                            val lowFrac = ((localLow - haState.minTemp) / range).coerceIn(0.0, 1.0)
-                            val highFrac = ((localHigh - haState.minTemp) / range).coerceIn(0.0, 1.0)
+                            val lowFrac = ((localLow - climate.minTemp) / range).coerceIn(0.0, 1.0)
+                            val highFrac = ((localHigh - climate.minTemp) / range).coerceIn(0.0, 1.0)
                             drawArc(
                                 color = modeColor,
                                 startAngle = startAngle + sweepAngle * lowFrac.toFloat(),
@@ -295,7 +295,7 @@ fun ThermostatDialog(
                                 style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
                             )
                         } else {
-                            val frac = ((localTemp - haState.minTemp) / range).coerceIn(0.0, 1.0)
+                            val frac = ((localTemp - climate.minTemp) / range).coerceIn(0.0, 1.0)
                             drawArc(
                                 color = modeColor,
                                 startAngle = startAngle,
@@ -325,15 +325,15 @@ fun ThermostatDialog(
                             )
                         }
                         Text(
-                            "Current: ${haState.climateTemp}${haState.temperatureUnit}" +
-                                (haState.currentHumidity?.let { " · $it% humidity" } ?: ""),
+                            "Current: ${climate.climateTemp}${climate.temperatureUnit}" +
+                                (climate.currentHumidity?.let { " · $it% humidity" } ?: ""),
                             color = Color.White.copy(alpha = 0.6f),
                             fontSize = 12.sp,
                             textAlign = TextAlign.Center
                         )
-                        if (haState.hvacAction.isNotBlank()) {
+                        if (climate.hvacAction.isNotBlank()) {
                             Text(
-                                haState.hvacAction.uppercase(),
+                                climate.hvacAction.uppercase(),
                                 color = modeColor,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
@@ -343,8 +343,8 @@ fun ThermostatDialog(
 
                     IconButton(
                         onClick = {
-                            if (isRange) localLow = roundToStep((localLow - effectiveStep).coerceAtLeast(haState.minTemp), effectiveStep)
-                            else localTemp = roundToStep((localTemp - effectiveStep).coerceAtLeast(haState.minTemp), effectiveStep)
+                            if (isRange) localLow = roundToStep((localLow - effectiveStep).coerceAtLeast(climate.minTemp), effectiveStep)
+                            else localTemp = roundToStep((localTemp - effectiveStep).coerceAtLeast(climate.minTemp), effectiveStep)
                             scheduleSend()
                         },
                         modifier = Modifier
@@ -356,8 +356,8 @@ fun ThermostatDialog(
                     }
                     IconButton(
                         onClick = {
-                            if (isRange) localHigh = roundToStep((localHigh + effectiveStep).coerceAtMost(haState.maxTemp), effectiveStep)
-                            else localTemp = roundToStep((localTemp + effectiveStep).coerceAtMost(haState.maxTemp), effectiveStep)
+                            if (isRange) localHigh = roundToStep((localHigh + effectiveStep).coerceAtMost(climate.maxTemp), effectiveStep)
+                            else localTemp = roundToStep((localTemp + effectiveStep).coerceAtMost(climate.maxTemp), effectiveStep)
                             scheduleSend()
                         },
                         modifier = Modifier
@@ -371,13 +371,13 @@ fun ThermostatDialog(
 
                 Spacer(Modifier.height(20.dp))
 
-                if (haState.hvacModes.isNotEmpty()) {
+                if (climate.hvacModes.isNotEmpty()) {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        haState.hvacModes.forEach { mode ->
-                            val selected = haState.hvacState == mode
+                        climate.hvacModes.forEach { mode ->
+                            val selected = climate.hvacState == mode
                             FilterChip(
                                 selected = selected,
                                 onClick = { onSetMode(mode) },
@@ -398,7 +398,7 @@ fun ThermostatDialog(
                     }
                 }
 
-                if (haState.fanModes.isNotEmpty()) {
+                if (climate.fanModes.isNotEmpty()) {
                     Spacer(Modifier.height(18.dp))
                     Text("Fan", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Start))
                     Spacer(Modifier.height(6.dp))
@@ -406,9 +406,9 @@ fun ThermostatDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        haState.fanModes.forEach { fan ->
+                        climate.fanModes.forEach { fan ->
                             FilterChip(
-                                selected = haState.fanMode == fan,
+                                selected = climate.fanMode == fan,
                                 onClick = { onSetFan(fan) },
                                 label = { Text(fan.replace("_", " ").replaceFirstChar { it.uppercase() }) },
                                 colors = FilterChipDefaults.filterChipColors(
@@ -422,7 +422,7 @@ fun ThermostatDialog(
                     }
                 }
 
-                if (haState.presetModes.isNotEmpty()) {
+                if (climate.presetModes.isNotEmpty()) {
                     Spacer(Modifier.height(18.dp))
                     Text("Preset", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Start))
                     Spacer(Modifier.height(6.dp))
@@ -444,7 +444,7 @@ fun ThermostatDialog(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    haState.presetMode.ifBlank { "Select preset" }
+                                    climate.presetMode.ifBlank { "Select preset" }
                                         .replace("_", " ")
                                         .replaceFirstChar { it.uppercase() },
                                     color = Color.White
@@ -457,7 +457,7 @@ fun ThermostatDialog(
                             onDismissRequest = { presetMenuExpanded = false },
                             modifier = Modifier.background(Color(0xFF222222))
                         ) {
-                            haState.presetModes.forEach { preset ->
+                            climate.presetModes.forEach { preset ->
                                 DropdownMenuItem(
                                     text = {
                                         Text(
@@ -494,14 +494,14 @@ private val LIGHT_PRESET_COLORS = listOf(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun LightDialog(
-    haState: HAState,
+    light: HaLightState,
     onSetOn: (Boolean) -> Unit,
     onSetBrightness: (Int) -> Unit,
     onSetColorRgb: (Int, Int, Int) -> Unit,
     onSetColorTemp: (Int) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var localBrightness by remember(haState.lightBrightness) { mutableStateOf(haState.lightBrightness.toFloat()) }
+    var localBrightness by remember(light.brightness) { mutableStateOf(light.brightness.toFloat()) }
     val scope = rememberCoroutineScope()
     var pendingBrightness by remember { mutableStateOf<Job?>(null) }
 
@@ -513,11 +513,11 @@ fun LightDialog(
         }
     }
 
-    val supportsRgb = haState.lightColorModes.any { it in listOf("rgb", "rgbw", "rgbww", "hs", "xy") }
-    val supportsColorTemp = !supportsRgb && haState.lightColorModes.any { it == "color_temp" }
+    val supportsRgb = light.colorModes.any { it in listOf("rgb", "rgbw", "rgbww", "hs", "xy") }
+    val supportsColorTemp = !supportsRgb && light.colorModes.any { it == "color_temp" }
 
-    var localKelvin by remember(haState.lightColorTempKelvin) {
-        mutableStateOf((haState.lightColorTempKelvin ?: ((haState.lightMinColorTempKelvin + haState.lightMaxColorTempKelvin) / 2)).toFloat())
+    var localKelvin by remember(light.colorTempKelvin) {
+        mutableStateOf((light.colorTempKelvin ?: ((light.minColorTempKelvin + light.maxColorTempKelvin) / 2)).toFloat())
     }
     var pendingTemp by remember { mutableStateOf<Job?>(null) }
 
@@ -543,7 +543,7 @@ fun LightDialog(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Light", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Text(light.name, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         IconButton(onClick = onDismiss) {
                             Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
                         }
@@ -563,9 +563,9 @@ fun LightDialog(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(if (haState.lightOn) "On" else "Off", color = Color.White, fontSize = 16.sp)
+                            Text(if (light.isOn) "On" else "Off", color = Color.White, fontSize = 16.sp)
                             Switch(
-                                checked = haState.lightOn,
+                                checked = light.isOn,
                                 onCheckedChange = onSetOn,
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.Yellow,
@@ -595,7 +595,7 @@ fun LightDialog(
                                 fontSize = 20.sp,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .alpha(if (haState.lightOn) 1f else 0.4f)
+                                    .alpha(if (light.isOn) 1f else 0.4f)
                             )
                         }
                     }
@@ -620,7 +620,7 @@ fun LightDialog(
                                         // we send into a fairly different value once
                                         // clipped to their gamut, so match loosely by
                                         // total distance rather than per-channel equality.
-                                        val isSelected = haState.lightRgbColor?.let {
+                                        val isSelected = light.rgbColor?.let {
                                             it.size == 3 &&
                                                 (kotlin.math.abs(it[0] - r) + kotlin.math.abs(it[1] - g) + kotlin.math.abs(it[2] - b)) < 150
                                         } ?: false
@@ -657,8 +657,8 @@ fun LightDialog(
                                             localKelvin = it
                                             scheduleTemp(it.toInt())
                                         },
-                                        valueRange = haState.lightMinColorTempKelvin.toFloat()..haState.lightMaxColorTempKelvin.toFloat(),
-                                        enabled = haState.lightOn,
+                                        valueRange = light.minColorTempKelvin.toFloat()..light.maxColorTempKelvin.toFloat(),
+                                        enabled = light.isOn,
                                         modifier = Modifier
                                             .weight(1f)
                                             .padding(horizontal = 8.dp),
