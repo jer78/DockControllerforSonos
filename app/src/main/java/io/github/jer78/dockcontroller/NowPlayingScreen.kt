@@ -63,6 +63,11 @@ fun DockDashboardUI(
     onToggleJoin: (String, Boolean) -> Unit,
     onAlbumArtPositioned: (Rect) -> Unit = {},
     onHaCommand: (HaCommand) -> Unit = {},
+    // For lock and alarm actions, whose pop-ups wait for Home Assistant's answer.
+    onHaCommandWithResult: (HaCommand, (HaServiceResult) -> Unit) -> Unit = { command, onResult ->
+        onHaCommand(command)
+        onResult(HaServiceResult.Success)
+    },
     showSpectrumAnalyzer: Boolean = false,
     micPermissionGranted: Boolean = false,
     onRequestMicPermission: () -> Unit = {},
@@ -748,6 +753,7 @@ fun DockDashboardUI(
             HaWidgetDialog(
                 entity = entity,
                 onHaCommand = onHaCommand,
+                onHaCommandWithResult = onHaCommandWithResult,
                 onDismiss = { openHaEntity = null }
             )
         }

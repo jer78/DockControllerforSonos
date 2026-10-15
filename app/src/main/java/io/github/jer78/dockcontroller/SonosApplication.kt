@@ -10,5 +10,6 @@ class SonosApplication : Application() {
         if (!Python.isStarted()) {
             Python.start(AndroidPlatform(this))
         }
+        MdiIcons.preload(this)
     }
 }

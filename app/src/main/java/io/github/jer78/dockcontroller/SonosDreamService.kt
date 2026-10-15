@@ -279,7 +279,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onCenterAlbumChanged = { manager.coverFlowCenterAlbum = it },
                                         hidePrevious = coverFlowHidePrevious,
                                         hideNextUp = coverFlowHideNextUp,
-                                        hideNowPlaying = coverFlowHideNowPlaying
+                                        hideNowPlaying = coverFlowHideNowPlaying,
+                                        weather = haState.firstWeather()
                                     )
                                 }
                                 DockScreen.NOW_PLAYING -> {
@@ -305,6 +306,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onToggleJoin = { name, join -> manager.toggleSpeakerJoin(name, join) },
                                         onAlbumArtPositioned = { nowPlayingArtRect = it },
                                         onHaCommand = { manager.sendHaCommand(it) },
+                                        onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
                                         showSpectrumAnalyzer = showSpectrumAnalyzer,
                                         micPermissionGranted = micPermissionGranted,
                                         onRequestMicPermission = { requestMicPermissionViaApp() },

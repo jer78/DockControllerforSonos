@@ -110,7 +110,11 @@ enum class HaWidgetType(val domain: String, val label: String) {
     SCRIPT("script", "Script"),
     SCENE("scene", "Scene"),
     INPUT_BOOLEAN("input_boolean", "Input Boolean"),
-    WEATHER("weather", "Weather");
+    WEATHER("weather", "Weather"),
+    SENSOR("sensor", "Sensor"),
+    BINARY_SENSOR("binary_sensor", "Binary Sensor"),
+    FAN("fan", "Fan"),
+    ALARM("alarm_control_panel", "Alarm Panel");
 
     companion object {
         fun fromDomain(domain: String): HaWidgetType? = entries.find { it.domain == domain }
@@ -131,10 +135,17 @@ data class HAState(
     val entities: Map<String, HaEntityState> = emptyMap()
 )
 
+// The first weather widget's state, for Cover Flow's ambient clock.
+fun HAState.firstWeather(): HaWeatherState? =
+    widgets.firstOrNull { it.type == HaWidgetType.WEATHER }?.let { entities[it.entityId] as? HaWeatherState }
+
 sealed interface HaEntityState {
     val entityId: String
     // HA's friendly_name, falling back to the entity id.
     val name: String
+    // The icon set for the entity in HA ("mdi:garage"), if any - shown in
+    // place of the widget's own icon, as HA itself does.
+    val icon: String? get() = null
 }
 
 data class HaLightState(
@@ -147,7 +158,8 @@ data class HaLightState(
     val rgbColor: List<Int>? = null,
     val colorTempKelvin: Int? = null,
     val minColorTempKelvin: Int = 2000,
-    val maxColorTempKelvin: Int = 6500
+    val maxColorTempKelvin: Int = 6500,
+    override val icon: String? = null
 ) : HaEntityState
 
 // HA cover feature bits (CoverEntityFeature).
@@ -166,7 +178,8 @@ data class HaCoverState(
     val deviceClass: String = "",
     // 0 (closed) - 100 (open), when the cover reports it.
     val position: Int? = null,
-    val supportedFeatures: Int = 0
+    val supportedFeatures: Int = 0,
+    override val icon: String? = null
 ) : HaEntityState {
     val isMoving: Boolean get() = state == "opening" || state == "closing"
     val isOpen: Boolean get() = state == "open" || state == "opening" || (position ?: 0) > 0
@@ -180,10 +193,12 @@ data class HaLockState(
     // "locked", "unlocked", "locking", "unlocking", "jammed", "open",
     // "opening" (or "unavailable"/"unknown").
     val state: String = "unknown",
-    // HA's code_format is set when the lock needs a PIN to operate - not
-    // supported here, so the dialog says so instead of failing silently.
-    val requiresCode: Boolean = false
+    // HA's code_format is set when the lock needs a PIN to operate: a
+    // regex the code must match (e.g. "^\d{4}$").
+    val codeFormat: String? = null,
+    override val icon: String? = null
 ) : HaEntityState {
+    val requiresCode: Boolean get() = codeFormat != null
     val isLocked: Boolean get() = state == "locked"
     val isMoving: Boolean get() = state == "locking" || state == "unlocking" || state == "opening"
     val isJammed: Boolean get() = state == "jammed"
@@ -198,9 +213,82 @@ data class HaButtonState(
     // Script: "on" while running. Input boolean: "on"/"off". Scene: the time
     // it was last activated, so not meaningful as on/off.
     val state: String = "off",
-    val icon: String? = null
+    override val icon: String? = null
 ) : HaEntityState {
     val isOn: Boolean get() = type != HaWidgetType.SCENE && state == "on"
+}
+
+// A reading: temperature, power, air quality, ... or any text state.
+data class HaSensorState(
+    override val entityId: String,
+    override val name: String,
+    val state: String = "unknown",
+    val unit: String = "",
+    val deviceClass: String = "",
+    override val icon: String? = null
+) : HaEntityState
+
+// Door/window/motion/... - on means open, detected, unlocked, low battery
+// and so on, depending on the device class.
+data class HaBinarySensorState(
+    override val entityId: String,
+    override val name: String,
+    val state: String = "off",
+    val deviceClass: String = "",
+    override val icon: String? = null
+) : HaEntityState {
+    val isOn: Boolean get() = state == "on"
+}
+
+// HA fan feature bits (FanEntityFeature).
+const val FAN_FEATURE_SET_SPEED = 1
+const val FAN_FEATURE_OSCILLATE = 2
+const val FAN_FEATURE_DIRECTION = 4
+const val FAN_FEATURE_PRESET_MODE = 8
+
+data class HaFanState(
+    override val entityId: String,
+    override val name: String,
+    val state: String = "off",
+    // 0-100, when the fan has speeds.
+    val percentage: Int? = null,
+    // Size of one speed step, so a 3-speed fan snaps to 33/66/100.
+    val percentageStep: Double = 1.0,
+    val oscillating: Boolean? = null,
+    // "forward" or "reverse".
+    val direction: String? = null,
+    val presetMode: String? = null,
+    val presetModes: List<String> = emptyList(),
+    val supportedFeatures: Int = 0,
+    override val icon: String? = null
+) : HaEntityState {
+    val isOn: Boolean get() = state == "on"
+    fun supports(feature: Int): Boolean = supportedFeatures and feature != 0
+}
+
+// HA alarm panel feature bits (AlarmControlPanelEntityFeature).
+const val ALARM_FEATURE_ARM_HOME = 1
+const val ALARM_FEATURE_ARM_AWAY = 2
+const val ALARM_FEATURE_ARM_NIGHT = 4
+const val ALARM_FEATURE_ARM_CUSTOM_BYPASS = 16
+const val ALARM_FEATURE_ARM_VACATION = 32
+
+data class HaAlarmState(
+    override val entityId: String,
+    override val name: String,
+    // disarmed, armed_home, armed_away, armed_night, armed_vacation,
+    // armed_custom_bypass, arming, disarming, pending, triggered.
+    val state: String = "unknown",
+    // "number", "text" or null when no code is needed.
+    val codeFormat: String? = null,
+    // Whether arming needs the code too, not just disarming.
+    val codeArmRequired: Boolean = true,
+    val supportedFeatures: Int = 0,
+    override val icon: String? = null
+) : HaEntityState {
+    val isArmed: Boolean get() = state.startsWith("armed_")
+    val isTransitioning: Boolean get() = state == "arming" || state == "disarming" || state == "pending"
+    val isTriggered: Boolean get() = state == "triggered"
 }
 
 // HA's sun.sun, read alongside any weather widget so its icons can switch
@@ -304,6 +392,17 @@ data class HaClimateState(
     val temperatureUnit: String = "°C"
 ) : HaEntityState
 
+// How Home Assistant answered a command whose pop-up waits to hear (lock
+// and alarm actions), so a wrong code can be reported.
+sealed class HaServiceResult {
+    object Success : HaServiceResult()
+    // HA refused the call - a wrong code, typically. message is HA's own
+    // explanation, when it gave one.
+    data class Rejected(val message: String?) : HaServiceResult()
+    // The call never got an answer, so it may or may not have worked.
+    data class Unreachable(val message: String) : HaServiceResult()
+}
+
 // Something to do to one widget's entity, from Now Playing's widgets and
 // their dialogs (see SonosDashboardManager.sendHaCommand).
 sealed class HaCommand {
@@ -321,9 +420,17 @@ sealed class HaCommand {
     data class CloseCover(override val entityId: String) : HaCommand()
     data class StopCover(override val entityId: String) : HaCommand()
     data class SetCoverPosition(override val entityId: String, val position: Int) : HaCommand()
-    data class Lock(override val entityId: String) : HaCommand()
-    data class Unlock(override val entityId: String) : HaCommand()
+    data class Lock(override val entityId: String, val code: String? = null) : HaCommand()
+    data class Unlock(override val entityId: String, val code: String? = null) : HaCommand()
     data class RunScript(override val entityId: String) : HaCommand()
     data class ActivateScene(override val entityId: String) : HaCommand()
     data class ToggleInputBoolean(override val entityId: String) : HaCommand()
+    data class SetFanOn(override val entityId: String, val on: Boolean) : HaCommand()
+    data class SetFanPercentage(override val entityId: String, val percentage: Int) : HaCommand()
+    data class SetFanOscillating(override val entityId: String, val oscillating: Boolean) : HaCommand()
+    data class SetFanDirection(override val entityId: String, val direction: String) : HaCommand()
+    data class SetFanPreset(override val entityId: String, val mode: String) : HaCommand()
+    // mode: "home", "away", "night", "vacation" or "custom_bypass".
+    data class ArmAlarm(override val entityId: String, val mode: String, val code: String?) : HaCommand()
+    data class DisarmAlarm(override val entityId: String, val code: String?) : HaCommand()
 }

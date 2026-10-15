@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.pager.HorizontalPager
@@ -58,6 +59,8 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import java.text.Normalizer
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.abs
@@ -182,7 +185,10 @@ fun AmbientClockScreen(
     // Settings > Display > Cover Flow Track Cards.
     hidePrevious: Boolean = false,
     hideNextUp: Boolean = false,
-    hideNowPlaying: Boolean = false
+    hideNowPlaying: Boolean = false,
+    // The first Home Assistant weather widget's entity, shown under the
+    // clock's date when there is one.
+    weather: HaWeatherState? = null
 ) {
     var isFadingOut by remember { mutableStateOf(false) }
     // Favorite awaiting the user's confirm/cancel, and then the one they
@@ -203,6 +209,19 @@ fun AmbientClockScreen(
     if (category !in categories) category = FavoriteCategory.ALL
     val shownAlbums = remember(albumHistory, category) {
         category.kind?.let { kind -> albumHistory.filter { it.kind == kind } } ?: albumHistory
+    }
+
+    // Search, typed on Cover Flow's own keyboard. It narrows the grid only -
+    // opening it switches to the grid, and closing it clears the search and
+    // goes back to whichever view was showing.
+    var searchOpen by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var gridBeforeSearch by remember { mutableStateOf(false) }
+    val gridAlbums = remember(shownAlbums, query) { filterBySearch(shownAlbums, query) }
+    fun closeSearch() {
+        searchOpen = false
+        query = ""
+        isGridView = gridBeforeSearch
     }
 
     // Fallback if no centered card picked up the confirmed delete (e.g. the
@@ -427,9 +446,18 @@ fun AmbientClockScreen(
 
         if (shownAlbums.isNotEmpty() && isGridView) {
             CoverGrid(
-                albums = shownAlbums,
-                // Leaves room for the track cards while they're showing.
-                bottomPadding = if (trackState.isPlaying && !(hidePrevious && hideNowPlaying && hideNextUp)) 150.dp else 32.dp,
+                albums = gridAlbums,
+                // Leaves room for the search keyboard, or the track cards
+                // while they're showing.
+                bottomPadding = when {
+                    searchOpen -> SearchPanelHeight + 16.dp
+                    trackState.isPlaying && !(hidePrevious && hideNowPlaying && hideNextUp) -> 150.dp
+                    else -> 32.dp
+                },
+                // History is sorted by artist, Favorites by title.
+                letterOf = { if (isFavoritesMode) it.albumTitle else it.artist },
+                showLetterBar = !searchOpen,
+                emptyText = "No matches for \"${query.trim()}\"",
                 onPlay = { album, bounds ->
                     isFadingOut = true
                     onPlayAlbum(album, bounds)
@@ -707,9 +735,10 @@ fun AmbientClockScreen(
         // left (or no next track known), that one just stays put.
         val hasPrevious = trackState.prevTrack != "None"
         val hasNext = trackState.nextTrack != "None"
-        val showPreviousCard = trackState.isPlaying && hasPrevious && !hidePrevious
-        val showNowPlayingCard = trackState.isPlaying && !hideNowPlaying
-        val showNextUpCard = trackState.isPlaying && hasNext && !hideNextUp
+        // The search keyboard takes the bottom of the screen while it's open.
+        val showPreviousCard = trackState.isPlaying && hasPrevious && !hidePrevious && !searchOpen
+        val showNowPlayingCard = trackState.isPlaying && !hideNowPlaying && !searchOpen
+        val showNextUpCard = trackState.isPlaying && hasNext && !hideNextUp && !searchOpen
 
         AnimatedVisibility(
             visible = showPreviousCard,
@@ -800,6 +829,7 @@ fun AmbientClockScreen(
                         text = String.format(Locale.getDefault(), "%tA, %tB %te", currentTime, currentTime, currentTime).uppercase(),
                         fontSize = 16.sp, color = Color.White.copy(alpha = 0.3f), letterSpacing = 2.sp
                     )
+                    weather?.takeIf { it.temperature != null }?.let { ClockWeather(it) }
                 }
             }
         }
@@ -838,10 +868,33 @@ fun AmbientClockScreen(
                     }
                 }
                 Surface(
+                    color = if (searchOpen) Color.White.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.55f),
+                    shape = CircleShape,
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                    modifier = Modifier.clip(CircleShape).clickable {
+                        if (searchOpen) closeSearch() else {
+                            gridBeforeSearch = isGridView
+                            isGridView = true
+                            searchOpen = true
+                        }
+                    }
+                ) {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = if (searchOpen) "Close search" else "Search",
+                        tint = if (searchOpen) Color.Black else Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.padding(12.dp).size(22.dp)
+                    )
+                }
+                Surface(
                     color = Color.Black.copy(alpha = 0.55f),
                     shape = CircleShape,
                     border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
-                    modifier = Modifier.clip(CircleShape).clickable { isGridView = !isGridView }
+                    modifier = Modifier.clip(CircleShape).clickable {
+                        // Leaving the grid ends a search, which only narrows it.
+                        if (searchOpen) closeSearch()
+                        isGridView = !isGridView
+                    }
                 ) {
                     Icon(
                         if (isGridView) Icons.Default.ViewCarousel else Icons.Default.GridView,
@@ -851,6 +904,20 @@ fun AmbientClockScreen(
                     )
                 }
             }
+        }
+
+        AnimatedVisibility(
+            visible = searchOpen,
+            enter = slideInVertically(tween(350)) { it } + fadeIn(tween(350)),
+            exit = slideOutVertically(tween(300)) { it } + fadeOut(tween(300)),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            SearchPanel(
+                query = query,
+                resultCount = gridAlbums.size,
+                onQueryChange = { query = it },
+                onClose = { closeSearch() }
+            )
         }
 
         MetadataDebuggerOverlay(
@@ -927,72 +994,303 @@ fun AmbientClockScreen(
 }
 
 // Cover Flow's alternate view for big lists: rows of artwork, as many as fit
-// below the clock, scrolling left and right. A tap plays; in Favorites, a
-// long press offers to delete.
+// below the clock, scrolling left and right, with an A-Z bar above to jump
+// through them. A tap plays; in Favorites, a long press offers to delete.
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CoverGrid(
     albums: List<AlbumHistoryItem>,
     bottomPadding: Dp,
+    // The text each album is sorted by, whose first letter the A-Z bar uses.
+    letterOf: (AlbumHistoryItem) -> String,
+    showLetterBar: Boolean,
+    emptyText: String,
     onPlay: (AlbumHistoryItem, Rect) -> Unit,
     onLongPress: ((AlbumHistoryItem) -> Unit)?,
     modifier: Modifier = Modifier
 ) {
-    val animatedBottom by animateDpAsState(bottomPadding, tween(600), label = "gridBottom")
-    LazyHorizontalGrid(
-        rows = GridCells.Adaptive(minSize = 190.dp),
-        contentPadding = PaddingValues(start = 48.dp, end = 48.dp, top = 160.dp, bottom = animatedBottom),
-        horizontalArrangement = Arrangement.spacedBy(18.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-        modifier = modifier
-    ) {
-        items(albums) { album ->
-            var bounds by remember { mutableStateOf(Rect.Zero) }
-            Box(
+    val animatedBottom by animateDpAsState(bottomPadding, tween(400), label = "gridBottom")
+    val gridState = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
+    val letters = remember(albums) { albums.map { indexLetter(letterOf(it)) } }
+    // A new search or category starts from the beginning.
+    LaunchedEffect(albums) { gridState.scrollToItem(0) }
+
+    Box(modifier = modifier) {
+        if (showLetterBar && albums.size > 24) {
+            val current by remember(letters) {
+                derivedStateOf { letters.getOrNull(gridState.firstVisibleItemIndex) }
+            }
+            LetterBar(
+                present = remember(letters) { letters.toSet() },
+                current = current,
+                onLetter = { letter ->
+                    // The first album at that letter, or the next one there is.
+                    val target = INDEX_LETTERS.indexOf(letter)
+                    val index = letters.indexOfFirst { INDEX_LETTERS.indexOf(it) >= target }.takeIf { it >= 0 } ?: letters.lastIndex
+                    scope.launch { gridState.scrollToItem(index) }
+                },
                 modifier = Modifier
-                    .fillMaxHeight()
-                    .aspectRatio(1f)
-                    .onGloballyPositioned { bounds = it.boundsInWindow() }
-                    .border(1.dp, Color.White.copy(alpha = 0.1f), RectangleShape)
-                    .combinedClickable(
-                        onClick = { onPlay(album, bounds) },
-                        onLongClick = onLongPress?.let { longPress -> { longPress(album) } }
-                    )
-            ) {
-                AsyncImage(
-                    model = album.artUrl,
-                    contentDescription = album.albumTitle,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.05f))
-                )
-                // Title and artist over a shade along the bottom of the art.
-                Column(
+                    .align(Alignment.TopCenter)
+                    .padding(top = GridLetterBarTop, start = 48.dp, end = 48.dp)
+            )
+        }
+
+        if (albums.isEmpty()) {
+            Text(
+                emptyText,
+                color = Color.Gray,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Light,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
+
+        LazyHorizontalGrid(
+            state = gridState,
+            rows = GridCells.Adaptive(minSize = 190.dp),
+            contentPadding = PaddingValues(start = 48.dp, end = 48.dp, top = GridTop, bottom = animatedBottom),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(albums) { album ->
+                var bounds by remember { mutableStateOf(Rect.Zero) }
+                Box(
                     modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth()
-                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
-                        .padding(start = 10.dp, end = 10.dp, top = 24.dp, bottom = 8.dp)
+                        .fillMaxHeight()
+                        .aspectRatio(1f)
+                        .onGloballyPositioned { bounds = it.boundsInWindow() }
+                        .border(1.dp, Color.White.copy(alpha = 0.1f), RectangleShape)
+                        .combinedClickable(
+                            onClick = { onPlay(album, bounds) },
+                            onLongClick = onLongPress?.let { longPress -> { longPress(album) } }
+                        )
                 ) {
-                    Text(
-                        album.albumTitle,
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                    AsyncImage(
+                        model = album.artUrl,
+                        contentDescription = album.albumTitle,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.05f))
                     )
-                    if (album.artist.isNotBlank()) {
+                    // Title and artist over a shade along the bottom of the art.
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
+                            .padding(start = 10.dp, end = 10.dp, top = 24.dp, bottom = 8.dp)
+                    ) {
                         Text(
-                            album.artist,
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 12.sp,
+                            album.albumTitle,
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (album.artist.isNotBlank()) {
+                            Text(
+                                album.artist,
+                                color = Color.White.copy(alpha = 0.7f),
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+private val GridLetterBarTop = 150.dp
+private val GridTop = 196.dp
+
+// "#" for anything that doesn't start with a letter.
+private val INDEX_LETTERS = listOf('#') + ('A'..'Z')
+
+// The A-Z bar letter for a title/artist: its first letter with accents
+// dropped ("Édith" -> E), or # for digits and symbols.
+private fun indexLetter(text: String): Char {
+    val first = Normalizer.normalize(text.trim().take(1), Normalizer.Form.NFD).firstOrNull()?.uppercaseChar() ?: return '#'
+    return if (first in 'A'..'Z') first else '#'
+}
+
+// # and A-Z across the top of the grid. Tap a letter, or drag along the bar
+// to scrub through them; letters with no albums are dimmed (and jump to the
+// next one that has some).
+@Composable
+private fun LetterBar(
+    present: Set<Char>,
+    current: Char?,
+    onLetter: (Char) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var width by remember { mutableIntStateOf(0) }
+    var lastLetter by remember { mutableStateOf<Char?>(null) }
+    fun letterAt(x: Float): Char {
+        val i = (x / width.coerceAtLeast(1) * INDEX_LETTERS.size).toInt().coerceIn(0, INDEX_LETTERS.lastIndex)
+        return INDEX_LETTERS[i]
+    }
+    fun pick(x: Float) {
+        val letter = letterAt(x)
+        if (letter != lastLetter) {
+            lastLetter = letter
+            onLetter(letter)
+        }
+    }
+    Surface(
+        color = Color.Black.copy(alpha = 0.45f),
+        shape = RoundedCornerShape(18.dp),
+        modifier = modifier
+            .widthIn(max = 980.dp)
+            .fillMaxWidth()
+            .height(36.dp)
+            .onGloballyPositioned { width = it.size.width }
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    lastLetter = null
+                    pick(offset.x)
+                }
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { offset ->
+                        lastLetter = null
+                        pick(offset.x)
+                    },
+                    onHorizontalDrag = { change, _ ->
+                        change.consume()
+                        pick(change.position.x)
+                    }
+                )
+            }
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            INDEX_LETTERS.forEach { letter ->
+                val isCurrent = letter == current
+                Text(
+                    letter.toString(),
+                    color = when {
+                        isCurrent -> Color.Black
+                        letter in present -> Color.White.copy(alpha = 0.85f)
+                        else -> Color.White.copy(alpha = 0.25f)
+                    },
+                    fontSize = 14.sp,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 1.dp)
+                        .background(if (isCurrent) Color.White.copy(alpha = 0.85f) else Color.Transparent, CircleShape)
+                        .padding(vertical = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+// Every word typed must appear in the title or artist, ignoring case and
+// accents - so "beat abb" finds Abbey Road by The Beatles.
+private fun filterBySearch(albums: List<AlbumHistoryItem>, query: String): List<AlbumHistoryItem> {
+    val words = searchKey(query).split(' ').filter { it.isNotBlank() }
+    if (words.isEmpty()) return albums
+    return albums.filter { album ->
+        val haystack = searchKey("${album.albumTitle} ${album.artist}")
+        words.all { it in haystack }
+    }
+}
+
+private fun searchKey(text: String): String =
+    Normalizer.normalize(text, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "").lowercase()
+
+private val SearchPanelHeight = 372.dp
+
+// Cover Flow search along the bottom of the screen: what's been typed, how
+// many albums match, and the app's own keyboard.
+@Composable
+private fun SearchPanel(
+    query: String,
+    resultCount: Int,
+    onQueryChange: (String) -> Unit,
+    onClose: () -> Unit
+) {
+    Surface(
+        color = Color(0xFF1C1C1F).copy(alpha = 0.96f),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(SearchPanelHeight)
+            // Taps between the keys mustn't fall through and wake the screen.
+            .pointerInput(Unit) { detectTapGestures { } }
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 14.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Search, contentDescription = null, tint = Color.White.copy(alpha = 0.6f))
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    query.ifEmpty { "Search titles and artists" },
+                    color = Color.White.copy(alpha = if (query.isEmpty()) 0.4f else 1f),
+                    fontSize = 20.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (query.isNotEmpty()) {
+                    Text(
+                        if (resultCount == 1) "1 match" else "$resultCount matches",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 14.sp
+                    )
+                    IconButton(onClick = { onQueryChange("") }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Clear search", tint = Color.White.copy(alpha = 0.7f))
+                    }
+                }
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Close search", tint = Color.White)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            DockKeyboard(
+                onKey = { char ->
+                    // No leading or doubled spaces.
+                    if (char != ' ' || (query.isNotEmpty() && !query.endsWith(' '))) onQueryChange(query + char.lowercaseChar())
+                },
+                onBackspace = { onQueryChange(query.dropLast(1)) },
+                keyHeight = 44.dp
+            )
+        }
+    }
+}
+
+// Under the ambient clock's date: the first weather widget's condition and
+// temperature, as faint as the date itself.
+@Composable
+private fun ClockWeather(weather: HaWeatherState) {
+    val night = weather.sun?.let { !it.isUp } ?: false
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp)) {
+        Icon(
+            painterResource(weatherIconRes(weather.condition, night)),
+            contentDescription = null,
+            tint = weatherTint(weather.condition, night).copy(alpha = 0.6f),
+            modifier = Modifier.size(26.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "${weather.temperature?.roundToInt()}°  ${weatherConditionLabel(weather.condition).uppercase()}",
+            fontSize = 16.sp,
+            color = Color.White.copy(alpha = 0.4f),
+            letterSpacing = 2.sp
+        )
     }
 }
 

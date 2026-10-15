@@ -554,7 +554,7 @@ fun SettingsModal(
                                     }
                                     Text(
                                         if (coverFlowMode == "history") "Shows the most recently captured albums. Older ones are kept, just hidden, until the limit is raised."
-                                        else "Shows the first favorites alphabetically.",
+                                        else "Shows the first favorites alphabetically - up to this many albums, this many playlists and this many radio stations.",
                                         fontSize = 12.sp,
                                         color = Color.Gray
                                     )

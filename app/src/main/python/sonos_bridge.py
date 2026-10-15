@@ -59,7 +59,9 @@ def _browse_all(master, ml_item):
 def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio", limit=100):
     """
     HA-STYLE DISCOVERY: Captures native SoCo references for 100% reliable replay.
-    limit caps how many (alphabetically first) items are returned; 0 = all.
+    limit caps how many (alphabetically first) items of EACH kind - album,
+    playlist, radio - are returned, so Cover Flow's per-kind filter isn't
+    starved by the others; 0 = all.
     """
     try:
         device = get_speaker_instance(speaker_name)
@@ -153,7 +155,15 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
 
         if not results: return [{"title": "DIAG", "artist": "No items matched filters."}]
         results.sort(key=lambda x: x['title'].lower())
-        return results[:limit] if limit > 0 else results
+        if limit <= 0: return results
+        per_kind = {}
+        capped = []
+        for r in results:
+            count = per_kind.get(r['kind'], 0)
+            if count < limit:
+                per_kind[r['kind']] = count + 1
+                capped.append(r)
+        return capped
     except Exception as e:
         return [{"title": "DIAG", "artist": f"Crawl Error: {str(e)}"}]
 

@@ -40,13 +40,21 @@ sits on its dock.
   quicker for finding one album among hundreds of favorites. Tap a cover to
   play it, or long-press it to delete it from your Sonos Favorites (after a
   confirmation). Works in History mode too
+- **A-Z bar** above the grid: tap a letter, or drag along the bar, to jump
+  straight to it
+- **Search**: the magnifier button opens an on-screen keyboard; type any
+  part of a title or artist (case and accents don't matter) and the grid
+  narrows as you type
 - Cover Flow always opens on all favorites in the carousel
-- Choose how many albums it holds: 50, 100, 250, 500 or unlimited
+- Choose how many albums it holds: 50, 100, 250, 500 or unlimited (in
+  Favorites mode, that many albums, that many playlists and that many radio
+  stations)
 - Tap an album to play it; tap its X to hide it from History, or (after a
   confirmation) delete it from your Sonos Favorites
 - Previous, Now Playing and Next Up cards along the bottom, each of which
   can be hidden
-- Ambient clock, in 12- or 24-hour time
+- Ambient clock, in 12- or 24-hour time, with the current weather under the
+  date when you have a Home Assistant weather widget
 - Optional: when an album finishes, carry on with a random album from your
   Sonos Favorites
 
@@ -70,20 +78,32 @@ sits on its dock.
 - Connect button in Settings that checks your URL and token and says what's
   wrong if it can't connect
 - Up to 5 widgets across the top of Now Playing, each a light, climate,
-  cover, lock, weather, script, scene or input boolean, in whatever order
-  you choose
+  cover, lock, weather, script, scene, input boolean, sensor, binary sensor,
+  fan or alarm panel, in whatever order you choose
+- Widgets show the icon set for the entity in Home Assistant, if it has one
 - Light: on/off, brightness, colour or colour temperature
 - Climate: target temperature, mode, fan and preset; the widget shows a red
   flame for heat or a blue snowflake for cool, and glows while it's running
 - Cover: open, close, stop and position, with an icon matching the kind of
   cover (blind, shade, curtain, garage door, gate, ...)
-- Lock: lock or unlock, always behind a confirmation pop-up
+- Lock: lock or unlock, always behind a confirmation pop-up, with a number
+  pad for locks that need a code. The pop-up waits for Home Assistant's
+  answer and says "Incorrect code" if the code was wrong. Codes are never
+  saved - each one is sent to Home Assistant once and then forgotten
 - Weather: the current condition and temperature; tap for a near
   full-screen forecast with every detail the entity reports (feels like,
   humidity, wind, pressure, UV, ...), hourly with a temperature curve, and
   daily or day-and-night with temperature ranges, rain and wind
 - Script, scene and input boolean: one tap runs, activates or toggles it,
-  with no pop-up, showing the icon set for it in Home Assistant
+  with no pop-up
+- Sensor: the reading and its unit (temperature, power, air quality, ...)
+- Binary sensor: doors, windows, motion, leaks and so on, lit amber when
+  something's open or detected, red for hazards like smoke or water
+- Fan: on/off, speed, oscillation, direction and presets; the icon spins
+  while it's running
+- Alarm panel: arm (home, away, night, ...) or disarm, with a number pad or
+  keyboard for the code (wrong codes are reported, as for locks); pulses
+  amber while arming and red when triggered
 
 **Everywhere**
 - Instant updates: changes on your speakers and in Home Assistant show up
@@ -113,7 +133,8 @@ Any music service connected to your Sonos system works; see
 4. **Home Assistant** (optional): enter your server URL and a long-lived access
    token (Home Assistant → your profile → Security → Long-lived access tokens)
    and tap **Connect**. Then choose a type (light, climate, cover, lock,
-   weather, script, scene or input boolean) and
+   weather, script, scene, input boolean, sensor, binary sensor, fan or
+   alarm panel) and
    an entity for each widget position you want, using the arrows to reorder
    them, and pick the media player for TV mode. Optionally add a free
    [TMDB](https://www.themoviedb.org/settings/api) API key for better TV show

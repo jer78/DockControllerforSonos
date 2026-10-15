@@ -411,24 +411,63 @@ class HomeAssistantManager {
                 nextSetting = parseTime(attrs.optString("next_setting"))
             )
         }
+        val icon = attrs.optString("icon", "").takeIf { it.startsWith("mdi:") }
         return when (val type = HaWidgetType.fromDomain(entityId.substringBefore('.'))) {
-            HaWidgetType.LIGHT -> parseLight(entityId, name, state, attrs)
+            HaWidgetType.LIGHT -> parseLight(entityId, name, state, attrs).copy(icon = icon)
             HaWidgetType.CLIMATE -> parseClimate(entityId, name, state, attrs, temperatureUnit)
-            HaWidgetType.COVER -> parseCover(entityId, name, state, attrs)
+            HaWidgetType.COVER -> parseCover(entityId, name, state, attrs).copy(icon = icon)
             HaWidgetType.LOCK -> HaLockState(
                 entityId = entityId,
                 name = name,
                 state = state.ifBlank { "unknown" },
-                requiresCode = attrs.has("code_format") && !attrs.isNull("code_format")
+                codeFormat = attrs.stringOrNull("code_format"),
+                icon = icon
             )
             HaWidgetType.SCRIPT, HaWidgetType.SCENE, HaWidgetType.INPUT_BOOLEAN -> HaButtonState(
                 entityId = entityId,
                 name = name,
                 type = type,
                 state = state,
-                icon = attrs.optString("icon", "").takeIf { it.startsWith("mdi:") }
+                icon = icon
             )
             HaWidgetType.WEATHER -> parseWeather(entityId, name, state, attrs)
+            HaWidgetType.SENSOR -> HaSensorState(
+                entityId = entityId,
+                name = name,
+                state = state.ifBlank { "unknown" },
+                unit = attrs.optString("unit_of_measurement", ""),
+                deviceClass = attrs.optString("device_class", ""),
+                icon = icon
+            )
+            HaWidgetType.BINARY_SENSOR -> HaBinarySensorState(
+                entityId = entityId,
+                name = name,
+                state = state.ifBlank { "unknown" },
+                deviceClass = attrs.optString("device_class", ""),
+                icon = icon
+            )
+            HaWidgetType.FAN -> HaFanState(
+                entityId = entityId,
+                name = name,
+                state = state.ifBlank { "unknown" },
+                percentage = attrs.intOrNull("percentage"),
+                percentageStep = attrs.optDouble("percentage_step", 1.0).takeIf { !it.isNaN() && it > 0 } ?: 1.0,
+                oscillating = if (attrs.has("oscillating") && !attrs.isNull("oscillating")) attrs.optBoolean("oscillating") else null,
+                direction = attrs.stringOrNull("direction"),
+                presetMode = attrs.stringOrNull("preset_mode"),
+                presetModes = attrs.stringList("preset_modes"),
+                supportedFeatures = attrs.optInt("supported_features", 0),
+                icon = icon
+            )
+            HaWidgetType.ALARM -> HaAlarmState(
+                entityId = entityId,
+                name = name,
+                state = state.ifBlank { "unknown" },
+                codeFormat = attrs.stringOrNull("code_format"),
+                codeArmRequired = attrs.optBoolean("code_arm_required", true),
+                supportedFeatures = attrs.optInt("supported_features", 0),
+                icon = icon
+            )
             null -> null
         }
     }
@@ -438,6 +477,9 @@ class HomeAssistantManager {
 
     private fun JSONObject.doubleOrNull(key: String): Double? =
         if (has(key) && !isNull(key)) optDouble(key).takeIf { !it.isNaN() } else null
+
+    private fun JSONObject.stringOrNull(key: String): String? =
+        if (has(key) && !isNull(key)) optString(key).takeIf { it.isNotBlank() } else null
 
     private fun JSONObject.intOrNull(key: String): Int? =
         if (has(key) && !isNull(key)) optInt(key) else null
@@ -584,10 +626,24 @@ class HomeAssistantManager {
             supportedFeatures = attrs.optInt("supported_features", 0)
         )
 
-    // Fire-and-forget call to a HA service on one entity, e.g.
-    // ("cover", "open_cover"). Pushed state changes refresh the widget.
-    private fun callService(url: String, token: String, domain: String, service: String, entityId: String, data: JSONObject = JSONObject()) {
-        if (entityId.isBlank()) return
+    // Call to a HA service on one entity, e.g. ("cover", "open_cover").
+    // Pushed state changes refresh the widget. Fire-and-forget unless
+    // onResult is given: HA only answers once the service has run, and
+    // answers with an error status when it refuses - a wrong lock or alarm
+    // code, typically.
+    private fun callService(
+        url: String,
+        token: String,
+        domain: String,
+        service: String,
+        entityId: String,
+        data: JSONObject = JSONObject(),
+        onResult: ((HaServiceResult) -> Unit)? = null
+    ) {
+        if (entityId.isBlank()) {
+            onResult?.invoke(HaServiceResult.Rejected("No entity is set for this widget."))
+            return
+        }
         val body = data.put("entity_id", entityId).toString().toRequestBody("application/json".toMediaType())
         val request = Request.Builder()
             .url(getFullUrl(url, "/api/services/$domain/$service"))
@@ -595,9 +651,36 @@ class HomeAssistantManager {
             .addHeader("Authorization", "Bearer $token")
             .build()
         client.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) { response.close() }
+            override fun onFailure(call: Call, e: IOException) {
+                onResult?.invoke(
+                    HaServiceResult.Unreachable(
+                        if (e is SocketTimeoutException) "Home Assistant didn't answer in time - check whether it worked."
+                        else "Couldn't reach Home Assistant."
+                    )
+                )
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (onResult == null) return
+                    onResult(
+                        when {
+                            response.isSuccessful -> HaServiceResult.Success
+                            response.code == 401 -> HaServiceResult.Unreachable("Home Assistant rejected the access token.")
+                            else -> HaServiceResult.Rejected(serviceErrorMessage(response))
+                        }
+                    )
+                }
+            }
         })
+    }
+
+    // HA's explanation of a refused service call - {"message": "..."} for
+    // validation errors - or null if it sent something else.
+    private fun serviceErrorMessage(response: Response): String? = try {
+        JSONObject(response.body?.string().orEmpty()).optString("message").takeIf { it.isNotBlank() }
+    } catch (e: Exception) {
+        null
     }
 
     fun openCover(url: String, token: String, entityId: String) =
@@ -609,11 +692,36 @@ class HomeAssistantManager {
     fun stopCover(url: String, token: String, entityId: String) =
         callService(url, token, "cover", "stop_cover", entityId)
 
-    fun lock(url: String, token: String, entityId: String) =
-        callService(url, token, "lock", "lock", entityId)
+    fun lock(url: String, token: String, entityId: String, code: String? = null, onResult: ((HaServiceResult) -> Unit)? = null) =
+        callService(url, token, "lock", "lock", entityId, codeData(code), onResult)
 
-    fun unlock(url: String, token: String, entityId: String) =
-        callService(url, token, "lock", "unlock", entityId)
+    fun unlock(url: String, token: String, entityId: String, code: String? = null, onResult: ((HaServiceResult) -> Unit)? = null) =
+        callService(url, token, "lock", "unlock", entityId, codeData(code), onResult)
+
+    private fun codeData(code: String?): JSONObject =
+        JSONObject().apply { if (!code.isNullOrEmpty()) put("code", code) }
+
+    fun setFanOn(url: String, token: String, entityId: String, on: Boolean) =
+        callService(url, token, "fan", if (on) "turn_on" else "turn_off", entityId)
+
+    fun setFanPercentage(url: String, token: String, entityId: String, percentage: Int) =
+        callService(url, token, "fan", "set_percentage", entityId, JSONObject().put("percentage", percentage.coerceIn(0, 100)))
+
+    fun setFanOscillating(url: String, token: String, entityId: String, oscillating: Boolean) =
+        callService(url, token, "fan", "oscillate", entityId, JSONObject().put("oscillating", oscillating))
+
+    fun setFanDirection(url: String, token: String, entityId: String, direction: String) =
+        callService(url, token, "fan", "set_direction", entityId, JSONObject().put("direction", direction))
+
+    fun setFanPreset(url: String, token: String, entityId: String, mode: String) =
+        callService(url, token, "fan", "set_preset_mode", entityId, JSONObject().put("preset_mode", mode))
+
+    // mode: "home", "away", "night", "vacation" or "custom_bypass".
+    fun armAlarm(url: String, token: String, entityId: String, mode: String, code: String?, onResult: ((HaServiceResult) -> Unit)? = null) =
+        callService(url, token, "alarm_control_panel", "alarm_arm_$mode", entityId, codeData(code), onResult)
+
+    fun disarmAlarm(url: String, token: String, entityId: String, code: String?, onResult: ((HaServiceResult) -> Unit)? = null) =
+        callService(url, token, "alarm_control_panel", "alarm_disarm", entityId, codeData(code), onResult)
 
     fun runScript(url: String, token: String, entityId: String) =
         callService(url, token, "script", "turn_on", entityId)

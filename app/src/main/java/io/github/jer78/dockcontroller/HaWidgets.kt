@@ -66,6 +66,10 @@ fun HaWidgetRow(
                     )
                 }
                 is HaWeatherState -> WeatherWidget(entity) { onOpen(entity.entityId) }
+                is HaSensorState -> SensorWidget(entity)
+                is HaBinarySensorState -> BinarySensorWidget(entity)
+                is HaFanState -> FanWidget(entity) { onOpen(entity.entityId) }
+                is HaAlarmState -> AlarmWidget(entity) { onOpen(entity.entityId) }
                 // Only read to feed the weather widget.
                 is HaSunState -> {}
                 null -> {}
@@ -76,7 +80,14 @@ fun HaWidgetRow(
 
 // The pop-up for whichever widget was tapped.
 @Composable
-fun HaWidgetDialog(entity: HaEntityState, onHaCommand: (HaCommand) -> Unit, onDismiss: () -> Unit) {
+fun HaWidgetDialog(
+    entity: HaEntityState,
+    onHaCommand: (HaCommand) -> Unit,
+    // Lock and alarm pop-ups wait for Home Assistant's answer, so they can
+    // say when a code was wrong.
+    onHaCommandWithResult: (HaCommand, (HaServiceResult) -> Unit) -> Unit,
+    onDismiss: () -> Unit
+) {
     val id = entity.entityId
     when (entity) {
         is HaClimateState -> ThermostatDialog(
@@ -96,10 +107,12 @@ fun HaWidgetDialog(entity: HaEntityState, onHaCommand: (HaCommand) -> Unit, onDi
             onDismiss = onDismiss
         )
         is HaCoverState -> CoverDialog(cover = entity, onHaCommand = onHaCommand, onDismiss = onDismiss)
-        is HaLockState -> LockConfirmDialog(lock = entity, onHaCommand = onHaCommand, onDismiss = onDismiss)
+        is HaLockState -> LockConfirmDialog(lock = entity, onHaCommandWithResult = onHaCommandWithResult, onDismiss = onDismiss)
         is HaWeatherState -> WeatherDialog(weather = entity, onDismiss = onDismiss)
-        // Acted on straight from the widget - never opened.
-        is HaButtonState, is HaSunState -> {}
+        is HaFanState -> FanDialog(fan = entity, onHaCommand = onHaCommand, onDismiss = onDismiss)
+        is HaAlarmState -> AlarmDialog(alarm = entity, onHaCommandWithResult = onHaCommandWithResult, onDismiss = onDismiss)
+        // Acted on straight from the widget, or display-only - never opened.
+        is HaButtonState, is HaSunState, is HaSensorState, is HaBinarySensorState -> {}
     }
 }
 
@@ -169,14 +182,13 @@ private fun LightWidget(light: HaLightState, onClick: () -> Unit) {
     Surface(
         color = if (light.isOn) Color.Yellow.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.4f),
         shape = CircleShape,
-        modifier = Modifier.clip(CircleShape).clickable(onClick = onClick)
+        modifier = Modifier
+            .clip(CircleShape)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = light.name }
     ) {
         Box(modifier = Modifier.padding(10.dp)) {
-            Icon(
-                Icons.Default.Lightbulb,
-                contentDescription = light.name,
-                tint = if (light.isOn) Color.Black else Color.White
-            )
+            HaIcon(light.icon, Icons.Default.Lightbulb, tint = if (light.isOn) Color.Black else Color.White)
         }
     }
 }
@@ -197,12 +209,15 @@ private fun CoverWidget(cover: HaCoverState, onClick: () -> Unit) {
     Surface(
         color = if (cover.isOpen) CoverOpenColor.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.4f),
         shape = CircleShape,
-        modifier = Modifier.clip(CircleShape).clickable(onClick = onClick)
+        modifier = Modifier
+            .clip(CircleShape)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = cover.name }
     ) {
         Box(modifier = Modifier.padding(10.dp)) {
-            Icon(
+            HaIcon(
+                cover.icon,
                 coverIcon(cover.deviceClass, cover.isOpen),
-                contentDescription = cover.name,
                 tint = (if (cover.isOpen) Color.Black else Color.White).copy(alpha = iconAlpha)
             )
         }
@@ -298,23 +313,30 @@ private fun LockWidget(lock: HaLockState, onClick: () -> Unit) {
     Surface(
         color = background,
         shape = CircleShape,
-        modifier = Modifier.clip(CircleShape).clickable(onClick = onClick)
+        modifier = Modifier
+            .clip(CircleShape)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "${lock.name}: ${lockStatusText(lock)}" }
     ) {
         Box(modifier = Modifier.padding(10.dp)) {
-            Icon(
-                lockIcon(lock),
-                contentDescription = "${lock.name}: ${lockStatusText(lock)}",
-                tint = tint.copy(alpha = iconAlpha)
-            )
+            // A jammed lock always shows the warning, whatever its icon.
+            HaIcon(if (lock.isJammed) null else lock.icon, lockIcon(lock), tint = tint.copy(alpha = iconAlpha))
         }
     }
 }
 
 // Tapping a lock widget never acts straight away - this pop-up is the
 // confirmation, naming the lock and what will happen, and only the
-// Lock/Unlock button sends anything to Home Assistant.
+// Lock/Unlock button sends anything to Home Assistant. A lock that needs a
+// code gets a number pad beside it, and the button waits for a code that
+// fits the lock's code_format. The pop-up stays open until Home Assistant
+// answers, so a wrong code is reported there and can be re-entered.
 @Composable
-fun LockConfirmDialog(lock: HaLockState, onHaCommand: (HaCommand) -> Unit, onDismiss: () -> Unit) {
+fun LockConfirmDialog(
+    lock: HaLockState,
+    onHaCommandWithResult: (HaCommand, (HaServiceResult) -> Unit) -> Unit,
+    onDismiss: () -> Unit
+) {
     // Jammed or unknown locks are offered Lock, the safe direction.
     val willUnlock = lock.isLocked
     val actionLabel = if (willUnlock) "Unlock" else "Lock"
@@ -324,96 +346,150 @@ fun LockConfirmDialog(lock: HaLockState, onHaCommand: (HaCommand) -> Unit, onDis
         lock.isLocked -> LockLockedColor
         else -> LockUnlockedColor
     }
-    val canAct = !lock.requiresCode && !lock.isMoving && lock.state != "unavailable"
+    val canAct = !lock.isMoving && lock.state != "unavailable"
+    var code by remember { mutableStateOf("") }
+    val codeRegex = remember(lock.codeFormat) { lock.codeFormat?.let { runCatching { Regex(it) }.getOrNull() } }
+    val codeOk = !lock.requiresCode || (code.isNotEmpty() && codeRegex?.matches(code) != false)
+    var sending by remember { mutableStateOf(false) }
+    var failure by remember { mutableStateOf<HaServiceResult?>(null) }
+    var failedWithCode by remember { mutableStateOf(false) }
 
     GlassDialog(onDismissRequest = onDismiss) {
-        GlassCard(modifier = Modifier.width(380.dp)) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+        GlassCard(modifier = Modifier.width(if (lock.requiresCode && canAct) 720.dp else 380.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                modifier = Modifier.padding(24.dp)
             ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(96.dp)
-                        .background(stateColor.copy(alpha = 0.2f), CircleShape)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.width(332.dp)
                 ) {
-                    Icon(lockIcon(lock), contentDescription = null, tint = stateColor, modifier = Modifier.size(52.dp))
-                }
-
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        lock.name,
-                        color = Color.White,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(lockStatusText(lock), color = stateColor, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                }
-
-                Text(
-                    when {
-                        lock.requiresCode -> "This lock needs a code, which isn't supported here yet. Use the Home Assistant app instead."
-                        lock.isMoving -> "Wait for the lock to finish before changing it."
-                        lock.state == "unavailable" -> "Home Assistant can't reach this lock right now."
-                        else -> "$actionLabel ${lock.name}?"
-                    },
-                    color = Color.White.copy(alpha = if (canAct) 1f else 0.7f),
-                    fontSize = if (canAct) 18.sp else 14.sp,
-                    fontWeight = if (canAct) FontWeight.SemiBold else FontWeight.Normal,
-                    textAlign = TextAlign.Center
-                )
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Surface(
-                        color = Color.White.copy(alpha = 0.08f),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.weight(1f).clip(RoundedCornerShape(20.dp)).clickable(onClick = onDismiss)
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(96.dp)
+                            .background(stateColor.copy(alpha = 0.2f), CircleShape)
                     ) {
-                        Text(
-                            if (canAct) "Cancel" else "Close",
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(vertical = 16.dp)
-                        )
+                        HaIcon(if (lock.isJammed) null else lock.icon, lockIcon(lock), tint = stateColor, size = 52.dp)
                     }
-                    if (canAct) {
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            lock.name,
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(lockStatusText(lock), color = stateColor, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    Text(
+                        when {
+                            lock.isMoving -> "Wait for the lock to finish before changing it."
+                            lock.state == "unavailable" -> "Home Assistant can't reach this lock right now."
+                            lock.requiresCode -> "Enter the code to ${actionLabel.lowercase()} ${lock.name}."
+                            else -> "$actionLabel ${lock.name}?"
+                        },
+                        color = Color.White.copy(alpha = if (canAct) 1f else 0.7f),
+                        fontSize = if (canAct) 18.sp else 14.sp,
+                        fontWeight = if (canAct) FontWeight.SemiBold else FontWeight.Normal,
+                        textAlign = TextAlign.Center
+                    )
+
+                    HaCommandFeedback(failure, failedWithCode)
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Surface(
-                            color = actionColor,
+                            color = Color.White.copy(alpha = 0.08f),
                             shape = RoundedCornerShape(20.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(20.dp))
-                                .clickable {
-                                    onHaCommand(if (willUnlock) HaCommand.Unlock(lock.entityId) else HaCommand.Lock(lock.entityId))
-                                    onDismiss()
-                                }
+                            modifier = Modifier.weight(1f).clip(RoundedCornerShape(20.dp)).clickable(onClick = onDismiss)
                         ) {
-                            Row(
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(vertical = 14.dp)
+                            Text(
+                                if (canAct) "Cancel" else "Close",
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 16.dp)
+                            )
+                        }
+                        if (canAct) {
+                            val ready = codeOk && !sending
+                            Surface(
+                                color = actionColor.copy(alpha = if (ready) 1f else 0.35f),
+                                shape = RoundedCornerShape(20.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .clickable(enabled = ready) {
+                                        val sent = code.takeIf { lock.requiresCode }
+                                        sending = true
+                                        failure = null
+                                        onHaCommandWithResult(
+                                            if (willUnlock) HaCommand.Unlock(lock.entityId, sent) else HaCommand.Lock(lock.entityId, sent)
+                                        ) { result ->
+                                            sending = false
+                                            if (result is HaServiceResult.Success) onDismiss() else {
+                                                failure = result
+                                                failedWithCode = sent != null
+                                                code = ""
+                                            }
+                                        }
+                                    }
                             ) {
-                                Icon(
-                                    if (willUnlock) Icons.Default.LockOpen else Icons.Default.Lock,
-                                    contentDescription = null,
-                                    tint = Color.Black,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(actionLabel, color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                Row(
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(vertical = 14.dp)
+                                ) {
+                                    Icon(
+                                        if (willUnlock) Icons.Default.LockOpen else Icons.Default.Lock,
+                                        contentDescription = null,
+                                        tint = Color.Black,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(if (sending) "Checking..." else actionLabel, color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
                 }
+
+                if (lock.requiresCode && canAct) {
+                    PinPad(code = code, onCodeChange = {
+                        code = it
+                        failure = null
+                    })
+                }
             }
+        }
+    }
+}
+
+private val CommandFailedColor = Color(0xFFFF6E6E)
+
+// Why a lock or alarm action didn't go through, in its pop-up: "Incorrect
+// code" when a code was sent and Home Assistant refused, with HA's own
+// explanation beneath when it gave one. Nothing while there's no failure.
+@Composable
+fun HaCommandFeedback(failure: HaServiceResult?, codeWasSent: Boolean) {
+    val (headline, detail) = when (failure) {
+        is HaServiceResult.Rejected ->
+            (if (codeWasSent) "Incorrect code" else "Home Assistant couldn't do that") to failure.message
+        is HaServiceResult.Unreachable -> failure.message to null
+        else -> return
+    }
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(headline, color = CommandFailedColor, fontSize = 16.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+        detail?.let {
+            Text(it, color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, textAlign = TextAlign.Center, maxLines = 3, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -507,11 +583,11 @@ fun CoverDialog(cover: HaCoverState, onHaCommand: (HaCommand) -> Unit, onDismiss
                                 CircleShape
                             )
                     ) {
-                        Icon(
+                        HaIcon(
+                            cover.icon,
                             coverIcon(cover.deviceClass, cover.isOpen),
-                            contentDescription = null,
                             tint = if (cover.isOpen) CoverOpenColor else Color.White,
-                            modifier = Modifier.size(52.dp)
+                            size = 52.dp
                         )
                     }
                     Spacer(Modifier.height(10.dp))

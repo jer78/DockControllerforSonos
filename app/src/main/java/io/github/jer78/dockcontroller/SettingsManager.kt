@@ -40,8 +40,8 @@ class SettingsManager(private val context: Context) {
 
         val ALBUM_HISTORY_JSON = stringPreferencesKey("album_history_json")
 
-        // Most albums Cover Flow holds, in History and Favorites alike;
-        // 0 = unlimited.
+        // Most albums Cover Flow holds, in History and Favorites alike (in
+        // Favorites, per kind: albums, playlists, radio); 0 = unlimited.
         val COVER_FLOW_LIMIT = intPreferencesKey("cover_flow_limit")
 
         // Mic-based spectrum analyzer shown behind Now Playing (see SpectrumAnalyzer.kt)

@@ -966,11 +966,17 @@ class SonosDashboardManager private constructor(context: Context) {
 
     // From Now Playing's Home Assistant widgets and their dialogs. Each
     // command names its own entity, since several widgets can share a type.
-    fun sendHaCommand(command: HaCommand) {
+    // onResult (lock and alarm pop-ups) hears HA's answer, on the main
+    // thread - other commands report success as soon as they're sent.
+    fun sendHaCommand(command: HaCommand, onResult: ((HaServiceResult) -> Unit)? = null) {
+        val answer: ((HaServiceResult) -> Unit)? = onResult?.let { callback ->
+            { result -> scope.launch(Dispatchers.Main) { callback(result) } }
+        }
         scope.launch {
             val url = settingsManager.haUrl.first()
             val token = settingsManager.haToken.first()
             val id = command.entityId
+            var waitsForAnswer = false
             when (command) {
                 is HaCommand.SetClimateTemperature -> haManager.setClimateTemperature(url, token, id, command.temp, command.high, command.low)
                 is HaCommand.SetHvacMode -> haManager.setClimateHvacMode(url, token, id, command.mode)
@@ -984,12 +990,32 @@ class SonosDashboardManager private constructor(context: Context) {
                 is HaCommand.CloseCover -> haManager.closeCover(url, token, id)
                 is HaCommand.StopCover -> haManager.stopCover(url, token, id)
                 is HaCommand.SetCoverPosition -> haManager.setCoverPosition(url, token, id, command.position)
-                is HaCommand.Lock -> haManager.lock(url, token, id)
-                is HaCommand.Unlock -> haManager.unlock(url, token, id)
+                is HaCommand.Lock -> {
+                    waitsForAnswer = true
+                    haManager.lock(url, token, id, command.code, answer)
+                }
+                is HaCommand.Unlock -> {
+                    waitsForAnswer = true
+                    haManager.unlock(url, token, id, command.code, answer)
+                }
+                is HaCommand.ArmAlarm -> {
+                    waitsForAnswer = true
+                    haManager.armAlarm(url, token, id, command.mode, command.code, answer)
+                }
+                is HaCommand.DisarmAlarm -> {
+                    waitsForAnswer = true
+                    haManager.disarmAlarm(url, token, id, command.code, answer)
+                }
                 is HaCommand.RunScript -> haManager.runScript(url, token, id)
                 is HaCommand.ActivateScene -> haManager.activateScene(url, token, id)
                 is HaCommand.ToggleInputBoolean -> haManager.toggleInputBoolean(url, token, id)
+                is HaCommand.SetFanOn -> haManager.setFanOn(url, token, id, command.on)
+                is HaCommand.SetFanPercentage -> haManager.setFanPercentage(url, token, id, command.percentage)
+                is HaCommand.SetFanOscillating -> haManager.setFanOscillating(url, token, id, command.oscillating)
+                is HaCommand.SetFanDirection -> haManager.setFanDirection(url, token, id, command.direction)
+                is HaCommand.SetFanPreset -> haManager.setFanPreset(url, token, id, command.mode)
             }
+            if (!waitsForAnswer) answer?.invoke(HaServiceResult.Success)
         }
     }
 
