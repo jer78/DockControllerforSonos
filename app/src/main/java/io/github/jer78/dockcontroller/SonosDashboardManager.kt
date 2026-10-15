@@ -821,13 +821,13 @@ class SonosDashboardManager private constructor(context: Context) {
     // already looked up. Otherwise starts the lookup and fills it in once
     // it arrives - if that show is still on by then.
     private fun tvShowLogoFor(track: TrackState, tmdbKey: String): TvShowLogo? {
-        val show = detectTvShowName(track.title, track.seriesTitle) ?: return null
+        val show = detectTvShowName(track.title, track.seriesTitle, track.artist, track.album) ?: return null
         tvShowLogos.cached(show, tmdbKey)?.let { return it }
         if (tvShowLogos.claimLookup(show, tmdbKey)) {
             scope.launch {
                 val logo = tvShowLogos.lookUp(show, tmdbKey) ?: return@launch
                 _trackState.update {
-                    if (_isTvMode.value && detectTvShowName(it.title, it.seriesTitle) == show) it.copy(tvShowLogo = logo) else it
+                    if (_isTvMode.value && detectTvShowName(it.title, it.seriesTitle, it.artist, it.album) == show) it.copy(tvShowLogo = logo) else it
                 }
             }
         }

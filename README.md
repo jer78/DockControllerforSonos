@@ -46,9 +46,13 @@ sits on its dock.
 - Detects when a Sonos soundbar is playing TV audio and shows what's on, using
   a Home Assistant media player for the title, art and transport controls
 - The artwork letterboxes to 16:9, with a seek bar and time remaining
-- Recognises TV episodes (from the show name Home Assistant reports, or an
-  "S2 E3"-style title) and shows the show's title logo in place of the
-  artwork, from TMDB with a free API key or TVmaze without one
+- Recognises TV episodes (from the show name Home Assistant reports, an
+  "S2 E3"-style title, or a "Season 28, Ep. 41" line beside it) and shows the
+  show's title logo in place of the artwork, from TMDB with a free API key or
+  TVmaze without one
+- Shows with no logo get their TVmaze poster instead, with the artwork
+  reshaped to fit it, and the show's TVmaze background (when it has one)
+  behind the screen
 - Pick one fallback image for when there's no artwork, or rotate through them
 - Drops into a TV screensaver after a configurable delay
 - Experimental: unmutes automatically when a commercial break ends

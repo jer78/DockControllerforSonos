@@ -35,7 +35,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import kotlin.math.abs
+
+// Shows what TV show detection sees (title, artist, series, detected show,
+// logo source) over the artwork in TV mode. Turn on to debug detection.
+private const val SHOW_TV_DETECTION_DEBUG = false
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -143,7 +148,19 @@ fun DockDashboardUI(
                 )
             }
     ) {
-        if (artworkUrl.isNotBlank()) {
+        // A recognised TV show's own background image, when TVmaze has one,
+        // replaces the blurred artwork.
+        val showBackgroundUrl = trackState.tvShowLogo?.backgroundUrl?.takeIf { isTvMode }
+        if (showBackgroundUrl != null) {
+            AsyncImage(
+                model = showBackgroundUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(0.55f)
+            )
+        } else if (artworkUrl.isNotBlank()) {
             AsyncImage(
                 model = artworkUrl,
                 contentDescription = null,
@@ -222,12 +239,17 @@ fun DockDashboardUI(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
                 // Square for album art; in TV mode it slowly letterboxes to
                 // 16:9 (same width, top and bottom closing in), like a movie
-                // starting - and opens back up when music returns.
+                // starting - and opens back up when music returns. A show's
+                // poster takes the poster's shape instead, as tall as the
+                // room left beside the clock and seek bar allows (narrower
+                // and centred).
+                val posterAspect = trackState.tvShowLogo
+                    ?.takeIf { isTvMode && it.kind == TvShowLogo.Kind.POSTER }?.aspectRatio
                 val artAspectRatio by animateFloatAsState(
-                    targetValue = if (isTvMode) 16f / 9f else 1f,
+                    targetValue = posterAspect ?: if (isTvMode) 16f / 9f else 1f,
                     animationSpec = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
                     label = "artAspectRatio"
                 )
@@ -247,7 +269,11 @@ fun DockDashboardUI(
                     shape = RoundedCornerShape(24.dp),
                     elevation = CardDefaults.cardElevation(16.dp),
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .align(Alignment.CenterHorizontally)
+                        // Measured after the clock and seek bar, so it only
+                        // gets the height they leave; aspectRatio then fits
+                        // the full width, or narrows to fit that height.
+                        .weight(1f, fill = false)
                         .aspectRatio(artAspectRatio)
                         .onGloballyPositioned { onAlbumArtPositioned(it.boundsInWindow()) }
                 ) {
@@ -280,6 +306,35 @@ fun DockDashboardUI(
                                     modifier = Modifier.size(64.dp)
                                 )
                             }
+                        }
+
+                        // What TV show detection sees (see SHOW_TV_DETECTION_DEBUG).
+                        if (SHOW_TV_DETECTION_DEBUG && isTvMode) {
+                            val detected = detectTvShowName(trackState.title, trackState.seriesTitle, trackState.artist, trackState.album)
+                            val logoSource = when {
+                                detected == null -> "-"
+                                showLogo == null -> "none (yet, or none found)"
+                                else -> when (showLogo.kind) {
+                                    TvShowLogo.Kind.TRANSPARENT_LOGO -> "TMDB"
+                                    TvShowLogo.Kind.WHITE_BACKGROUND_LOGO -> "TVmaze"
+                                    TvShowLogo.Kind.POSTER -> "TVmaze poster"
+                                }
+                            }
+                            Text(
+                                text = "title: ${trackState.title}\n" +
+                                    "artist: ${trackState.artist}\n" +
+                                    "series: ${trackState.seriesTitle.ifBlank { "(none)" }}\n" +
+                                    "TV show: ${detected ?: "NOT DETECTED"}\n" +
+                                    "logo: $logoSource",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                lineHeight = 13.sp,
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(6.dp)
+                                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                            )
                         }
 
                         if (showSpectrumAnalyzer && micPermissionGranted && trackState.isPlaying && spectrumConfineToAlbumArt) {
@@ -720,44 +775,47 @@ fun DockDashboardUI(
     }
 }
 
-// TV mode's artwork card when the show's logo is known. A transparent
-// (TMDB) logo sits on the HA artwork, blurred and darkened so the logo
-// reads clearly; TVmaze logos come with a white background baked in, so
-// they're shown on a matching white card.
+// TV mode's artwork card when the show's logo is known: the logo over the
+// HA artwork, blurred and darkened so the logo reads clearly. TMDB logos are
+// already transparent; TVmaze ones have a white background, which is keyed
+// out first (see RemoveWhiteBackground). A poster (no logo anywhere) fills
+// the card, which has taken the poster's shape.
 @Composable
 private fun TvShowLogoArt(logo: TvShowLogo, artworkUrl: String, showName: String) {
-    if (logo.transparent) {
-        Box(
-            contentAlignment = Alignment.Center,
+    val context = LocalContext.current
+    val logoRequest = remember(logo) {
+        ImageRequest.Builder(context)
+            .data(logo.url)
+            .apply { if (logo.kind == TvShowLogo.Kind.WHITE_BACKGROUND_LOGO) transformations(RemoveWhiteBackground()) }
+            .build()
+    }
+    if (logo.kind == TvShowLogo.Kind.POSTER) {
+        AsyncImage(
+            model = logo.url,
+            contentDescription = showName.ifBlank { "Show poster" },
+            contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize().background(Color.DarkGray)
-        ) {
-            if (artworkUrl.isNotBlank()) {
-                AsyncImage(
-                    model = artworkUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().blur(16.dp)
-                )
-            }
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
+        )
+        return
+    }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.fillMaxSize().background(Color.DarkGray)
+    ) {
+        if (artworkUrl.isNotBlank()) {
             AsyncImage(
-                model = logo.url,
-                contentDescription = showName.ifBlank { "Show logo" },
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().padding(horizontal = 40.dp, vertical = 28.dp)
+                model = artworkUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().blur(16.dp)
             )
         }
-    } else {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.fillMaxSize().background(Color.White)
-        ) {
-            AsyncImage(
-                model = logo.url,
-                contentDescription = showName.ifBlank { "Show logo" },
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().padding(16.dp)
-            )
-        }
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
+        AsyncImage(
+            model = logoRequest,
+            contentDescription = showName.ifBlank { "Show logo" },
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize().padding(horizontal = 40.dp, vertical = 28.dp)
+        )
     }
 }
