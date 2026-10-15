@@ -186,7 +186,7 @@ private fun HaWidgetSlotRow(
         ExposedDropdownMenuBox(
             expanded = expanded,
             onExpandedChange = { expanded = it },
-            modifier = Modifier.width(150.dp)
+            modifier = Modifier.width(170.dp)
         ) {
             OutlinedTextField(
                 value = type?.label ?: "None",

@@ -62,13 +62,20 @@ sits on its dock.
 - Connect button in Settings that checks your URL and token and says what's
   wrong if it can't connect
 - Up to 5 widgets across the top of Now Playing, each a light, climate,
-  cover or lock, in whatever order you choose
+  cover, lock, weather, script, scene or input boolean, in whatever order
+  you choose
 - Light: on/off, brightness, colour or colour temperature
 - Climate: target temperature, mode, fan and preset; the widget shows a red
   flame for heat or a blue snowflake for cool, and glows while it's running
 - Cover: open, close, stop and position, with an icon matching the kind of
   cover (blind, shade, curtain, garage door, gate, ...)
 - Lock: lock or unlock, always behind a confirmation pop-up
+- Weather: the current condition and temperature; tap for a near
+  full-screen forecast with every detail the entity reports (feels like,
+  humidity, wind, pressure, UV, ...), hourly with a temperature curve, and
+  daily or day-and-night with temperature ranges, rain and wind
+- Script, scene and input boolean: one tap runs, activates or toggles it,
+  with no pop-up, showing the icon set for it in Home Assistant
 
 **Everywhere**
 - Instant updates: changes on your speakers and in Home Assistant show up
@@ -95,7 +102,8 @@ Any music service connected to your Sonos system works; see
    **Refresh Favorites**.
 4. **Home Assistant** (optional): enter your server URL and a long-lived access
    token (Home Assistant → your profile → Security → Long-lived access tokens)
-   and tap **Connect**. Then choose a type (light, climate, cover or lock) and
+   and tap **Connect**. Then choose a type (light, climate, cover, lock,
+   weather, script, scene or input boolean) and
    an entity for each widget position you want, using the arrows to reorder
    them, and pick the media player for TV mode. Optionally add a free
    [TMDB](https://www.themoviedb.org/settings/api) API key for better TV show
@@ -145,6 +153,11 @@ device.
 TV show logos come from [TMDB](https://www.themoviedb.org) (when you add an
 API key) or [TVmaze](https://www.tvmaze.com). This product uses the TMDB API
 but is not endorsed or certified by TMDB.
+
+Home Assistant icons are drawn with [Material Design
+Icons](https://pictogrammers.com/library/mdi/) by Pictogrammers, and weather
+icons are Google's [Material Symbols](https://fonts.google.com/icons), both
+under the Apache 2.0 license.
 
 ## License
 

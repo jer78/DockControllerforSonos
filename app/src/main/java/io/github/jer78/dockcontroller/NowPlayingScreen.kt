@@ -198,7 +198,7 @@ fun DockDashboardUI(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            HaWidgetRow(haState = haState, onOpen = { openHaEntity = it })
+            HaWidgetRow(haState = haState, onOpen = { openHaEntity = it }, onHaCommand = onHaCommand)
         }
 
         Row(

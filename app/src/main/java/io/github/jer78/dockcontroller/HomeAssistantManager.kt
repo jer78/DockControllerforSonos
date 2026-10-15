@@ -15,6 +15,7 @@ import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 // Result of the Settings > Home Assistant "Connect" check.
 sealed class HaConnectionStatus {
@@ -23,6 +24,14 @@ sealed class HaConnectionStatus {
     data class Connected(val serverName: String, val version: String) : HaConnectionStatus()
     data class Failed(val reason: String) : HaConnectionStatus()
 }
+
+// Read with any weather widget, for day/night icons.
+const val SUN_ENTITY = "sun.sun"
+
+val COMPASS_POINTS = listOf(
+    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"
+)
 
 class HomeAssistantManager {
     private val client = OkHttpClient()
@@ -340,7 +349,7 @@ class HomeAssistantManager {
     }
 
     // Reads the current state of each widget entity in parallel, parsed by
-    // its domain (light./climate./cover.). Entities that fail to load are
+    // its domain (light./climate./cover./...). Entities that fail to load are
     // left out of the result, so their widget waits rather than showing
     // made-up values.
     fun fetchEntityStates(
@@ -393,7 +402,16 @@ class HomeAssistantManager {
         val attrs = json.optJSONObject("attributes") ?: JSONObject()
         val state = json.optString("state")
         val name = attrs.optString("friendly_name", "").ifBlank { entityId }
-        return when (HaWidgetType.fromDomain(entityId.substringBefore('.'))) {
+        if (entityId == SUN_ENTITY) {
+            return HaSunState(
+                entityId = entityId,
+                name = name,
+                isUp = state != "below_horizon",
+                nextRising = parseTime(attrs.optString("next_rising")),
+                nextSetting = parseTime(attrs.optString("next_setting"))
+            )
+        }
+        return when (val type = HaWidgetType.fromDomain(entityId.substringBefore('.'))) {
             HaWidgetType.LIGHT -> parseLight(entityId, name, state, attrs)
             HaWidgetType.CLIMATE -> parseClimate(entityId, name, state, attrs, temperatureUnit)
             HaWidgetType.COVER -> parseCover(entityId, name, state, attrs)
@@ -403,6 +421,14 @@ class HomeAssistantManager {
                 state = state.ifBlank { "unknown" },
                 requiresCode = attrs.has("code_format") && !attrs.isNull("code_format")
             )
+            HaWidgetType.SCRIPT, HaWidgetType.SCENE, HaWidgetType.INPUT_BOOLEAN -> HaButtonState(
+                entityId = entityId,
+                name = name,
+                type = type,
+                state = state,
+                icon = attrs.optString("icon", "").takeIf { it.startsWith("mdi:") }
+            )
+            HaWidgetType.WEATHER -> parseWeather(entityId, name, state, attrs)
             null -> null
         }
     }
@@ -456,6 +482,98 @@ class HomeAssistantManager {
         )
     }
 
+    private fun parseWeather(entityId: String, name: String, state: String, attrs: JSONObject): HaWeatherState =
+        HaWeatherState(
+            entityId = entityId,
+            name = name,
+            condition = state.ifBlank { "unknown" },
+            temperature = attrs.doubleOrNull("temperature"),
+            apparentTemperature = attrs.doubleOrNull("apparent_temperature"),
+            dewPoint = attrs.doubleOrNull("dew_point"),
+            humidity = attrs.doubleOrNull("humidity"),
+            pressure = attrs.doubleOrNull("pressure"),
+            windSpeed = attrs.doubleOrNull("wind_speed"),
+            windGustSpeed = attrs.doubleOrNull("wind_gust_speed"),
+            windBearing = attrs.bearingOrNull("wind_bearing"),
+            cloudCoverage = attrs.doubleOrNull("cloud_coverage"),
+            uvIndex = attrs.doubleOrNull("uv_index"),
+            visibility = attrs.doubleOrNull("visibility"),
+            temperatureUnit = attrs.optString("temperature_unit", "").ifBlank { "°C" },
+            pressureUnit = attrs.optString("pressure_unit", ""),
+            windSpeedUnit = attrs.optString("wind_speed_unit", ""),
+            visibilityUnit = attrs.optString("visibility_unit", ""),
+            precipitationUnit = attrs.optString("precipitation_unit", ""),
+            supportedFeatures = attrs.optInt("supported_features", 0),
+            attribution = attrs.optString("attribution", ""),
+            // Home Assistant before 2024.3 still put the forecast in the
+            // state itself; newer versions only answer get_forecasts.
+            forecasts = HaWeatherForecasts(daily = parseForecasts(attrs.optJSONArray("forecast")))
+        )
+
+    private fun parseForecasts(array: JSONArray?): List<HaForecast> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).mapNotNull { i ->
+            val f = array.optJSONObject(i) ?: return@mapNotNull null
+            val time = parseTime(f.optString("datetime")) ?: return@mapNotNull null
+            HaForecast(
+                time = time,
+                condition = f.optString("condition", ""),
+                temperature = f.doubleOrNull("temperature"),
+                tempLow = f.doubleOrNull("templow"),
+                precipitation = f.doubleOrNull("precipitation"),
+                precipitationProbability = f.doubleOrNull("precipitation_probability")?.roundToInt(),
+                windSpeed = f.doubleOrNull("wind_speed"),
+                windBearing = f.bearingOrNull("wind_bearing"),
+                humidity = f.doubleOrNull("humidity")?.roundToInt(),
+                isDaytime = if (f.has("is_daytime") && !f.isNull("is_daytime")) f.optBoolean("is_daytime") else null
+            )
+        }.sortedBy { it.time }
+    }
+
+    // wind_bearing is degrees from most integrations, but a compass point
+    // ("NW") from some.
+    private fun JSONObject.bearingOrNull(key: String): Double? {
+        doubleOrNull(key)?.let { return it }
+        val point = optString(key, "").uppercase()
+        val index = COMPASS_POINTS.indexOf(point)
+        return if (index >= 0) index * 22.5 else null
+    }
+
+    private fun parseTime(value: String?): Long? =
+        if (value.isNullOrBlank()) null
+        else try { OffsetDateTime.parse(value).toInstant().toEpochMilli() } catch (e: Exception) { null }
+
+    // A weather entity's forecasts of one type ("hourly", "daily" or
+    // "twice_daily"), through the weather.get_forecasts service. Calls back
+    // with an empty list if it fails, or on Home Assistant too old to have
+    // the service.
+    fun fetchWeatherForecast(url: String, token: String, entityId: String, type: String, callback: (List<HaForecast>) -> Unit) {
+        val body = JSONObject().put("entity_id", entityId).put("type", type).toString()
+        val request = Request.Builder()
+            .url(getFullUrl(url, "/api/services/weather/get_forecasts?return_response"))
+            .addHeader("Authorization", "Bearer $token")
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .build()
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) { callback(emptyList()) }
+            override fun onResponse(call: Call, response: Response) {
+                val forecasts = response.use {
+                    try {
+                        if (!response.isSuccessful) return@use emptyList()
+                        val json = JSONObject(response.body?.string().orEmpty())
+                        parseForecasts(
+                            json.optJSONObject("service_response")?.optJSONObject(entityId)?.optJSONArray("forecast")
+                        )
+                    } catch (e: Exception) {
+                        Log.e("HAManager", "Forecast $entityId/$type failed", e)
+                        emptyList()
+                    }
+                }
+                callback(forecasts)
+            }
+        })
+    }
+
     private fun parseCover(entityId: String, name: String, state: String, attrs: JSONObject): HaCoverState =
         HaCoverState(
             entityId = entityId,
@@ -496,6 +614,15 @@ class HomeAssistantManager {
 
     fun unlock(url: String, token: String, entityId: String) =
         callService(url, token, "lock", "unlock", entityId)
+
+    fun runScript(url: String, token: String, entityId: String) =
+        callService(url, token, "script", "turn_on", entityId)
+
+    fun activateScene(url: String, token: String, entityId: String) =
+        callService(url, token, "scene", "turn_on", entityId)
+
+    fun toggleInputBoolean(url: String, token: String, entityId: String) =
+        callService(url, token, "input_boolean", "toggle", entityId)
 
     fun setCoverPosition(url: String, token: String, entityId: String, position: Int) =
         callService(url, token, "cover", "set_cover_position", entityId, JSONObject().put("position", position.coerceIn(0, 100)))

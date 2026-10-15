@@ -104,7 +104,11 @@ enum class HaWidgetType(val domain: String, val label: String) {
     CLIMATE("climate", "Climate"),
     LIGHT("light", "Light"),
     COVER("cover", "Cover"),
-    LOCK("lock", "Lock");
+    LOCK("lock", "Lock"),
+    SCRIPT("script", "Script"),
+    SCENE("scene", "Scene"),
+    INPUT_BOOLEAN("input_boolean", "Input Boolean"),
+    WEATHER("weather", "Weather");
 
     companion object {
         fun fromDomain(domain: String): HaWidgetType? = entries.find { it.domain == domain }
@@ -183,6 +187,98 @@ data class HaLockState(
     val isJammed: Boolean get() = state == "jammed"
 }
 
+// A script, scene or input_boolean: a one-tap button with no pop-up. icon
+// is HA's own icon for the entity ("mdi:garage"), when it has one set.
+data class HaButtonState(
+    override val entityId: String,
+    override val name: String,
+    val type: HaWidgetType,
+    // Script: "on" while running. Input boolean: "on"/"off". Scene: the time
+    // it was last activated, so not meaningful as on/off.
+    val state: String = "off",
+    val icon: String? = null
+) : HaEntityState {
+    val isOn: Boolean get() = type != HaWidgetType.SCENE && state == "on"
+}
+
+// HA's sun.sun, read alongside any weather widget so its icons can switch
+// to their night forms. Times are epoch millis.
+data class HaSunState(
+    override val entityId: String,
+    override val name: String,
+    val isUp: Boolean = true,
+    val nextRising: Long? = null,
+    val nextSetting: Long? = null
+) : HaEntityState
+
+// One forecast entry from weather.get_forecasts. Any field the integration
+// doesn't provide is null.
+data class HaForecast(
+    // Start of the hour/day/half-day, epoch millis.
+    val time: Long,
+    val condition: String = "",
+    val temperature: Double? = null,
+    val tempLow: Double? = null,
+    val precipitation: Double? = null,
+    val precipitationProbability: Int? = null,
+    val windSpeed: Double? = null,
+    val windBearing: Double? = null,
+    val humidity: Int? = null,
+    // Only twice-daily forecasts say which half of the day they cover.
+    val isDaytime: Boolean? = null
+)
+
+data class HaWeatherForecasts(
+    val hourly: List<HaForecast> = emptyList(),
+    val daily: List<HaForecast> = emptyList(),
+    val twiceDaily: List<HaForecast> = emptyList()
+) {
+    val isEmpty: Boolean get() = hourly.isEmpty() && daily.isEmpty() && twiceDaily.isEmpty()
+}
+
+// HA weather feature bits (WeatherEntityFeature).
+const val WEATHER_FEATURE_FORECAST_DAILY = 1
+const val WEATHER_FEATURE_FORECAST_HOURLY = 2
+const val WEATHER_FEATURE_FORECAST_TWICE_DAILY = 4
+
+data class HaWeatherState(
+    override val entityId: String,
+    override val name: String,
+    // HA's condition: sunny, clear-night, partlycloudy, cloudy, fog, rainy,
+    // pouring, snowy, snowy-rainy, hail, lightning, lightning-rainy, windy,
+    // windy-variant, exceptional (or "unavailable"/"unknown").
+    val condition: String = "unknown",
+    val temperature: Double? = null,
+    val apparentTemperature: Double? = null,
+    val dewPoint: Double? = null,
+    val humidity: Double? = null,
+    val pressure: Double? = null,
+    val windSpeed: Double? = null,
+    val windGustSpeed: Double? = null,
+    val windBearing: Double? = null,
+    val cloudCoverage: Double? = null,
+    val uvIndex: Double? = null,
+    val visibility: Double? = null,
+    val temperatureUnit: String = "°C",
+    val pressureUnit: String = "",
+    val windSpeedUnit: String = "",
+    val visibilityUnit: String = "",
+    val precipitationUnit: String = "",
+    val supportedFeatures: Int = 0,
+    val attribution: String = "",
+    // Filled in separately (see SonosDashboardManager), since HA only hands
+    // forecasts out through a service call rather than the entity state.
+    val forecasts: HaWeatherForecasts = HaWeatherForecasts(),
+    val sun: HaSunState? = null
+) : HaEntityState {
+    // Forecast types this entity says it can provide.
+    val forecastTypes: List<String> get() = buildList {
+        if (supportedFeatures and WEATHER_FEATURE_FORECAST_HOURLY != 0) add("hourly")
+        if (supportedFeatures and WEATHER_FEATURE_FORECAST_DAILY != 0) add("daily")
+        if (supportedFeatures and WEATHER_FEATURE_FORECAST_TWICE_DAILY != 0) add("twice_daily")
+    }
+}
+
 data class HaClimateState(
     override val entityId: String,
     override val name: String,
@@ -225,4 +321,7 @@ sealed class HaCommand {
     data class SetCoverPosition(override val entityId: String, val position: Int) : HaCommand()
     data class Lock(override val entityId: String) : HaCommand()
     data class Unlock(override val entityId: String) : HaCommand()
+    data class RunScript(override val entityId: String) : HaCommand()
+    data class ActivateScene(override val entityId: String) : HaCommand()
+    data class ToggleInputBoolean(override val entityId: String) : HaCommand()
 }

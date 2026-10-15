@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -922,12 +923,13 @@ private val LocalGlassBlurActive = compositionLocalOf { false }
 @Composable
 fun GlassDialog(
     onDismissRequest: () -> Unit,
+    properties: DialogProperties = DialogProperties(),
     content: @Composable () -> Unit
 ) {
     // Inside the screensaver: drawn in the dream's own window, which blurs
     // what's behind it itself (see InWindowDialogs.kt).
     if (LocalInWindowDialogHost.current != null) {
-        DockDialog(onDismissRequest = onDismissRequest) {
+        DockDialog(onDismissRequest = onDismissRequest, properties = properties) {
             CompositionLocalProvider(LocalGlassBlurActive provides inWindowBlurSupported) {
                 content()
             }
@@ -935,7 +937,7 @@ fun GlassDialog(
         return
     }
 
-    Dialog(onDismissRequest = onDismissRequest) {
+    Dialog(onDismissRequest = onDismissRequest, properties = properties) {
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
         val blurRadiusPx = with(LocalDensity.current) { 30.dp.roundToPx() }
         var blurActive by remember { mutableStateOf(false) }

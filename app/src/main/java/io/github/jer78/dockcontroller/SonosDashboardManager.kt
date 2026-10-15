@@ -101,6 +101,8 @@ class SonosDashboardManager private constructor(context: Context) {
         // every real change, this just catches anything missed. Playback
         // position ticks along locally in the UI in between.
         private const val ACTIVE_EVENT_FALLBACK_MS = 10000L
+        private const val FORECAST_REFRESH_MS = 15 * 60 * 1000L
+        private const val FORECAST_RETRY_MS = 60 * 1000L
         private const val IDLE_EVENT_FALLBACK_MS = 30000L
         private const val FAVORITES_REFRESH_INTERVAL_MS = 60 * 60 * 1000L
         private const val GROUPS_REFRESH_INTERVAL_MS = 10000L
@@ -846,6 +848,55 @@ class SonosDashboardManager private constructor(context: Context) {
     // the widget list changing in Settings.
     private val haWake = Channel<Unit>(Channel.CONFLATED)
 
+    // Each weather widget's forecasts, refreshed every FORECAST_REFRESH_MS
+    // rather than on every state change - they're service calls, and
+    // forecasts only move slowly.
+    private data class CachedForecasts(val forecasts: HaWeatherForecasts, val fetchedAt: Long)
+    private val forecastCache = java.util.concurrent.ConcurrentHashMap<String, CachedForecasts>()
+    private val forecastsLoading = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private fun refreshForecastsIfStale(url: String, token: String, weather: HaWeatherState) {
+        val id = weather.entityId
+        val cached = forecastCache[id]
+        if (cached != null && System.currentTimeMillis() - cached.fetchedAt < FORECAST_REFRESH_MS) return
+        val types = weather.forecastTypes
+        if (types.isEmpty() || !forecastsLoading.add(id)) return
+        val results = java.util.concurrent.ConcurrentHashMap<String, List<HaForecast>>()
+        val remaining = java.util.concurrent.atomic.AtomicInteger(types.size)
+        types.forEach { type ->
+            haManager.fetchWeatherForecast(url, token, id, type) { forecasts ->
+                results[type] = forecasts
+                if (remaining.decrementAndGet() > 0) return@fetchWeatherForecast
+                val loaded = HaWeatherForecasts(
+                    hourly = results["hourly"].orEmpty(),
+                    daily = results["daily"].orEmpty(),
+                    twiceDaily = results["twice_daily"].orEmpty()
+                )
+                // A failed fetch keeps whatever was there and tries again
+                // sooner, rather than wiping the forecast.
+                val now = System.currentTimeMillis()
+                forecastCache[id] = if (loaded.isEmpty) {
+                    CachedForecasts(cached?.forecasts ?: loaded, now - FORECAST_REFRESH_MS + FORECAST_RETRY_MS)
+                } else {
+                    CachedForecasts(loaded, now)
+                }
+                forecastsLoading.remove(id)
+                _haState.update { old -> old.copy(entities = old.entities.mapValues { (_, e) -> withForecasts(e, old.entities) }) }
+            }
+        }
+    }
+
+    // Fills a weather entity's forecasts (from the cache, else whatever its
+    // state carried) and the sun's position; anything else passes through.
+    private fun withForecasts(entity: HaEntityState, all: Map<String, HaEntityState>): HaEntityState {
+        if (entity !is HaWeatherState) return entity
+        val cached = forecastCache[entity.entityId]?.forecasts?.takeUnless { it.isEmpty }
+        return entity.copy(
+            forecasts = cached ?: entity.forecasts,
+            sun = all[SUN_ENTITY] as? HaSunState
+        )
+    }
+
     private suspend fun pollHA() {
         coroutineScope {
             launch { settingsManager.haWidgets.distinctUntilChanged().drop(1).collect { haWake.trySend(Unit) } }
@@ -859,8 +910,10 @@ class SonosDashboardManager private constructor(context: Context) {
             val token = settingsManager.haToken.first()
             val widgets = settingsManager.haWidgets.first().filterNotNull()
             val widgetEntities = widgets.map { it.entityId }.distinct()
+            // The sun comes along with any weather widget, for night icons.
+            val stateEntities = if (widgetEntities.any { it.startsWith("weather.") }) widgetEntities + SUN_ENTITY else widgetEntities
             val haMedia = settingsManager.selectedHaMediaPlayer.first()
-            haEvents.ensure(url, token, widgetEntities + haMedia) { entityId ->
+            haEvents.ensure(url, token, stateEntities + haMedia) { entityId ->
                 if (entityId == haMedia) {
                     // TV mode's title/art/position come from this entity,
                     // fetched by the Sonos loop - wake that one instead.
@@ -883,18 +936,17 @@ class SonosDashboardManager private constructor(context: Context) {
                         cachedTemperatureUnitFor = cacheKey
                     }
                 }
-                haManager.fetchEntityStates(url, token, widgetEntities, cachedTemperatureUnit) { entities ->
+                haManager.fetchEntityStates(url, token, stateEntities, cachedTemperatureUnit) { entities ->
                     // Keep the last known state of anything that failed to
                     // load this time, so a dropped request doesn't make its
                     // widget blink out.
                     _haState.update { old ->
-                        HAState(
-                            widgets = widgets,
-                            entities = widgetEntities.mapNotNull { id ->
-                                (entities[id] ?: old.entities[id])?.let { id to it }
-                            }.toMap()
-                        )
+                        val merged = stateEntities.mapNotNull { id ->
+                            (entities[id] ?: old.entities[id])?.let { id to it }
+                        }.toMap()
+                        HAState(widgets = widgets, entities = merged.mapValues { (_, e) -> withForecasts(e, merged) })
                     }
+                    entities.values.filterIsInstance<HaWeatherState>().forEach { refreshForecastsIfStale(url, token, it) }
                 }
             } else {
                 _haState.value = HAState()
@@ -933,6 +985,9 @@ class SonosDashboardManager private constructor(context: Context) {
                 is HaCommand.SetCoverPosition -> haManager.setCoverPosition(url, token, id, command.position)
                 is HaCommand.Lock -> haManager.lock(url, token, id)
                 is HaCommand.Unlock -> haManager.unlock(url, token, id)
+                is HaCommand.RunScript -> haManager.runScript(url, token, id)
+                is HaCommand.ActivateScene -> haManager.activateScene(url, token, id)
+                is HaCommand.ToggleInputBoolean -> haManager.toggleInputBoolean(url, token, id)
             }
         }
     }

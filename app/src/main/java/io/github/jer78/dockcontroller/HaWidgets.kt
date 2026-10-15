@@ -19,6 +19,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -33,9 +35,15 @@ private val CoverOpenColor = Color(0xFF64B5F6)
 
 // Now Playing's top-left row of Home Assistant widgets, in the positions
 // picked in Settings. Drawn by the entity's actual state type, so a light
-// typed into a "Climate" position still shows as a light.
+// typed into a "Climate" position still shows as a light. Scripts, scenes
+// and input booleans act straight away on a tap; the rest open a pop-up.
 @Composable
-fun HaWidgetRow(haState: HAState, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
+fun HaWidgetRow(
+    haState: HAState,
+    onOpen: (String) -> Unit,
+    onHaCommand: (HaCommand) -> Unit,
+    modifier: Modifier = Modifier
+) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -47,6 +55,19 @@ fun HaWidgetRow(haState: HAState, onOpen: (String) -> Unit, modifier: Modifier =
                 is HaLightState -> LightWidget(entity) { onOpen(entity.entityId) }
                 is HaCoverState -> CoverWidget(entity) { onOpen(entity.entityId) }
                 is HaLockState -> LockWidget(entity) { onOpen(entity.entityId) }
+                is HaButtonState -> ButtonWidget(entity) {
+                    val id = entity.entityId
+                    onHaCommand(
+                        when (entity.type) {
+                            HaWidgetType.SCENE -> HaCommand.ActivateScene(id)
+                            HaWidgetType.INPUT_BOOLEAN -> HaCommand.ToggleInputBoolean(id)
+                            else -> HaCommand.RunScript(id)
+                        }
+                    )
+                }
+                is HaWeatherState -> WeatherWidget(entity) { onOpen(entity.entityId) }
+                // Only read to feed the weather widget.
+                is HaSunState -> {}
                 null -> {}
             }
         }
@@ -76,6 +97,9 @@ fun HaWidgetDialog(entity: HaEntityState, onHaCommand: (HaCommand) -> Unit, onDi
         )
         is HaCoverState -> CoverDialog(cover = entity, onHaCommand = onHaCommand, onDismiss = onDismiss)
         is HaLockState -> LockConfirmDialog(lock = entity, onHaCommand = onHaCommand, onDismiss = onDismiss)
+        is HaWeatherState -> WeatherDialog(weather = entity, onDismiss = onDismiss)
+        // Acted on straight from the widget - never opened.
+        is HaButtonState, is HaSunState -> {}
     }
 }
 
@@ -180,6 +204,51 @@ private fun CoverWidget(cover: HaCoverState, onClick: () -> Unit) {
                 coverIcon(cover.deviceClass, cover.isOpen),
                 contentDescription = cover.name,
                 tint = (if (cover.isOpen) Color.Black else Color.White).copy(alpha = iconAlpha)
+            )
+        }
+    }
+}
+
+private val ButtonOnColor = Color(0xFF03A9F4)
+
+// HA's own default icons for each domain, used when the entity has no icon
+// of its own set (or this font doesn't know the one it has).
+private fun defaultButtonIcon(button: HaButtonState): String = when (button.type) {
+    HaWidgetType.SCENE -> "palette"
+    HaWidgetType.INPUT_BOOLEAN -> if (button.isOn) "toggle-switch" else "toggle-switch-off"
+    else -> if (button.isOn) "script-text-play" else "script-text"
+}
+
+// A script, scene or input boolean, showing the entity's icon from Home
+// Assistant. Lit blue while an input boolean is on or a script is running.
+// A tap flashes the chip so a scene (which has no on state) or a quick
+// script still visibly responds.
+@Composable
+private fun ButtonWidget(button: HaButtonState, onClick: () -> Unit) {
+    var tapCount by remember { mutableIntStateOf(0) }
+    val flash = remember { Animatable(0f) }
+    LaunchedEffect(tapCount) {
+        if (tapCount == 0) return@LaunchedEffect
+        flash.snapTo(1f)
+        flash.animateTo(0f, tween(900, easing = FastOutSlowInEasing))
+    }
+    val lit = if (button.isOn) 1f else flash.value
+    val unavailable = button.state == "unavailable"
+    Surface(
+        color = lerp(Color.Black.copy(alpha = 0.4f), ButtonOnColor.copy(alpha = 0.85f), lit),
+        shape = CircleShape,
+        modifier = Modifier
+            .clip(CircleShape)
+            .clickable(enabled = !unavailable) {
+                tapCount++
+                onClick()
+            }
+            .semantics { contentDescription = button.name }
+    ) {
+        Box(modifier = Modifier.padding(10.dp)) {
+            MdiIcons.Icon(
+                names = listOfNotNull(button.icon, defaultButtonIcon(button)),
+                tint = lerp(Color.White, Color.Black, lit).copy(alpha = if (unavailable) 0.4f else 1f)
             )
         }
     }
