@@ -15,10 +15,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,6 +46,7 @@ fun HaWidgetRow(haState: HAState, onOpen: (String) -> Unit, modifier: Modifier =
                 is HaClimateState -> ClimateWidget(entity) { onOpen(entity.entityId) }
                 is HaLightState -> LightWidget(entity) { onOpen(entity.entityId) }
                 is HaCoverState -> CoverWidget(entity) { onOpen(entity.entityId) }
+                is HaLockState -> LockWidget(entity) { onOpen(entity.entityId) }
                 null -> {}
             }
         }
@@ -72,13 +75,47 @@ fun HaWidgetDialog(entity: HaEntityState, onHaCommand: (HaCommand) -> Unit, onDi
             onDismiss = onDismiss
         )
         is HaCoverState -> CoverDialog(cover = entity, onHaCommand = onHaCommand, onDismiss = onDismiss)
+        is HaLockState -> LockConfirmDialog(lock = entity, onHaCommand = onHaCommand, onDismiss = onDismiss)
     }
 }
 
+private val ClimateHeatColor = Color(0xFFFF4D3D)
+private val ClimateCoolColor = Color(0xFF4FC3F7)
+
+// Icon and color follow what the system is doing: a red flame for heat, a
+// blue snowflake for cool (in heat/cool or auto mode, whichever it's
+// actively doing). While HA reports it actually running (hvac_action), the
+// chip "breathes" - a slow glow in that color with the icon swelling
+// slightly - and goes still once the room reaches its target.
 @Composable
 private fun ClimateWidget(climate: HaClimateState, onClick: () -> Unit) {
+    val mode = when (climate.hvacAction) {
+        "heating", "preheating" -> "heat"
+        "cooling" -> "cool"
+        else -> climate.hvacState
+    }
+    val (icon, tint) = when (mode) {
+        "heat" -> Icons.Default.LocalFireDepartment to ClimateHeatColor
+        "cool" -> Icons.Default.AcUnit to ClimateCoolColor
+        "dry" -> Icons.Default.WaterDrop to Color(0xFFFFC107)
+        "fan_only" -> Icons.Default.Air to Color.White
+        else -> Icons.Default.Thermostat to Color.White
+    }
+    val isRunning = climate.hvacAction in setOf("heating", "preheating", "cooling", "drying", "fan")
+
+    val breath = if (isRunning) {
+        val transition = rememberInfiniteTransition(label = "climateRunning")
+        val value by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "climateBreath"
+        )
+        value
+    } else 0f
+
     Surface(
-        color = Color.Black.copy(alpha = 0.4f),
+        color = lerp(Color.Black.copy(alpha = 0.4f), tint.copy(alpha = 0.35f), breath),
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier.clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick)
     ) {
@@ -86,26 +123,12 @@ private fun ClimateWidget(climate: HaClimateState, onClick: () -> Unit) {
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (climate.isFanRunning) {
-                val infiniteTransition = rememberInfiniteTransition(label = "fan")
-                val rotation by infiniteTransition.animateFloat(
-                    initialValue = 0f,
-                    targetValue = 360f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(1500, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart
-                    ),
-                    label = "fanRotation"
-                )
-                Icon(
-                    Icons.Default.Cyclone,
-                    contentDescription = null,
-                    tint = Color.Cyan,
-                    modifier = Modifier.rotate(rotation)
-                )
-            } else {
-                Icon(Icons.Default.Thermostat, contentDescription = null, tint = Color.White)
-            }
+            Icon(
+                icon,
+                contentDescription = if (isRunning) "${climate.name}: ${climate.hvacAction}" else climate.name,
+                tint = tint,
+                modifier = Modifier.scale(1f + 0.12f * breath)
+            )
 
             Spacer(modifier = Modifier.width(6.dp))
             Text(
@@ -158,6 +181,170 @@ private fun CoverWidget(cover: HaCoverState, onClick: () -> Unit) {
                 contentDescription = cover.name,
                 tint = (if (cover.isOpen) Color.Black else Color.White).copy(alpha = iconAlpha)
             )
+        }
+    }
+}
+
+private val LockUnlockedColor = Color(0xFFFFB300)
+private val LockLockedColor = Color(0xFF66BB6A)
+private val LockJammedColor = Color(0xFFE53935)
+
+private fun lockIcon(lock: HaLockState): ImageVector = when {
+    lock.isJammed -> Icons.Default.Warning
+    lock.isLocked || lock.state == "locking" -> Icons.Default.Lock
+    else -> Icons.Default.LockOpen
+}
+
+private fun lockStatusText(lock: HaLockState): String = when (lock.state) {
+    "locked" -> "Locked"
+    "unlocked" -> "Unlocked"
+    "locking" -> "Locking..."
+    "unlocking" -> "Unlocking..."
+    "opening" -> "Opening..."
+    "open" -> "Open"
+    "jammed" -> "Jammed"
+    else -> lock.state.replaceFirstChar { it.uppercase() }
+}
+
+// Quiet while locked; amber while unlocked (the state worth noticing), red
+// if jammed, pulsing while it's locking or unlocking.
+@Composable
+private fun LockWidget(lock: HaLockState, onClick: () -> Unit) {
+    val iconAlpha = if (lock.isMoving) {
+        val pulse = rememberInfiniteTransition(label = "lockMoving")
+        val alpha by pulse.animateFloat(
+            initialValue = 1f,
+            targetValue = 0.35f,
+            animationSpec = infiniteRepeatable(tween(600, easing = LinearEasing), RepeatMode.Reverse),
+            label = "lockMovingAlpha"
+        )
+        alpha
+    } else 1f
+    val unlocked = lock.state in setOf("unlocked", "unlocking", "open", "opening")
+    val (background, tint) = when {
+        lock.isJammed -> LockJammedColor.copy(alpha = 0.85f) to Color.White
+        unlocked -> LockUnlockedColor.copy(alpha = 0.85f) to Color.Black
+        else -> Color.Black.copy(alpha = 0.4f) to Color.White
+    }
+    Surface(
+        color = background,
+        shape = CircleShape,
+        modifier = Modifier.clip(CircleShape).clickable(onClick = onClick)
+    ) {
+        Box(modifier = Modifier.padding(10.dp)) {
+            Icon(
+                lockIcon(lock),
+                contentDescription = "${lock.name}: ${lockStatusText(lock)}",
+                tint = tint.copy(alpha = iconAlpha)
+            )
+        }
+    }
+}
+
+// Tapping a lock widget never acts straight away - this pop-up is the
+// confirmation, naming the lock and what will happen, and only the
+// Lock/Unlock button sends anything to Home Assistant.
+@Composable
+fun LockConfirmDialog(lock: HaLockState, onHaCommand: (HaCommand) -> Unit, onDismiss: () -> Unit) {
+    // Jammed or unknown locks are offered Lock, the safe direction.
+    val willUnlock = lock.isLocked
+    val actionLabel = if (willUnlock) "Unlock" else "Lock"
+    val actionColor = if (willUnlock) LockUnlockedColor else LockLockedColor
+    val stateColor = when {
+        lock.isJammed -> LockJammedColor
+        lock.isLocked -> LockLockedColor
+        else -> LockUnlockedColor
+    }
+    val canAct = !lock.requiresCode && !lock.isMoving && lock.state != "unavailable"
+
+    GlassDialog(onDismissRequest = onDismiss) {
+        GlassCard(modifier = Modifier.width(380.dp)) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(96.dp)
+                        .background(stateColor.copy(alpha = 0.2f), CircleShape)
+                ) {
+                    Icon(lockIcon(lock), contentDescription = null, tint = stateColor, modifier = Modifier.size(52.dp))
+                }
+
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        lock.name,
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(lockStatusText(lock), color = stateColor, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                }
+
+                Text(
+                    when {
+                        lock.requiresCode -> "This lock needs a code, which isn't supported here yet. Use the Home Assistant app instead."
+                        lock.isMoving -> "Wait for the lock to finish before changing it."
+                        lock.state == "unavailable" -> "Home Assistant can't reach this lock right now."
+                        else -> "$actionLabel ${lock.name}?"
+                    },
+                    color = Color.White.copy(alpha = if (canAct) 1f else 0.7f),
+                    fontSize = if (canAct) 18.sp else 14.sp,
+                    fontWeight = if (canAct) FontWeight.SemiBold else FontWeight.Normal,
+                    textAlign = TextAlign.Center
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Surface(
+                        color = Color.White.copy(alpha = 0.08f),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.weight(1f).clip(RoundedCornerShape(20.dp)).clickable(onClick = onDismiss)
+                    ) {
+                        Text(
+                            if (canAct) "Cancel" else "Close",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(vertical = 16.dp)
+                        )
+                    }
+                    if (canAct) {
+                        Surface(
+                            color = actionColor,
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable {
+                                    onHaCommand(if (willUnlock) HaCommand.Unlock(lock.entityId) else HaCommand.Lock(lock.entityId))
+                                    onDismiss()
+                                }
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(vertical = 14.dp)
+                            ) {
+                                Icon(
+                                    if (willUnlock) Icons.Default.LockOpen else Icons.Default.Lock,
+                                    contentDescription = null,
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(actionLabel, color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

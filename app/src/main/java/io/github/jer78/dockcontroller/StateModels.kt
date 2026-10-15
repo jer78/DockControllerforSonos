@@ -97,7 +97,8 @@ data class SonosAudioSettings(
 enum class HaWidgetType(val domain: String, val label: String) {
     CLIMATE("climate", "Climate"),
     LIGHT("light", "Light"),
-    COVER("cover", "Cover");
+    COVER("cover", "Cover"),
+    LOCK("lock", "Lock");
 
     companion object {
         fun fromDomain(domain: String): HaWidgetType? = entries.find { it.domain == domain }
@@ -161,6 +162,21 @@ data class HaCoverState(
     val supportsStop: Boolean get() = supportedFeatures and COVER_FEATURE_STOP != 0
 }
 
+data class HaLockState(
+    override val entityId: String,
+    override val name: String,
+    // "locked", "unlocked", "locking", "unlocking", "jammed", "open",
+    // "opening" (or "unavailable"/"unknown").
+    val state: String = "unknown",
+    // HA's code_format is set when the lock needs a PIN to operate - not
+    // supported here, so the dialog says so instead of failing silently.
+    val requiresCode: Boolean = false
+) : HaEntityState {
+    val isLocked: Boolean get() = state == "locked"
+    val isMoving: Boolean get() = state == "locking" || state == "unlocking" || state == "opening"
+    val isJammed: Boolean get() = state == "jammed"
+}
+
 data class HaClimateState(
     override val entityId: String,
     override val name: String,
@@ -201,4 +217,6 @@ sealed class HaCommand {
     data class CloseCover(override val entityId: String) : HaCommand()
     data class StopCover(override val entityId: String) : HaCommand()
     data class SetCoverPosition(override val entityId: String, val position: Int) : HaCommand()
+    data class Lock(override val entityId: String) : HaCommand()
+    data class Unlock(override val entityId: String) : HaCommand()
 }

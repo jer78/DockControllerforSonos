@@ -396,6 +396,12 @@ class HomeAssistantManager {
             HaWidgetType.LIGHT -> parseLight(entityId, name, state, attrs)
             HaWidgetType.CLIMATE -> parseClimate(entityId, name, state, attrs, temperatureUnit)
             HaWidgetType.COVER -> parseCover(entityId, name, state, attrs)
+            HaWidgetType.LOCK -> HaLockState(
+                entityId = entityId,
+                name = name,
+                state = state.ifBlank { "unknown" },
+                requiresCode = attrs.has("code_format") && !attrs.isNull("code_format")
+            )
             null -> null
         }
     }
@@ -483,6 +489,12 @@ class HomeAssistantManager {
 
     fun stopCover(url: String, token: String, entityId: String) =
         callService(url, token, "cover", "stop_cover", entityId)
+
+    fun lock(url: String, token: String, entityId: String) =
+        callService(url, token, "lock", "lock", entityId)
+
+    fun unlock(url: String, token: String, entityId: String) =
+        callService(url, token, "lock", "unlock", entityId)
 
     fun setCoverPosition(url: String, token: String, entityId: String, position: Int) =
         callService(url, token, "cover", "set_cover_position", entityId, JSONObject().put("position", position.coerceIn(0, 100)))

@@ -903,6 +903,8 @@ class SonosDashboardManager private constructor(context: Context) {
                 is HaCommand.CloseCover -> haManager.closeCover(url, token, id)
                 is HaCommand.StopCover -> haManager.stopCover(url, token, id)
                 is HaCommand.SetCoverPosition -> haManager.setCoverPosition(url, token, id, command.position)
+                is HaCommand.Lock -> haManager.lock(url, token, id)
+                is HaCommand.Unlock -> haManager.unlock(url, token, id)
             }
         }
     }
