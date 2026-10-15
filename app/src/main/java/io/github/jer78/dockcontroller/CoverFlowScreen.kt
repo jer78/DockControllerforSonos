@@ -5,16 +5,22 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
@@ -44,6 +51,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -134,6 +142,22 @@ private fun coverFlowInitialPage(
     return center - (center % albums.size) + index
 }
 
+// Which favorites Cover Flow shows. Always starts on ALL - it isn't saved.
+private enum class FavoriteCategory(val label: String, val kind: String?) {
+    ALL("All Favorites", null),
+    ALBUMS("Albums", "album"),
+    PLAYLISTS("Playlists", "playlist"),
+    RADIO("Radio", "radio");
+
+    val icon: ImageVector
+        get() = when (this) {
+            ALL -> Icons.Default.Favorite
+            ALBUMS -> Icons.Default.Album
+            PLAYLISTS -> Icons.AutoMirrored.Filled.QueueMusic
+            RADIO -> Icons.Default.Radio
+        }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AmbientClockScreen(
@@ -165,6 +189,21 @@ fun AmbientClockScreen(
     // confirmed (which drives that card's drop animation before deleting).
     var pendingFavoriteDelete by remember { mutableStateOf<AlbumHistoryItem?>(null) }
     var confirmedFavoriteDelete by remember { mutableStateOf<AlbumHistoryItem?>(null) }
+
+    // The top-right controls: which kind of favorite to show, and Cover Flow
+    // or a side-scrolling grid. Both reset each time Cover Flow opens, so
+    // it always starts on every favorite, in Cover Flow.
+    var category by remember { mutableStateOf(FavoriteCategory.ALL) }
+    var isGridView by remember { mutableStateOf(false) }
+    // Only kinds that actually have favorites are offered.
+    val categories = remember(albumHistory, isFavoritesMode) {
+        if (!isFavoritesMode) listOf(FavoriteCategory.ALL)
+        else listOf(FavoriteCategory.ALL) + FavoriteCategory.entries.filter { c -> c.kind != null && albumHistory.any { it.kind == c.kind } }
+    }
+    if (category !in categories) category = FavoriteCategory.ALL
+    val shownAlbums = remember(albumHistory, category) {
+        category.kind?.let { kind -> albumHistory.filter { it.kind == kind } } ?: albumHistory
+    }
 
     // Fallback if no centered card picked up the confirmed delete (e.g. the
     // pager moved) - delete without the animation rather than leave it
@@ -213,15 +252,26 @@ fun AmbientClockScreen(
     // (animateScrollToPage stops moving, and it can crash) - so instead use
     // a large-but-safe count and silently recenter (see the auto-advance
     // effect below) well before it's ever exhausted.
-    val internalPageCount = if (albumHistory.isEmpty()) 0 else 100_000
+    val internalPageCount = if (shownAlbums.isEmpty()) 0 else 100_000
     val pagerState = rememberPagerState(
-        initialPage = coverFlowInitialPage(albumHistory, internalPageCount, initialCenterAlbum),
+        initialPage = coverFlowInitialPage(shownAlbums, internalPageCount, initialCenterAlbum),
         pageCount = { internalPageCount }
     )
 
-    LaunchedEffect(pagerState, albumHistory) {
+    LaunchedEffect(pagerState, shownAlbums) {
         snapshotFlow { pagerState.settledPage }.collect { page ->
-            if (albumHistory.isNotEmpty()) onCenterAlbumChanged(albumHistory[page % albumHistory.size])
+            if (shownAlbums.isNotEmpty()) onCenterAlbumChanged(shownAlbums[page % shownAlbums.size])
+        }
+    }
+
+    // A different category is a different list - land on the same album if
+    // it's in there, else start from the middle.
+    var lastCategory by remember { mutableStateOf(category) }
+    LaunchedEffect(category) {
+        if (category == lastCategory) return@LaunchedEffect
+        lastCategory = category
+        if (shownAlbums.isNotEmpty()) {
+            pagerState.scrollToPage(coverFlowInitialPage(shownAlbums, internalPageCount, initialCenterAlbum))
         }
     }
 
@@ -239,8 +289,8 @@ fun AmbientClockScreen(
         }
     }
 
-    LaunchedEffect(albumHistory, isUserInteracting, isDragged, pendingFavoriteDelete) {
-        if (albumHistory.isNotEmpty() && pendingFavoriteDelete == null) {
+    LaunchedEffect(shownAlbums, isUserInteracting, isDragged, pendingFavoriteDelete, isGridView) {
+        if (shownAlbums.isNotEmpty() && pendingFavoriteDelete == null && !isGridView) {
             while (true) {
                 delay(8000)
                 if (pagerState.pageCount > 0 && !isUserInteracting && !isDragged && !pagerState.isScrollInProgress) {
@@ -256,7 +306,7 @@ fun AmbientClockScreen(
                     val count = pagerState.pageCount
                     if (page < 1000 || page > count - 1000) {
                         val center = count / 2
-                        val recentered = center - (center % albumHistory.size) + (page % albumHistory.size)
+                        val recentered = center - (center % shownAlbums.size) + (page % shownAlbums.size)
                         pagerState.scrollToPage(recentered)
                     }
                 }
@@ -375,7 +425,19 @@ fun AmbientClockScreen(
                 }
         )
 
-        if (albumHistory.isNotEmpty()) {
+        if (shownAlbums.isNotEmpty() && isGridView) {
+            CoverGrid(
+                albums = shownAlbums,
+                // Leaves room for the track cards while they're showing.
+                bottomPadding = if (trackState.isPlaying && !(hidePrevious && hideNowPlaying && hideNextUp)) 150.dp else 32.dp,
+                onPlay = { album, bounds ->
+                    isFadingOut = true
+                    onPlayAlbum(album, bounds)
+                },
+                onLongPress = if (isFavoritesMode) ({ pendingFavoriteDelete = it }) else null,
+                modifier = Modifier.fillMaxSize().alpha(fadeAlpha)
+            )
+        } else if (shownAlbums.isNotEmpty()) {
             Box(Modifier.fillMaxSize().alpha(fadeAlpha), contentAlignment = Alignment.Center) {
                 HorizontalPager(
                     state = pagerState,
@@ -385,8 +447,8 @@ fun AmbientClockScreen(
                         .offset(y = 30.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) { page ->
-                    val actualPage = page % albumHistory.size
-                    val albumItem = albumHistory[actualPage]
+                    val actualPage = page % shownAlbums.size
+                    val albumItem = shownAlbums[actualPage]
                     val pageOffset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction)
                     
                     val scale = lerp(start = 0.6f, stop = 1f, fraction = 1f - abs(pageOffset).coerceIn(0f, 1f))
@@ -742,6 +804,55 @@ fun AmbientClockScreen(
             }
         }
 
+        if (albumHistory.isNotEmpty()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(24.dp)
+                    .alpha(fadeAlpha)
+            ) {
+                if (categories.size > 1) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.55f),
+                        shape = RoundedCornerShape(24.dp),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(24.dp))
+                            .clickable { category = categories[(categories.indexOf(category) + 1) % categories.size] }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                        ) {
+                            Icon(category.icon, contentDescription = null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(22.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "${category.label} · ${shownAlbums.size}",
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+                Surface(
+                    color = Color.Black.copy(alpha = 0.55f),
+                    shape = CircleShape,
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                    modifier = Modifier.clip(CircleShape).clickable { isGridView = !isGridView }
+                ) {
+                    Icon(
+                        if (isGridView) Icons.Default.ViewCarousel else Icons.Default.GridView,
+                        contentDescription = if (isGridView) "Show as Cover Flow" else "Show as grid",
+                        tint = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.padding(12.dp).size(22.dp)
+                    )
+                }
+            }
+        }
+
         MetadataDebuggerOverlay(
             show = showDebugInfo,
             trackState = trackState,
@@ -802,11 +913,82 @@ fun AmbientClockScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             TextButton(onClick = {
                                 pendingFavoriteDelete = null
-                                confirmedFavoriteDelete = item
+                                // The grid has no drop animation to run first.
+                                if (isGridView) onDeleteFavorite(item) else confirmedFavoriteDelete = item
                             }) {
                                 Text("Delete", color = Color(0xFFFF5252), fontWeight = FontWeight.Bold)
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Cover Flow's alternate view for big lists: rows of artwork, as many as fit
+// below the clock, scrolling left and right. A tap plays; in Favorites, a
+// long press offers to delete.
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun CoverGrid(
+    albums: List<AlbumHistoryItem>,
+    bottomPadding: Dp,
+    onPlay: (AlbumHistoryItem, Rect) -> Unit,
+    onLongPress: ((AlbumHistoryItem) -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    val animatedBottom by animateDpAsState(bottomPadding, tween(600), label = "gridBottom")
+    LazyHorizontalGrid(
+        rows = GridCells.Adaptive(minSize = 190.dp),
+        contentPadding = PaddingValues(start = 48.dp, end = 48.dp, top = 160.dp, bottom = animatedBottom),
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+        modifier = modifier
+    ) {
+        items(albums) { album ->
+            var bounds by remember { mutableStateOf(Rect.Zero) }
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(1f)
+                    .onGloballyPositioned { bounds = it.boundsInWindow() }
+                    .border(1.dp, Color.White.copy(alpha = 0.1f), RectangleShape)
+                    .combinedClickable(
+                        onClick = { onPlay(album, bounds) },
+                        onLongClick = onLongPress?.let { longPress -> { longPress(album) } }
+                    )
+            ) {
+                AsyncImage(
+                    model = album.artUrl,
+                    contentDescription = album.albumTitle,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.05f))
+                )
+                // Title and artist over a shade along the bottom of the art.
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
+                        .padding(start = 10.dp, end = 10.dp, top = 24.dp, bottom = 8.dp)
+                ) {
+                    Text(
+                        album.albumTitle,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (album.artist.isNotBlank()) {
+                        Text(
+                            album.artist,
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }

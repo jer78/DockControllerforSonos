@@ -33,6 +33,10 @@ sits on its dock.
   paused; the reflection, glass surface and side light are adjustable
 - **History** mode: albums you've played that are in your Sonos Favorites
 - **Favorites** mode: your Sonos Favorites (albums, playlists and radio)
+- Buttons in the top right to show just albums, playlists or radio, and to
+  swap the carousel for a grid that scrolls left and right, handy with a
+  lot of favorites (long-press a grid cover to delete it). It always opens
+  on all favorites in the carousel
 - Choose how many albums it holds: 50, 100, 250, 500 or unlimited
 - Tap an album to play it; tap its X to hide it from History, or (after a
   confirmation) delete it from your Sonos Favorites

@@ -133,6 +133,8 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
                     "title": title,
                     "uri": item_id, # Store native ID for HA replay
                     "meta": item_class,
+                    # Lets Cover Flow show one kind of favorite at a time.
+                    "kind": "playlist" if is_p else "radio" if is_r else "album",
                     "artist": artist,
                     "art": art
                 })

@@ -440,7 +440,8 @@ class SonosDashboardManager private constructor(context: Context) {
                             artist = artist,
                             albumTitle = title,
                             playUri = uri,
-                            playMetadata = map[PyObject.fromJava("meta")]?.toString() ?: ""
+                            playMetadata = map[PyObject.fromJava("meta")]?.toString() ?: "",
+                            kind = map[PyObject.fromJava("kind")]?.toString() ?: ""
                         ))
                     }
                 }

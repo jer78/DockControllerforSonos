@@ -72,7 +72,9 @@ data class AlbumHistoryItem(
     val artist: String,
     val albumTitle: String,
     val playUri: String = "",
-    val playMetadata: String = ""
+    val playMetadata: String = "",
+    // Favorites only: "album", "playlist" or "radio" (blank for History).
+    val kind: String = ""
 )
 
 data class SonosSpeakerGroup(
