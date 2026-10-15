@@ -89,6 +89,9 @@ class SettingsManager(private val context: Context) {
         // player's time remaining jumps up - a sign a commercial break just
         // ended (see SonosDashboardManager.maybeAutoUnmuteAfterAds).
         val AUTO_UNMUTE_AFTER_ADS = booleanPreferencesKey("auto_unmute_after_ads")
+        // TV mode: replace Home Assistant's artwork with the show's logo or
+        // poster from TMDB / TVmaze (see TvShowLogos). Off uses HA's images.
+        val TV_SHOW_IMAGES = booleanPreferencesKey("tv_show_images")
 
         // When a queued album plays to the end, start another random album
         // from Sonos Favorites (see SonosDashboardManager.maybeContinueWithRandomAlbum).
@@ -254,6 +257,12 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setAutoUnmuteAfterAds(enabled: Boolean) {
         context.dataStore.edit { it[AUTO_UNMUTE_AFTER_ADS] = enabled }
+    }
+
+    val tvShowImages: Flow<Boolean> = context.dataStore.data.map { it[TV_SHOW_IMAGES] ?: true }
+
+    suspend fun setTvShowImages(enabled: Boolean) {
+        context.dataStore.edit { it[TV_SHOW_IMAGES] = enabled }
     }
 
     val continueWithRandomAlbum: Flow<Boolean> = context.dataStore.data.map { it[CONTINUE_WITH_RANDOM_ALBUM] ?: false }

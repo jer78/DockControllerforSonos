@@ -603,11 +603,12 @@ class SonosDashboardManager private constructor(context: Context) {
                             val haMedia = settingsManager.selectedHaMediaPlayer.first()
                             val autoUnmute = settingsManager.autoUnmuteAfterAds.first()
                             val tmdbKey = settingsManager.tmdbApiKey.first()
+                            val tvShowImages = settingsManager.tvShowImages.first()
 
                             if (haMedia.isNotBlank()) {
                                 haManager.fetchHAMediaPlayer(url, token, haMedia) { haTrack ->
                                     maybeAutoUnmuteAfterAds(haTrack, speaker, muted, autoUnmute)
-                                    val showLogo = tvShowLogoFor(haTrack, tmdbKey)
+                                    val showLogo = if (tvShowImages) tvShowLogoFor(haTrack, tmdbKey) else null
                                     _trackState.update { it.copy(
                                         title = haTrack.title,
                                         artist = haTrack.artist,

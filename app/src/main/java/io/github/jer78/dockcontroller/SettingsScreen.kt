@@ -288,6 +288,7 @@ fun SettingsModal(
     var nowPlayingHidePrevious by remember { mutableStateOf(false) }
     var nowPlayingClockMode by remember { mutableStateOf(NowPlayingClockMode.OFF) }
     var autoUnmuteAfterAds by remember { mutableStateOf(false) }
+    var tvShowImages by remember { mutableStateOf(true) }
     var continueWithRandomAlbum by remember { mutableStateOf(false) }
     var nowPlayingHideNextUp by remember { mutableStateOf(false) }
     var tvFallbackImage by remember { mutableStateOf("") }
@@ -359,6 +360,7 @@ fun SettingsModal(
         nowPlayingHideNextUp = settingsManager.nowPlayingHideNextUp.first()
         nowPlayingClockMode = settingsManager.nowPlayingClockMode.first()
         autoUnmuteAfterAds = settingsManager.autoUnmuteAfterAds.first()
+        tvShowImages = settingsManager.tvShowImages.first()
         continueWithRandomAlbum = settingsManager.continueWithRandomAlbum.first()
         tvFallbackImage = settingsManager.tvFallbackImage.first()
         fAlbums = settingsManager.filterAlbums.first()
@@ -952,20 +954,35 @@ fun SettingsModal(
                                 modifier = Modifier.fillMaxWidth()
                             )
 
-                            OutlinedTextField(
-                                value = tmdbApiKey,
-                                onValueChange = { tmdbApiKey = it },
-                                label = { Text("TMDB API Key (optional)") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            SettingsToggleRow("Replace TV Show Images", tvShowImages) {
+                                tvShowImages = it
+                                scope.launch { settingsManager.setTvShowImages(it) }
+                            }
                             Text(
-                                "When a TV show is playing, its title logo replaces the artwork. With a free key " +
-                                    "from themoviedb.org (Settings > API) logos come from TMDB; without one, from TVmaze.\n" +
-                                    "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+                                if (tvShowImages) {
+                                    "When a TV show is playing, its title logo (or its poster, if it has no logo) " +
+                                        "replaces the artwork. With a free TMDB key from themoviedb.org (Settings > API) " +
+                                        "images come from TMDB, falling back to TVmaze; without a key, from TVmaze."
+                                } else {
+                                    "Off: TV mode shows the images Home Assistant sends."
+                                },
                                 fontSize = 12.sp,
                                 color = Color.Gray
                             )
+                            if (tvShowImages) {
+                                OutlinedTextField(
+                                    value = tmdbApiKey,
+                                    onValueChange = { tmdbApiKey = it },
+                                    label = { Text("TMDB API Key (optional)") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Text(
+                                    "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+                                    fontSize = 12.sp,
+                                    color = Color.Gray
+                                )
+                            }
                             HorizontalDivider()
 
                             Text("Experimental:", fontWeight = FontWeight.SemiBold)

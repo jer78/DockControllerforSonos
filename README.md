@@ -53,6 +53,7 @@ sits on its dock.
 - Shows with no logo get their TVmaze poster instead, with the artwork
   reshaped to fit it, and the show's TVmaze background (when it has one)
   behind the screen
+- Turn off **Replace TV Show Images** to keep the images Home Assistant sends
 - Pick one fallback image for when there's no artwork, or rotate through them
 - Drops into a TV screensaver after a configurable delay
 - Experimental: unmutes automatically when a commercial break ends
