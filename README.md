@@ -33,10 +33,14 @@ sits on its dock.
   paused; the reflection, glass surface and side light are adjustable
 - **History** mode: albums you've played that are in your Sonos Favorites
 - **Favorites** mode: your Sonos Favorites (albums, playlists and radio)
-- Buttons in the top right to show just albums, playlists or radio, and to
-  swap the carousel for a grid that scrolls left and right, handy with a
-  lot of favorites (long-press a grid cover to delete it). It always opens
-  on all favorites in the carousel
+- **Category filter**: a button in the top right cycles between all
+  favorites, albums, playlists and radio stations, with a count of each
+- **Grid view**: the button beside it swaps the 3D carousel for a grid of
+  album covers, several rows deep, that scrolls left and right - much
+  quicker for finding one album among hundreds of favorites. Tap a cover to
+  play it, or long-press it to delete it from your Sonos Favorites (after a
+  confirmation). Works in History mode too
+- Cover Flow always opens on all favorites in the carousel
 - Choose how many albums it holds: 50, 100, 250, 500 or unlimited
 - Tap an album to play it; tap its X to hide it from History, or (after a
   confirmation) delete it from your Sonos Favorites
@@ -103,7 +107,9 @@ Any music service connected to your Sonos system works; see
 1. Install the app and open it. Settings opens automatically on first launch.
 2. **General**: pick your Sonos speaker (the app scans your Wi-Fi for them).
 3. **Cover Flow**: choose History or Favorites mode. In Favorites mode, tap
-   **Refresh Favorites**.
+   **Refresh Favorites**. Then, on the Cover Flow screen itself, use the
+   buttons in the top right to filter by albums, playlists or radio, and to
+   switch to the grid view.
 4. **Home Assistant** (optional): enter your server URL and a long-lived access
    token (Home Assistant → your profile → Security → Long-lived access tokens)
    and tap **Connect**. Then choose a type (light, climate, cover, lock,
