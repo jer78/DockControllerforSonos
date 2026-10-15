@@ -602,15 +602,19 @@ class SonosDashboardManager private constructor(context: Context) {
                             val token = settingsManager.haToken.first()
                             val haMedia = settingsManager.selectedHaMediaPlayer.first()
                             val autoUnmute = settingsManager.autoUnmuteAfterAds.first()
+                            val tmdbKey = settingsManager.tmdbApiKey.first()
 
                             if (haMedia.isNotBlank()) {
                                 haManager.fetchHAMediaPlayer(url, token, haMedia) { haTrack ->
                                     maybeAutoUnmuteAfterAds(haTrack, speaker, muted, autoUnmute)
+                                    val showLogo = tvShowLogoFor(haTrack, tmdbKey)
                                     _trackState.update { it.copy(
                                         title = haTrack.title,
                                         artist = haTrack.artist,
                                         album = haTrack.album,
                                         albumArtUrl = haTrack.albumArtUrl,
+                                        seriesTitle = haTrack.seriesTitle,
+                                        tvShowLogo = showLogo,
                                         isPlaying = haTrack.isPlaying,
                                         prevTrack = "None",
                                         nextTrack = "None",
@@ -625,6 +629,8 @@ class SonosDashboardManager private constructor(context: Context) {
                                     title = "TV Mode",
                                     artist = "Select HA Entity",
                                     albumArtUrl = "",
+                                    seriesTitle = "",
+                                    tvShowLogo = null,
                                     isPlaying = true,
                                     groupMembers = memberVolumes,
                                     positionSeconds = 0,
@@ -681,6 +687,8 @@ class SonosDashboardManager private constructor(context: Context) {
                                 artist = artist,
                                 album = album,
                                 albumArtUrl = art,
+                                seriesTitle = "",
+                                tvShowLogo = null,
                                 isPlaying = state == "PLAYING",
                                 groupMembers = memberVolumes,
                                 positionSeconds = position,
@@ -805,6 +813,25 @@ class SonosDashboardManager private constructor(context: Context) {
         } catch (e: Exception) {
             delay(waitMs)
         }
+    }
+
+    private val tvShowLogos = TvShowLogos()
+
+    // The logo for the TV show in this HA track, if one's recognised and
+    // already looked up. Otherwise starts the lookup and fills it in once
+    // it arrives - if that show is still on by then.
+    private fun tvShowLogoFor(track: TrackState, tmdbKey: String): TvShowLogo? {
+        val show = detectTvShowName(track.title, track.seriesTitle) ?: return null
+        tvShowLogos.cached(show, tmdbKey)?.let { return it }
+        if (tvShowLogos.claimLookup(show, tmdbKey)) {
+            scope.launch {
+                val logo = tvShowLogos.lookUp(show, tmdbKey) ?: return@launch
+                _trackState.update {
+                    if (_isTvMode.value && detectTvShowName(it.title, it.seriesTitle) == show) it.copy(tvShowLogo = logo) else it
+                }
+            }
+        }
+        return null
     }
 
     // The configured unit rarely/never changes at runtime, so fetch it once

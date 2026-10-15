@@ -272,6 +272,7 @@ fun SettingsModal(
     val widgetTypes = remember { mutableStateListOf<HaWidgetType?>().apply { repeat(MAX_HA_WIDGETS) { add(null) } } }
     val widgetEntities = remember { mutableStateListOf<String>().apply { repeat(MAX_HA_WIDGETS) { add("") } } }
     var selectedHaMediaPlayer by remember { mutableStateOf("") }
+    var tmdbApiKey by remember { mutableStateOf("") }
     var coverFlowMode by remember { mutableStateOf("history") }
     var coverFlowLimit by remember { mutableIntStateOf(SettingsManager.COVER_FLOW_LIMIT_DEFAULT) }
     var use24HourClock by remember { mutableStateOf(true) }
@@ -343,6 +344,7 @@ fun SettingsModal(
             widgetEntities[i] = slot?.entityId ?: ""
         }
         selectedHaMediaPlayer = settingsManager.selectedHaMediaPlayer.first()
+        tmdbApiKey = settingsManager.tmdbApiKey.first()
         coverFlowMode = settingsManager.coverFlowMode.first()
         coverFlowLimit = settingsManager.coverFlowLimit.first()
         use24HourClock = settingsManager.use24HourClock.first()
@@ -949,6 +951,21 @@ fun SettingsModal(
                                 suggestions = mediaPlayerEntities,
                                 modifier = Modifier.fillMaxWidth()
                             )
+
+                            OutlinedTextField(
+                                value = tmdbApiKey,
+                                onValueChange = { tmdbApiKey = it },
+                                label = { Text("TMDB API Key (optional)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                "When a TV show is playing, its title logo replaces the artwork. With a free key " +
+                                    "from themoviedb.org (Settings > API) logos come from TMDB; without one, from TVmaze.\n" +
+                                    "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
                             HorizontalDivider()
 
                             Text("Experimental:", fontWeight = FontWeight.SemiBold)
@@ -975,6 +992,7 @@ fun SettingsModal(
                         haToken,
                         List(MAX_HA_WIDGETS) { i -> widgetTypes[i]?.let { HaWidgetSlot(it, widgetEntities[i]) } },
                         selectedHaMediaPlayer,
+                        tmdbApiKey,
                         coverFlowMode,
                         fAlbums,
                         fPlaylists,

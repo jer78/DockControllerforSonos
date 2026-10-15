@@ -46,6 +46,9 @@ sits on its dock.
 - Detects when a Sonos soundbar is playing TV audio and shows what's on, using
   a Home Assistant media player for the title, art and transport controls
 - The artwork letterboxes to 16:9, with a seek bar and time remaining
+- Recognises TV episodes (from the show name Home Assistant reports, or an
+  "S2 E3"-style title) and shows the show's title logo in place of the
+  artwork, from TMDB with a free API key or TVmaze without one
 - Pick one fallback image for when there's no artwork, or rotate through them
 - Drops into a TV screensaver after a configurable delay
 - Experimental: unmutes automatically when a commercial break ends
@@ -89,7 +92,9 @@ Any music service connected to your Sonos system works; see
    token (Home Assistant → your profile → Security → Long-lived access tokens)
    and tap **Connect**. Then choose a type (light, climate, cover or lock) and
    an entity for each widget position you want, using the arrows to reorder
-   them, and pick the media player for TV mode.
+   them, and pick the media player for TV mode. Optionally add a free
+   [TMDB](https://www.themoviedb.org/settings/api) API key for better TV show
+   logos.
 5. Tap **Save & Apply**.
 
 To use it as a screensaver: Android Settings → Display → Screen saver → choose
@@ -129,7 +134,12 @@ own music library, AirPlay and Spotify Connect.
   plus its WebSocket API for instant updates.
 - **UI**: Kotlin and Jetpack Compose.
 
-Your Home Assistant URL and token are stored only on the device.
+Your Home Assistant URL and token, and your TMDB key, are stored only on the
+device.
+
+TV show logos come from [TMDB](https://www.themoviedb.org) (when you add an
+API key) or [TVmaze](https://www.tvmaze.com). This product uses the TMDB API
+but is not endorsed or certified by TMDB.
 
 ## License
 

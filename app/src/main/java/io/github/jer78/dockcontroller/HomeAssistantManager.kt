@@ -186,6 +186,7 @@ class HomeAssistantManager {
                             artist = attrs.optString("media_artist", "Home Assistant"),
                             album = attrs.optString("media_album_name", ""),
                             albumArtUrl = albumArtUrl,
+                            seriesTitle = attrs.optString("media_series_title", ""),
                             isPlaying = isPlaying,
                             positionSeconds = position.coerceIn(0.0, duration).toInt(),
                             durationSeconds = duration.toInt()

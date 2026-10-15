@@ -256,7 +256,10 @@ fun DockDashboardUI(
                     // below can stack on top of the art instead of being laid out
                     // as a second, height-starved Column child underneath it.
                     Box(modifier = Modifier.fillMaxSize()) {
-                        if (artworkUrl.isNotBlank()) {
+                        val showLogo = trackState.tvShowLogo
+                        if (isTvMode && showLogo != null) {
+                            TvShowLogoArt(logo = showLogo, artworkUrl = artworkUrl, showName = trackState.seriesTitle)
+                        } else if (artworkUrl.isNotBlank()) {
                             AsyncImage(
                                 model = artworkUrl,
                                 contentDescription = "Album Cover",
@@ -538,7 +541,12 @@ fun DockDashboardUI(
 
                 Spacer(modifier = Modifier.height(30.dp))
 
-                val joinedMembers = trackState.groupMembers.filter { !it.isCoordinator }
+                // Grouped, the main slider is the whole group's volume, so
+                // every room - the main (coordinator) speaker first - gets
+                // its own slider underneath.
+                val roomSliders = if (trackState.groupMembers.size > 1) {
+                    trackState.groupMembers.sortedByDescending { it.isCoordinator }
+                } else emptyList()
                 
                 Column(
                     modifier = Modifier.fillMaxWidth(0.9f),
@@ -546,16 +554,15 @@ fun DockDashboardUI(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (trackState.groupMembers.size > 1) {
-                            val coordinator = trackState.groupMembers.find { it.isCoordinator }
                             Icon(
-                                painter = painterResource(id = sonosModelIconRes(coordinator?.model ?: "")),
+                                Icons.Default.SpeakerGroup,
                                 contentDescription = null,
                                 tint = Color.White.copy(alpha = 0.5f),
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = (coordinator?.name ?: "").uppercase(),
+                                text = "ALL ROOMS",
                                 color = Color.White.copy(alpha = 0.5f),
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
@@ -634,7 +641,7 @@ fun DockDashboardUI(
                         }
                     }
 
-                    joinedMembers.forEach { member ->
+                    roomSliders.forEach { member ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 painter = painterResource(id = sonosModelIconRes(member.model)),
@@ -708,6 +715,48 @@ fun DockDashboardUI(
                 onSetLoudness = onSetLoudness,
                 onToggleSubEnabled = onToggleSubEnabled,
                 onDismiss = { showSoundSettings = false }
+            )
+        }
+    }
+}
+
+// TV mode's artwork card when the show's logo is known. A transparent
+// (TMDB) logo sits on the HA artwork, blurred and darkened so the logo
+// reads clearly; TVmaze logos come with a white background baked in, so
+// they're shown on a matching white card.
+@Composable
+private fun TvShowLogoArt(logo: TvShowLogo, artworkUrl: String, showName: String) {
+    if (logo.transparent) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize().background(Color.DarkGray)
+        ) {
+            if (artworkUrl.isNotBlank()) {
+                AsyncImage(
+                    model = artworkUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().blur(16.dp)
+                )
+            }
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
+            AsyncImage(
+                model = logo.url,
+                contentDescription = showName.ifBlank { "Show logo" },
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().padding(horizontal = 40.dp, vertical = 28.dp)
+            )
+        }
+    } else {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize().background(Color.White)
+        ) {
+            AsyncImage(
+                model = logo.url,
+                contentDescription = showName.ifBlank { "Show logo" },
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().padding(16.dp)
             )
         }
     }

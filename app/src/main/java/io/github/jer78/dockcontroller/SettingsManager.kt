@@ -28,6 +28,9 @@ class SettingsManager(private val context: Context) {
         // MAX_HA_WIDGETS positions, each null or {"type": <domain>, "entity": <id>}.
         val HA_WIDGETS = stringPreferencesKey("ha_widgets")
         val SELECTED_HA_MEDIA_PLAYER = stringPreferencesKey("ha_media_player")
+        // Optional TMDB API key (v3 key or v4 read access token) for TV show
+        // logos; without one, logos come from TVmaze (see TvShowLogos).
+        val TMDB_API_KEY = stringPreferencesKey("tmdb_api_key")
         val COVER_FLOW_MODE = stringPreferencesKey("cover_flow_mode") // "history" or "favorites"
         
         // Favorite Filters
@@ -142,6 +145,7 @@ class SettingsManager(private val context: Context) {
         }
     }
     val selectedHaMediaPlayer: Flow<String> = context.dataStore.data.map { it[SELECTED_HA_MEDIA_PLAYER] ?: "" }
+    val tmdbApiKey: Flow<String> = context.dataStore.data.map { it[TMDB_API_KEY] ?: "" }
     val coverFlowMode: Flow<String> = context.dataStore.data.map { it[COVER_FLOW_MODE] ?: "history" }
     
     val coverFlowLimit: Flow<Int> = context.dataStore.data.map { it[COVER_FLOW_LIMIT] ?: COVER_FLOW_LIMIT_DEFAULT }
@@ -300,6 +304,7 @@ class SettingsManager(private val context: Context) {
         token: String,
         haWidgets: List<HaWidgetSlot?>,
         haMediaPlayer: String,
+        tmdbApiKey: String,
         mode: String,
         fAlbums: Boolean = true,
         fPlaylists: Boolean = true,
@@ -317,6 +322,7 @@ class SettingsManager(private val context: Context) {
                 }
             }.toString()
             prefs[SELECTED_HA_MEDIA_PLAYER] = haMediaPlayer
+            prefs[TMDB_API_KEY] = tmdbApiKey.trim()
             prefs[COVER_FLOW_MODE] = mode
             prefs[FILTER_ALBUMS] = fAlbums
             prefs[FILTER_PLAYLISTS] = fPlaylists

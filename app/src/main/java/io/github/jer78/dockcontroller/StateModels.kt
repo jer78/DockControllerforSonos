@@ -41,7 +41,13 @@ data class TrackState(
     val repeatMode: String = "OFF",
     // More than one room playing together: isMuted and the main volume
     // slider are the whole group's, not just the selected speaker's.
-    val isGrouped: Boolean = false
+    val isGrouped: Boolean = false,
+    // TV mode: the HA media player's media_series_title, when the
+    // integration reports one (see detectTvShowName).
+    val seriesTitle: String = "",
+    // TV mode: the recognised show's title logo, shown in place of the
+    // artwork (see TvShowLogos).
+    val tvShowLogo: TvShowLogo? = null
 )
 
 // A failed command (album play, favorite delete, ...), kept in
