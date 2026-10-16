@@ -32,6 +32,9 @@ class SettingsManager(private val context: Context) {
         // logos; without one, logos come from TVmaze (see TvShowLogos).
         val TMDB_API_KEY = stringPreferencesKey("tmdb_api_key")
         val COVER_FLOW_MODE = stringPreferencesKey("cover_flow_mode") // "history" or "favorites"
+        // Whether Cover Flow last showed the grid rather than the carousel,
+        // so it opens that way again.
+        val COVER_FLOW_GRID_VIEW = booleanPreferencesKey("cover_flow_grid_view")
         
         // Favorite Filters
         val FILTER_ALBUMS = booleanPreferencesKey("filter_albums")
@@ -209,6 +212,12 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setCoverFlowSideLight(strength: Float) {
         context.dataStore.edit { it[COVER_FLOW_SIDE_LIGHT] = strength }
+    }
+
+    val coverFlowGridView: Flow<Boolean> = context.dataStore.data.map { it[COVER_FLOW_GRID_VIEW] ?: false }
+
+    suspend fun setCoverFlowGridView(grid: Boolean) {
+        context.dataStore.edit { it[COVER_FLOW_GRID_VIEW] = grid }
     }
 
     val coverFlowHidePrevious: Flow<Boolean> = context.dataStore.data.map { it[COVER_FLOW_HIDE_PREVIOUS] ?: false }

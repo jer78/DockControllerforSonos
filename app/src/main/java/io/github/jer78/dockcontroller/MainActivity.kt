@@ -36,6 +36,7 @@ import coil.compose.AsyncImage
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlin.math.roundToInt
 
@@ -136,6 +137,8 @@ class MainActivity : ComponentActivity() {
             val coverFlowHidePrevious by settingsManager.coverFlowHidePrevious.collectAsState(initial = false)
             val coverFlowHideNextUp by settingsManager.coverFlowHideNextUp.collectAsState(initial = false)
             val coverFlowHideNowPlaying by settingsManager.coverFlowHideNowPlaying.collectAsState(initial = false)
+            val coverFlowGridView by settingsManager.coverFlowGridView.collectAsState(initial = false)
+            val settingsScope = rememberCoroutineScope()
             val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
             val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
             val nowPlayingClockMode by settingsManager.nowPlayingClockMode.collectAsState(initial = NowPlayingClockMode.OFF)
@@ -305,7 +308,9 @@ class MainActivity : ComponentActivity() {
                                 hidePrevious = coverFlowHidePrevious,
                                 hideNextUp = coverFlowHideNextUp,
                                 hideNowPlaying = coverFlowHideNowPlaying,
-                                weather = haState.firstWeather()
+                                weather = haState.firstWeather(),
+                                gridView = coverFlowGridView,
+                                onGridViewChange = { grid -> settingsScope.launch { settingsManager.setCoverFlowGridView(grid) } }
                             )
                         }
                         DockScreen.NOW_PLAYING -> {

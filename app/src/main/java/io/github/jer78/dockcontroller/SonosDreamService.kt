@@ -48,6 +48,7 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
@@ -121,6 +122,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     val coverFlowHidePrevious by settingsManager.coverFlowHidePrevious.collectAsState(initial = false)
                     val coverFlowHideNextUp by settingsManager.coverFlowHideNextUp.collectAsState(initial = false)
                     val coverFlowHideNowPlaying by settingsManager.coverFlowHideNowPlaying.collectAsState(initial = false)
+                    val coverFlowGridView by settingsManager.coverFlowGridView.collectAsState(initial = false)
+                    val settingsScope = rememberCoroutineScope()
                     val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
                     val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
                     val nowPlayingClockMode by settingsManager.nowPlayingClockMode.collectAsState(initial = NowPlayingClockMode.OFF)
@@ -280,7 +283,14 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         hidePrevious = coverFlowHidePrevious,
                                         hideNextUp = coverFlowHideNextUp,
                                         hideNowPlaying = coverFlowHideNowPlaying,
-                                        weather = haState.firstWeather()
+                                        weather = haState.firstWeather(),
+                                        gridView = coverFlowGridView,
+                                        onGridViewChange = { grid -> settingsScope.launch { settingsManager.setCoverFlowGridView(grid) } },
+                                        // Clear of the Pixel Tablet's Home button and
+                                        // status line, which hub mode draws over the
+                                        // screensaver.
+                                        bottomStartInset = 96.dp,
+                                        topEndInset = 32.dp
                                     )
                                 }
                                 DockScreen.NOW_PLAYING -> {

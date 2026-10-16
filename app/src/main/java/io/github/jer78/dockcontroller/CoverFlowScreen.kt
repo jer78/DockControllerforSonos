@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -43,11 +44,13 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -188,7 +191,15 @@ fun AmbientClockScreen(
     hideNowPlaying: Boolean = false,
     // The first Home Assistant weather widget's entity, shown beside the
     // clock's time when there is one.
-    weather: HaWeatherState? = null
+    weather: HaWeatherState? = null,
+    // The saved Cover Flow / grid choice, and where to save a new one.
+    gridView: Boolean = false,
+    onGridViewChange: (Boolean) -> Unit = {},
+    // Extra room on the left of the bottom-left Previous card, and above the
+    // top-right controls, for overlays the system draws there (the Pixel
+    // Tablet's Home button and status line over the screensaver).
+    bottomStartInset: Dp = 0.dp,
+    topEndInset: Dp = 0.dp
 ) {
     var isFadingOut by remember { mutableStateOf(false) }
     // Favorite awaiting the user's confirm/cancel, and then the one they
@@ -197,10 +208,11 @@ fun AmbientClockScreen(
     var confirmedFavoriteDelete by remember { mutableStateOf<AlbumHistoryItem?>(null) }
 
     // The top-right controls: which kind of favorite to show, and Cover Flow
-    // or a side-scrolling grid. Both reset each time Cover Flow opens, so
-    // it always starts on every favorite, in Cover Flow.
+    // or a side-scrolling grid. The category resets each time Cover Flow
+    // opens; the view is whichever the user last picked (search's own trip
+    // to the grid doesn't count).
     var category by remember { mutableStateOf(FavoriteCategory.ALL) }
-    var isGridView by remember { mutableStateOf(false) }
+    var isGridView by remember(gridView) { mutableStateOf(gridView) }
     // Only kinds that actually have favorites are offered.
     val categories = remember(albumHistory, isFavoritesMode) {
         if (!isFavoritesMode) listOf(FavoriteCategory.ALL)
@@ -463,6 +475,8 @@ fun AmbientClockScreen(
                     onPlayAlbum(album, bounds)
                 },
                 onLongPress = if (isFavoritesMode) ({ pendingFavoriteDelete = it }) else null,
+                // The same rules as Cover Flow's own auto-advance.
+                autoScroll = !searchOpen && pendingFavoriteDelete == null,
                 modifier = Modifier.fillMaxSize().alpha(fadeAlpha)
             )
         } else if (shownAlbums.isNotEmpty()) {
@@ -746,7 +760,7 @@ fun AmbientClockScreen(
             exit = fadeOut(tween(600)),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(24.dp)
+                .padding(start = 24.dp + bottomStartInset, top = 24.dp, end = 24.dp, bottom = 24.dp)
                 .alpha(fadeAlpha)
         ) {
             CoverFlowTrackCard(
@@ -855,7 +869,7 @@ fun AmbientClockScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(24.dp)
+                    .padding(start = 24.dp, top = 24.dp + topEndInset, end = 24.dp, bottom = 24.dp)
                     .alpha(fadeAlpha)
             ) {
                 if (categories.size > 1) {
@@ -909,6 +923,7 @@ fun AmbientClockScreen(
                         // Leaving the grid ends a search, which only narrows it.
                         if (searchOpen) closeSearch()
                         isGridView = !isGridView
+                        onGridViewChange(isGridView)
                     }
                 ) {
                     Icon(
@@ -1022,6 +1037,10 @@ private fun CoverGrid(
     emptyText: String,
     onPlay: (AlbumHistoryItem, Rect) -> Unit,
     onLongPress: ((AlbumHistoryItem) -> Unit)?,
+    // Like Cover Flow cycling through its albums: once left untouched for a
+    // while, drift slowly sideways with the A-Z bar hidden, so nothing sits
+    // still long enough to burn in.
+    autoScroll: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val animatedBottom by animateDpAsState(bottomPadding, tween(400), label = "gridBottom")
@@ -1031,26 +1050,46 @@ private fun CoverGrid(
     // A new search or category starts from the beginning.
     LaunchedEffect(albums) { gridState.scrollToItem(0) }
 
-    Box(modifier = modifier) {
-        if (showLetterBar && albums.size > 24) {
-            val current by remember(letters) {
-                derivedStateOf { letters.getOrNull(gridState.firstVisibleItemIndex) }
-            }
-            LetterBar(
-                present = remember(letters) { letters.toSet() },
-                current = current,
-                onLetter = { letter ->
-                    // The first album at that letter, or the next one there is.
-                    val target = INDEX_LETTERS.indexOf(letter)
-                    val index = letters.indexOfFirst { INDEX_LETTERS.indexOf(it) >= target }.takeIf { it >= 0 } ?: letters.lastIndex
-                    scope.launch { gridState.scrollToItem(index) }
-                },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = GridLetterBarTop, start = 48.dp, end = 48.dp)
-            )
-        }
+    // Lists long enough to fill the screen repeat end to end (as Cover Flow
+    // wraps), so the grid can scroll forever. Search results don't.
+    val endless = showLetterBar && albums.size > 24
+    val itemCount = if (endless) albums.size * GRID_LOOP_COPIES else albums.size
 
+    // Any touch stops the drift and brings the A-Z bar back; it starts
+    // again once the grid has been left alone for a while.
+    var lastTouch by remember { mutableLongStateOf(0L) }
+    var drifting by remember { mutableStateOf(false) }
+    val driftPxPerSecond = with(LocalDensity.current) { GridDriftSpeed.toPx() }
+    LaunchedEffect(autoScroll, endless, albums, lastTouch) {
+        drifting = false
+        if (!autoScroll || !endless) return@LaunchedEffect
+        delay(GRID_DRIFT_DELAY_MS)
+        drifting = true
+        var lastFrame = 0L
+        while (true) {
+            val now = withFrameNanos { it }
+            if (lastFrame != 0L) gridState.scrollBy((now - lastFrame) / 1_000_000_000f * driftPxPerSecond)
+            lastFrame = now
+            // Well before the copies run out, jump back by a whole number
+            // of lists and columns - the same albums in the same places, so
+            // the jump can't be seen.
+            val first = gridState.firstVisibleItemIndex
+            if (first > itemCount / 2) {
+                val rows = (gridState.layoutInfo.visibleItemsInfo.maxOfOrNull { it.row } ?: 0) + 1
+                val period = lcm(albums.size, rows)
+                gridState.scrollToItem(first % period, gridState.firstVisibleItemScrollOffset)
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                lastTouch = System.currentTimeMillis()
+            }
+        }
+    ) {
         if (albums.isEmpty()) {
             Text(
                 emptyText,
@@ -1069,7 +1108,8 @@ private fun CoverGrid(
             verticalArrangement = Arrangement.spacedBy(18.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(albums) { album ->
+            items(itemCount) { index ->
+                val album = albums[index % albums.size]
                 var bounds by remember { mutableStateOf(Rect.Zero) }
                 Box(
                     modifier = Modifier
@@ -1117,11 +1157,62 @@ private fun CoverGrid(
                 }
             }
         }
+
+        // After the grid, so it sits on top: the grid fills the whole screen
+        // (its top padding included), and drawn underneath it the bar's taps
+        // went to the grid instead and fell through to waking Now Playing.
+        // While the bar is hidden, a tap where it sits brings it back (the
+        // touch above stops the drift) instead of waking Now Playing.
+        if (drifting) {
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = GridLetterBarTop, start = 48.dp, end = 48.dp)
+                    .widthIn(max = 980.dp)
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .pointerInput(Unit) { detectTapGestures { } }
+            )
+        }
+        AnimatedVisibility(
+            visible = showLetterBar && albums.size > 24 && !drifting,
+            enter = fadeIn(tween(600)),
+            exit = fadeOut(tween(1200)),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = GridLetterBarTop, start = 48.dp, end = 48.dp)
+        ) {
+            val current by remember(letters) {
+                derivedStateOf { letters.getOrNull(gridState.firstVisibleItemIndex % letters.size.coerceAtLeast(1)) }
+            }
+            LetterBar(
+                present = remember(letters) { letters.toSet() },
+                current = current,
+                onLetter = { letter ->
+                    // The first album at that letter, or the next one there is.
+                    val target = INDEX_LETTERS.indexOf(letter)
+                    val index = letters.indexOfFirst { INDEX_LETTERS.indexOf(it) >= target }.takeIf { it >= 0 } ?: letters.lastIndex
+                    scope.launch { gridState.scrollToItem(index) }
+                }
+            )
+        }
     }
 }
 
 private val GridLetterBarTop = 150.dp
 private val GridTop = 196.dp
+
+// How many times an endless grid repeats its list, how long it sits
+// untouched before drifting (Cover Flow's own auto-advance interval), and
+// how fast it drifts.
+private const val GRID_LOOP_COPIES = 50
+private const val GRID_DRIFT_DELAY_MS = 8_000L
+private val GridDriftSpeed = 24.dp
+
+private fun lcm(a: Int, b: Int): Int {
+    tailrec fun gcd(x: Int, y: Int): Int = if (y == 0) x else gcd(y, x % y)
+    return a / gcd(a, b) * b
+}
 
 // "#" for anything that doesn't start with a letter.
 private val INDEX_LETTERS = listOf('#') + ('A'..'Z')
@@ -1133,9 +1224,10 @@ private fun indexLetter(text: String): Char {
     return if (first in 'A'..'Z') first else '#'
 }
 
-// # and A-Z across the top of the grid. Tap a letter, or drag along the bar
-// to scrub through them; letters with no albums are dimmed (and jump to the
-// next one that has some).
+// # and A-Z across the top of the grid. Touch a letter, or slide along the
+// bar to scrub through them; the letter under the finger swells up out of
+// the bar (its neighbours a little) so it's clear which one is picked.
+// Letters with no albums are dimmed (and jump to the next one that has some).
 @Composable
 private fun LetterBar(
     present: Set<Char>,
@@ -1144,48 +1236,54 @@ private fun LetterBar(
     modifier: Modifier = Modifier
 ) {
     var width by remember { mutableIntStateOf(0) }
-    var lastLetter by remember { mutableStateOf<Char?>(null) }
-    fun letterAt(x: Float): Char {
-        val i = (x / width.coerceAtLeast(1) * INDEX_LETTERS.size).toInt().coerceIn(0, INDEX_LETTERS.lastIndex)
-        return INDEX_LETTERS[i]
-    }
-    fun pick(x: Float) {
-        val letter = letterAt(x)
-        if (letter != lastLetter) {
-            lastLetter = letter
-            onLetter(letter)
-        }
-    }
-    Surface(
-        color = Color.Black.copy(alpha = 0.45f),
-        shape = RoundedCornerShape(18.dp),
+    // Where the finger is along the bar while it's down, else null.
+    var touchX by remember { mutableStateOf<Float?>(null) }
+    fun slotAt(x: Float): Float = x / width.coerceAtLeast(1) * INDEX_LETTERS.size
+    Box(
         modifier = modifier
             .widthIn(max = 980.dp)
             .fillMaxWidth()
             .height(36.dp)
+            .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
             .onGloballyPositioned { width = it.size.width }
+            // One handler for both taps and slides: the letter follows the
+            // finger from the moment it lands until it lifts, so a tap that
+            // shifts a little picks where it ended rather than two letters.
             .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    lastLetter = null
-                    pick(offset.x)
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    down.consume()
+                    var lastLetter: Char? = null
+                    fun follow(x: Float) {
+                        touchX = x
+                        val letter = INDEX_LETTERS[slotAt(x).toInt().coerceIn(0, INDEX_LETTERS.lastIndex)]
+                        if (letter != lastLetter) {
+                            lastLetter = letter
+                            onLetter(letter)
+                        }
+                    }
+                    follow(down.position.x)
+                    while (true) {
+                        val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            change.consume()
+                            break
+                        }
+                        change.consume()
+                        follow(change.position.x)
+                    }
+                    touchX = null
                 }
             }
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        lastLetter = null
-                        pick(offset.x)
-                    },
-                    onHorizontalDrag = { change, _ ->
-                        change.consume()
-                        pick(change.position.x)
-                    }
-                )
-            }
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            INDEX_LETTERS.forEach { letter ->
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxSize()) {
+            INDEX_LETTERS.forEachIndexed { i, letter ->
                 val isCurrent = letter == current
+                // 2.2x right under the finger, falling off over the next two
+                // letters each side.
+                val distance = touchX?.let { abs(slotAt(it) - (i + 0.5f)) }
+                val targetScale = if (distance == null) 1f else 1f + 1.2f * (1f - distance / 2.5f).coerceAtLeast(0f)
+                val scale by animateFloatAsState(targetScale, spring(stiffness = Spring.StiffnessMediumLow), label = "letterScale")
                 Text(
                     letter.toString(),
                     color = when {
@@ -1198,6 +1296,13 @@ private fun LetterBar(
                     textAlign = TextAlign.Center,
                     modifier = Modifier
                         .weight(1f)
+                        .zIndex(scale)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            // Rise out of the bar as it grows, clear of the finger.
+                            translationY = -(scale - 1f) * 22.dp.toPx()
+                        }
                         .padding(horizontal = 1.dp)
                         .background(if (isCurrent) Color.White.copy(alpha = 0.85f) else Color.Transparent, CircleShape)
                         .padding(vertical = 4.dp)
