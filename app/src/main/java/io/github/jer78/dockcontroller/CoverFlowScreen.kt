@@ -186,8 +186,8 @@ fun AmbientClockScreen(
     hidePrevious: Boolean = false,
     hideNextUp: Boolean = false,
     hideNowPlaying: Boolean = false,
-    // The first Home Assistant weather widget's entity, shown under the
-    // clock's date when there is one.
+    // The first Home Assistant weather widget's entity, shown beside the
+    // clock's time when there is one.
     weather: HaWeatherState? = null
 ) {
     var isFadingOut by remember { mutableStateOf(false) }
@@ -821,15 +821,30 @@ fun AmbientClockScreen(
                         else -> Alignment.CenterHorizontally
                     }
                 ) {
-                    Text(
-                        text = formatClockTime(currentTime, use24HourClock),
-                        fontSize = 90.sp, fontWeight = FontWeight.ExtraLight, color = Color.White.copy(alpha = 0.5f)
-                    )
+                    // The weather sits beside the time rather than under the
+                    // date, so it stays clear of the album art and the grid's
+                    // A-Z bar: on the outer side when the clock is on the
+                    // left, otherwise on the time's left.
+                    val clockWeather = weather?.takeIf { it.temperature != null }
+                    val weatherAfter = alignment.toString().contains("Start")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (clockWeather != null && !weatherAfter) {
+                            ClockWeather(clockWeather)
+                            Spacer(Modifier.width(24.dp))
+                        }
+                        Text(
+                            text = formatClockTime(currentTime, use24HourClock),
+                            fontSize = 90.sp, fontWeight = FontWeight.ExtraLight, color = Color.White.copy(alpha = 0.5f)
+                        )
+                        if (clockWeather != null && weatherAfter) {
+                            Spacer(Modifier.width(24.dp))
+                            ClockWeather(clockWeather)
+                        }
+                    }
                     Text(
                         text = String.format(Locale.getDefault(), "%tA, %tB %te", currentTime, currentTime, currentTime).uppercase(),
                         fontSize = 16.sp, color = Color.White.copy(alpha = 0.3f), letterSpacing = 2.sp
                     )
-                    weather?.takeIf { it.temperature != null }?.let { ClockWeather(it) }
                 }
             }
         }
@@ -1272,24 +1287,24 @@ private fun SearchPanel(
     }
 }
 
-// Under the ambient clock's date: the first weather widget's condition and
-// temperature, as faint as the date itself.
+// Beside the ambient clock's time: the first weather widget's condition icon
+// and outside temperature, faint like the clock itself.
 @Composable
 private fun ClockWeather(weather: HaWeatherState) {
     val night = weather.sun?.let { !it.isUp } ?: false
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
             painterResource(weatherIconRes(weather.condition, night)),
             contentDescription = null,
             tint = weatherTint(weather.condition, night).copy(alpha = 0.6f),
-            modifier = Modifier.size(26.dp)
+            modifier = Modifier.size(36.dp)
         )
         Spacer(Modifier.width(8.dp))
         Text(
-            "${weather.temperature?.roundToInt()}°  ${weatherConditionLabel(weather.condition).uppercase()}",
-            fontSize = 16.sp,
-            color = Color.White.copy(alpha = 0.4f),
-            letterSpacing = 2.sp
+            "${weather.temperature?.roundToInt()}°",
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Light,
+            color = Color.White.copy(alpha = 0.4f)
         )
     }
 }

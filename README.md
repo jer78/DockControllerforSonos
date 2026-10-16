@@ -1,5 +1,7 @@
 # Dock Controller for Sonos and Home Assistant
 
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/jeremypercival)
+
 An Android app that turns a docked tablet or phone into an always-on controller
 for your Sonos speakers, with Home Assistant controls alongside. It runs as a
 normal app or as the device's screensaver, so it's there whenever the device
