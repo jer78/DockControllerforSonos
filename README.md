@@ -132,9 +132,51 @@ sits on its dock.
 Any music service connected to your Sonos system works; see
 [Music services](#music-services) for the small differences.
 
+> **Tested only on a Google Pixel Tablet.** It should run on other Android
+> tablets and phones that meet the requirements, but they haven't been tested,
+> and layouts may not fit smaller screens well.
+
+## Installing
+
+The app isn't on the Play Store, so it's installed ("sideloaded") from an APK
+file.
+
+**On the device itself**
+
+1. On the Android device, open the
+   [latest release](https://github.com/jer78/DockControllerforSonos/releases/latest)
+   and download the `.apk` file under **Assets**.
+2. Open the downloaded file (from the download notification, or the Files app's
+   Downloads folder).
+3. Android will say your browser or Files app isn't allowed to install unknown
+   apps. Tap **Settings**, turn on **Allow from this source**, then go back.
+4. Tap **Install**. If Google Play Protect asks about an unrecognised app, tap
+   **More details → Install anyway**.
+5. Optionally, turn **Allow from this source** back off afterwards (Android
+   Settings → Apps → Special app access → Install unknown apps).
+
+**From a computer with adb**
+
+1. On the device, turn on Developer options (Settings → About tablet → tap
+   **Build number** seven times), then turn on **USB debugging** in Settings →
+   System → Developer options.
+2. Download the `.apk` from the
+   [latest release](https://github.com/jer78/DockControllerforSonos/releases/latest)
+   to the computer.
+3. Connect the device by USB, accept the debugging prompt on it, and run
+   (with the file name you downloaded):
+   ```
+   adb install -r DockController-v1.0.24.apk
+   ```
+
+To update, install a newer APK the same way; your settings are kept. Every
+release is signed with the same key, so if Android refuses the update as
+conflicting with an existing package, it means the installed copy came from
+somewhere else (such as your own build) - uninstall that first.
+
 ## Setup
 
-1. Install the app and open it. Settings opens automatically on first launch.
+1. Open the app. Settings opens automatically on first launch.
 2. **General**: pick your Sonos speaker (the app scans your Wi-Fi for them).
 3. **Cover Flow**: choose History or Favorites mode. In Favorites mode, tap
    **Refresh Favorites**. Then, on the Cover Flow screen itself, use the

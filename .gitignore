@@ -15,3 +15,7 @@
 local.properties
 __pycache__/
 *.pyc
+
+# Signing keys never belong in the repo.
+*.jks
+*.keystore

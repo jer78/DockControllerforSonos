@@ -22,8 +22,26 @@ android {
         }
     }
 
+    // Release signing comes from the user-level ~/.gradle/gradle.properties
+    // (DOCK_RELEASE_*), never from the repo. Without those properties the
+    // release build is left unsigned.
+    signingConfigs {
+        create("release") {
+            val storeFilePath = providers.gradleProperty("DOCK_RELEASE_STORE_FILE").orNull
+            if (storeFilePath != null) {
+                storeFile = file(storeFilePath)
+                storePassword = providers.gradleProperty("DOCK_RELEASE_STORE_PASSWORD").orNull
+                keyAlias = providers.gradleProperty("DOCK_RELEASE_KEY_ALIAS").orNull
+                keyPassword = providers.gradleProperty("DOCK_RELEASE_KEY_PASSWORD").orNull
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (providers.gradleProperty("DOCK_RELEASE_STORE_FILE").isPresent) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
