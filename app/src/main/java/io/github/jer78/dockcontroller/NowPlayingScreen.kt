@@ -38,9 +38,9 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import kotlin.math.abs
 
-// Shows what TV show detection sees (title, artist, series, detected show,
-// logo source) over the artwork in TV mode. Turn on to debug detection.
-private const val SHOW_TV_DETECTION_DEBUG = false
+// Taps on the TV-mode artwork closer together than this count towards the
+// triple tap that shows the TV show detection debug.
+private const val TV_DEBUG_TAP_WINDOW_MS = 500L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -89,6 +89,10 @@ fun DockDashboardUI(
     onToggleSubEnabled: () -> Unit = {}
 ) {
     var showDebugInfo by remember { mutableStateOf(false) }
+    // What TV show detection sees, over the artwork: a triple tap on the
+    // artwork in TV mode shows it, and a single tap hides it again.
+    var showTvDebug by remember { mutableStateOf(false) }
+    LaunchedEffect(isTvMode) { if (!isTvMode) showTvDebug = false }
     var showGroupingModal by remember { mutableStateOf(false) }
     // Entity id of the Home Assistant widget whose pop-up is open.
     var openHaEntity by remember { mutableStateOf<String?>(null) }
@@ -286,7 +290,29 @@ fun DockDashboardUI(
                     // content scope) so the confine-to-album-art spectrum overlay
                     // below can stack on top of the art instead of being laid out
                     // as a second, height-starved Column child underneath it.
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    var tvDebugTaps by remember { mutableIntStateOf(0) }
+                    var lastTvDebugTapAt by remember { mutableLongStateOf(0L) }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(isTvMode) {
+                                if (!isTvMode) return@pointerInput
+                                detectTapGestures {
+                                    val now = System.currentTimeMillis()
+                                    if (showTvDebug) {
+                                        showTvDebug = false
+                                        tvDebugTaps = 0
+                                    } else {
+                                        tvDebugTaps = if (now - lastTvDebugTapAt <= TV_DEBUG_TAP_WINDOW_MS) tvDebugTaps + 1 else 1
+                                        if (tvDebugTaps >= 3) {
+                                            showTvDebug = true
+                                            tvDebugTaps = 0
+                                        }
+                                    }
+                                    lastTvDebugTapAt = now
+                                }
+                            }
+                    ) {
                         val showLogo = trackState.tvShowLogo
                         if (isTvMode && showLogo != null) {
                             TvShowLogoArt(logo = showLogo, artworkUrl = artworkUrl, showName = trackState.seriesTitle)
@@ -313,8 +339,8 @@ fun DockDashboardUI(
                             }
                         }
 
-                        // What TV show detection sees (see SHOW_TV_DETECTION_DEBUG).
-                        if (SHOW_TV_DETECTION_DEBUG && isTvMode) {
+                        // What TV show detection sees (see showTvDebug).
+                        if (showTvDebug && isTvMode) {
                             val detected = detectTvShowName(trackState.title, trackState.seriesTitle, trackState.artist, trackState.album)
                             val logoSource = when {
                                 detected == null -> "-"
