@@ -14,6 +14,8 @@ sits on its dock.
 
 ## Screenshots
 
+![Now Playing screen with album art, playback and volume controls, and Home Assistant widgets along the top](docs/screenshots/nowplaying.jpg)
+
 | Cover Flow | Grid |
 |---|---|
 | ![Cover Flow screensaver with the clock and weather above the album covers](docs/screenshots/coverflow.jpg) | ![Grid view with the A-Z bar above the album covers](docs/screenshots/grid.jpg) |
