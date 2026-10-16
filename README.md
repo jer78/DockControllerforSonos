@@ -12,6 +12,12 @@ sits on its dock.
 > an independent project that talks to your own speakers and server on your
 > local network.
 
+## Screenshots
+
+| Cover Flow | Grid |
+|---|---|
+| ![Cover Flow screensaver with the clock and weather above the album covers](docs/screenshots/coverflow.jpg) | ![Grid view with the A-Z bar above the album covers](docs/screenshots/grid.jpg) |
+
 ## Features
 
 **Now Playing**
