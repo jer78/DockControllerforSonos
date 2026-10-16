@@ -138,6 +138,7 @@ class MainActivity : ComponentActivity() {
             val coverFlowHideNextUp by settingsManager.coverFlowHideNextUp.collectAsState(initial = false)
             val coverFlowHideNowPlaying by settingsManager.coverFlowHideNowPlaying.collectAsState(initial = false)
             val coverFlowGridView by settingsManager.coverFlowGridView.collectAsState(initial = false)
+            val coverFlowSortByArtist by settingsManager.coverFlowSortByArtist.collectAsState(initial = true)
             val settingsScope = rememberCoroutineScope()
             val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
             val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
@@ -310,7 +311,9 @@ class MainActivity : ComponentActivity() {
                                 hideNowPlaying = coverFlowHideNowPlaying,
                                 weather = haState.firstWeather(),
                                 gridView = coverFlowGridView,
-                                onGridViewChange = { grid -> settingsScope.launch { settingsManager.setCoverFlowGridView(grid) } }
+                                onGridViewChange = { grid -> settingsScope.launch { settingsManager.setCoverFlowGridView(grid) } },
+                                sortByArtist = coverFlowSortByArtist,
+                                onSortChange = { byArtist -> settingsScope.launch { settingsManager.setCoverFlowSortByArtist(byArtist) } }
                             )
                         }
                         DockScreen.NOW_PLAYING -> {
@@ -341,6 +344,7 @@ class MainActivity : ComponentActivity() {
                                 onToggleJoin = { name, join -> manager.toggleSpeakerJoin(name, join) },
                                 onAlbumArtPositioned = { nowPlayingArtRect = it },
                                 onHaCommand = { manager.sendHaCommand(it) },
+                                onReorderHaWidgets = { manager.reorderHaWidgets(it) },
                                 onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
                                 showSpectrumAnalyzer = showSpectrumAnalyzer,
                                 micPermissionGranted = micPermissionGranted,

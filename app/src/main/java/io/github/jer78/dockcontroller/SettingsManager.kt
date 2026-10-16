@@ -35,6 +35,8 @@ class SettingsManager(private val context: Context) {
         // Whether Cover Flow last showed the grid rather than the carousel,
         // so it opens that way again.
         val COVER_FLOW_GRID_VIEW = booleanPreferencesKey("cover_flow_grid_view")
+        // Cover Flow / grid album order: by artist (true) or album title.
+        val COVER_FLOW_SORT_BY_ARTIST = booleanPreferencesKey("cover_flow_sort_by_artist")
         
         // Favorite Filters
         val FILTER_ALBUMS = booleanPreferencesKey("filter_albums")
@@ -145,7 +147,9 @@ class SettingsManager(private val context: Context) {
                 array.optJSONObject(i)?.let { obj ->
                     val type = HaWidgetType.fromDomain(obj.optString("type"))
                     val entity = obj.optString("entity")
-                    if (type != null && entity.isNotBlank()) HaWidgetSlot(type, entity) else null
+                    if (type != null && entity.isNotBlank()) {
+                        HaWidgetSlot(type, entity, obj.optBoolean("show_label", false), obj.optString("label", ""))
+                    } else null
                 }
             }
         }
@@ -215,6 +219,12 @@ class SettingsManager(private val context: Context) {
     }
 
     val coverFlowGridView: Flow<Boolean> = context.dataStore.data.map { it[COVER_FLOW_GRID_VIEW] ?: false }
+
+    val coverFlowSortByArtist: Flow<Boolean> = context.dataStore.data.map { it[COVER_FLOW_SORT_BY_ARTIST] ?: true }
+
+    suspend fun setCoverFlowSortByArtist(byArtist: Boolean) {
+        context.dataStore.edit { it[COVER_FLOW_SORT_BY_ARTIST] = byArtist }
+    }
 
     suspend fun setCoverFlowGridView(grid: Boolean) {
         context.dataStore.edit { it[COVER_FLOW_GRID_VIEW] = grid }
@@ -309,7 +319,8 @@ class SettingsManager(private val context: Context) {
                     artist = obj.getString("artist"),
                     albumTitle = obj.getString("title"),
                     playUri = obj.optString("uri", ""),
-                    playMetadata = obj.optString("meta", "")
+                    playMetadata = obj.optString("meta", ""),
+                    albumKey = obj.optString("key", "")
                 ))
             }
         } catch (e: Exception) { e.printStackTrace() }
@@ -333,12 +344,7 @@ class SettingsManager(private val context: Context) {
             prefs[SELECTED_SONOS_SPEAKER] = speaker
             prefs[HA_SERVER_URL] = url
             prefs[HA_ACCESS_TOKEN] = token
-            prefs[HA_WIDGETS] = JSONArray().apply {
-                for (i in 0 until MAX_HA_WIDGETS) {
-                    val slot = haWidgets.getOrNull(i)?.takeIf { it.entityId.isNotBlank() }
-                    put(slot?.let { JSONObject().put("type", it.type.domain).put("entity", it.entityId.trim()) } ?: JSONObject.NULL)
-                }
-            }.toString()
+            prefs[HA_WIDGETS] = haWidgetsJson(haWidgets)
             prefs[SELECTED_HA_MEDIA_PLAYER] = haMediaPlayer
             prefs[TMDB_API_KEY] = tmdbApiKey.trim()
             prefs[COVER_FLOW_MODE] = mode
@@ -348,6 +354,24 @@ class SettingsManager(private val context: Context) {
             prefs[COVER_FLOW_LIMIT] = coverFlowLimit
         }
     }
+
+    // For Now Playing's drag-to-reorder - the rest of Settings is untouched.
+    suspend fun saveHaWidgets(haWidgets: List<HaWidgetSlot?>) {
+        context.dataStore.edit { it[HA_WIDGETS] = haWidgetsJson(haWidgets) }
+    }
+
+    private fun haWidgetsJson(haWidgets: List<HaWidgetSlot?>): String = JSONArray().apply {
+        for (i in 0 until MAX_HA_WIDGETS) {
+            val slot = haWidgets.getOrNull(i)?.takeIf { it.entityId.isNotBlank() }
+            put(slot?.let {
+                JSONObject()
+                    .put("type", it.type.domain)
+                    .put("entity", it.entityId.trim())
+                    .put("show_label", it.showLabel)
+                    .put("label", it.label.trim())
+            } ?: JSONObject.NULL)
+        }
+    }.toString()
 
     val favoriteArtistCache: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
         val json = prefs[FAVORITE_ARTIST_CACHE_JSON] ?: "{}"
@@ -377,6 +401,7 @@ class SettingsManager(private val context: Context) {
                     .put("title", item.albumTitle)
                     .put("uri", item.playUri)
                     .put("meta", item.playMetadata)
+                    .put("key", item.albumKey)
                 array.put(obj)
             }
             prefs[ALBUM_HISTORY_JSON] = array.toString()

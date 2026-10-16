@@ -162,7 +162,7 @@ private fun HaConnectionIndicator(status: HaConnectionStatus, modifier: Modifier
 }
 
 // One Settings > Home Assistant widget position: what kind of widget sits
-// there (or None), and which entity it controls.
+// there (or None), which entity it controls, and its optional label.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HaWidgetSlotRow(
@@ -170,64 +170,89 @@ private fun HaWidgetSlotRow(
     type: HaWidgetType?,
     entityId: String,
     suggestions: List<String>,
+    showLabel: Boolean,
+    label: String,
     onTypeChange: (HaWidgetType?) -> Unit,
     onEntityChange: (String) -> Unit,
+    onShowLabelChange: (Boolean) -> Unit,
+    onLabelChange: (String) -> Unit,
     // -1 = up, +1 = down.
     onMove: (Int) -> Unit
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text("$position", fontWeight = FontWeight.Bold, modifier = Modifier.width(16.dp))
-
-        var expanded by remember { mutableStateOf(false) }
-        ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = { expanded = it },
-            modifier = Modifier.width(170.dp)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            OutlinedTextField(
-                value = type?.label ?: "None",
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("Type") },
-                singleLine = true,
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                modifier = Modifier.menuAnchor()
-            )
-            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                (listOf(null) + HaWidgetType.entries).forEach { option ->
-                    DropdownMenuItem(
-                        text = { Text(option?.label ?: "None") },
-                        onClick = {
-                            onTypeChange(option)
-                            expanded = false
-                        }
-                    )
+            Text("$position", fontWeight = FontWeight.Bold, modifier = Modifier.width(22.dp))
+
+            var expanded by remember { mutableStateOf(false) }
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = it },
+                modifier = Modifier.width(170.dp)
+            ) {
+                OutlinedTextField(
+                    value = type?.label ?: "None",
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Type") },
+                    singleLine = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    modifier = Modifier.menuAnchor()
+                )
+                ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    (listOf(null) + HaWidgetType.entries).forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option?.label ?: "None") },
+                            onClick = {
+                                onTypeChange(option)
+                                expanded = false
+                            }
+                        )
+                    }
                 }
             }
-        }
 
+            if (type != null) {
+                EntityAutocompleteField(
+                    label = "${type.label} Entity",
+                    value = entityId,
+                    onValueChange = onEntityChange,
+                    suggestions = suggestions,
+                    modifier = Modifier.weight(1f)
+                )
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+
+            // The top position can only move down, the bottom one only up.
+            IconButton(onClick = { onMove(-1) }, enabled = position > 1) {
+                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move position $position up")
+            }
+            IconButton(onClick = { onMove(1) }, enabled = position < MAX_HA_WIDGETS) {
+                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move position $position down")
+            }
+        }
+        // Lined up under the Type field.
         if (type != null) {
-            EntityAutocompleteField(
-                label = "${type.label} Entity",
-                value = entityId,
-                onValueChange = onEntityChange,
-                suggestions = suggestions,
-                modifier = Modifier.weight(1f)
-            )
-        } else {
-            Spacer(Modifier.weight(1f))
-        }
-
-        // The top position can only move down, the bottom one only up.
-        IconButton(onClick = { onMove(-1) }, enabled = position > 1) {
-            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move position $position up")
-        }
-        IconButton(onClick = { onMove(1) }, enabled = position < MAX_HA_WIDGETS) {
-            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move position $position down")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 96.dp)
+            ) {
+                Switch(checked = showLabel, onCheckedChange = onShowLabelChange)
+                Text("Label", modifier = Modifier.width(56.dp))
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = onLabelChange,
+                    enabled = showLabel,
+                    singleLine = true,
+                    placeholder = { Text("Name from Home Assistant") },
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
     }
 }
@@ -271,6 +296,8 @@ fun SettingsModal(
     // and an entity id for each.
     val widgetTypes = remember { mutableStateListOf<HaWidgetType?>().apply { repeat(MAX_HA_WIDGETS) { add(null) } } }
     val widgetEntities = remember { mutableStateListOf<String>().apply { repeat(MAX_HA_WIDGETS) { add("") } } }
+    val widgetShowLabels = remember { mutableStateListOf<Boolean>().apply { repeat(MAX_HA_WIDGETS) { add(false) } } }
+    val widgetLabels = remember { mutableStateListOf<String>().apply { repeat(MAX_HA_WIDGETS) { add("") } } }
     var selectedHaMediaPlayer by remember { mutableStateOf("") }
     var tmdbApiKey by remember { mutableStateOf("") }
     var coverFlowMode by remember { mutableStateOf("history") }
@@ -343,6 +370,8 @@ fun SettingsModal(
         settingsManager.haWidgets.first().forEachIndexed { i, slot ->
             widgetTypes[i] = slot?.type
             widgetEntities[i] = slot?.entityId ?: ""
+            widgetShowLabels[i] = slot?.showLabel ?: false
+            widgetLabels[i] = slot?.label ?: ""
         }
         selectedHaMediaPlayer = settingsManager.selectedHaMediaPlayer.first()
         tmdbApiKey = settingsManager.tmdbApiKey.first()
@@ -919,7 +948,8 @@ fun SettingsModal(
                             HorizontalDivider()
                             Text("Now Playing Widgets:", fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Up to $MAX_HA_WIDGETS, shown left to right across the top of Now Playing in this order.",
+                                "Up to $MAX_HA_WIDGETS, shown left to right across the top of Now Playing in this order. " +
+                                    "You can also hold a widget on Now Playing for a second, then drag it to move it.",
                                 fontSize = 12.sp,
                                 color = Color.Gray
                             )
@@ -929,6 +959,10 @@ fun SettingsModal(
                                     type = widgetTypes[i],
                                     entityId = widgetEntities[i],
                                     suggestions = widgetTypes[i]?.let { widgetEntityOptions[it] } ?: emptyList(),
+                                    showLabel = widgetShowLabels[i],
+                                    label = widgetLabels[i],
+                                    onShowLabelChange = { widgetShowLabels[i] = it },
+                                    onLabelChange = { widgetLabels[i] = it },
                                     onTypeChange = { type ->
                                         // Keep the entity only if it still fits the new type.
                                         if (type == null || !widgetEntities[i].startsWith("${type.domain}.")) widgetEntities[i] = ""
@@ -941,6 +975,8 @@ fun SettingsModal(
                                         val j = i + offset
                                         widgetTypes[i] = widgetTypes[j].also { widgetTypes[j] = widgetTypes[i] }
                                         widgetEntities[i] = widgetEntities[j].also { widgetEntities[j] = widgetEntities[i] }
+                                        widgetShowLabels[i] = widgetShowLabels[j].also { widgetShowLabels[j] = widgetShowLabels[i] }
+                                        widgetLabels[i] = widgetLabels[j].also { widgetLabels[j] = widgetLabels[i] }
                                     }
                                 )
                             }
@@ -1007,7 +1043,9 @@ fun SettingsModal(
                         selectedSpeaker,
                         haUrl,
                         haToken,
-                        List(MAX_HA_WIDGETS) { i -> widgetTypes[i]?.let { HaWidgetSlot(it, widgetEntities[i]) } },
+                        List(MAX_HA_WIDGETS) { i ->
+                            widgetTypes[i]?.let { HaWidgetSlot(it, widgetEntities[i], widgetShowLabels[i], widgetLabels[i]) }
+                        },
                         selectedHaMediaPlayer,
                         tmdbApiKey,
                         coverFlowMode,

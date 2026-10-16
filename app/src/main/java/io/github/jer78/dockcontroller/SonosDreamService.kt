@@ -123,6 +123,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     val coverFlowHideNextUp by settingsManager.coverFlowHideNextUp.collectAsState(initial = false)
                     val coverFlowHideNowPlaying by settingsManager.coverFlowHideNowPlaying.collectAsState(initial = false)
                     val coverFlowGridView by settingsManager.coverFlowGridView.collectAsState(initial = false)
+                    val coverFlowSortByArtist by settingsManager.coverFlowSortByArtist.collectAsState(initial = true)
                     val settingsScope = rememberCoroutineScope()
                     val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
                     val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
@@ -286,6 +287,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         weather = haState.firstWeather(),
                                         gridView = coverFlowGridView,
                                         onGridViewChange = { grid -> settingsScope.launch { settingsManager.setCoverFlowGridView(grid) } },
+                                        sortByArtist = coverFlowSortByArtist,
+                                        onSortChange = { byArtist -> settingsScope.launch { settingsManager.setCoverFlowSortByArtist(byArtist) } },
                                         // Clear of the Pixel Tablet's Home button and
                                         // status line, which hub mode draws over the
                                         // screensaver.
@@ -316,6 +319,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onToggleJoin = { name, join -> manager.toggleSpeakerJoin(name, join) },
                                         onAlbumArtPositioned = { nowPlayingArtRect = it },
                                         onHaCommand = { manager.sendHaCommand(it) },
+                                        onReorderHaWidgets = { manager.reorderHaWidgets(it) },
                                         onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
                                         showSpectrumAnalyzer = showSpectrumAnalyzer,
                                         micPermissionGranted = micPermissionGranted,

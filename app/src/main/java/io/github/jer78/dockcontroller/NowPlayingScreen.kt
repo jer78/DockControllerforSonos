@@ -86,9 +86,13 @@ fun DockDashboardUI(
     onSetBass: (Int) -> Unit = {},
     onSetTreble: (Int) -> Unit = {},
     onSetLoudness: (Boolean) -> Unit = {},
-    onToggleSubEnabled: () -> Unit = {}
+    onToggleSubEnabled: () -> Unit = {},
+    // The widgets shown, in their new order, after a drag to reorder them.
+    onReorderHaWidgets: (List<HaWidgetSlot>) -> Unit = {}
 ) {
     var showDebugInfo by remember { mutableStateOf(false) }
+    // A widget being held/dragged - the 3s debug hold mustn't fire then.
+    var reorderingWidget by remember { mutableStateOf(false) }
     // What TV show detection sees, over the artwork: a triple tap on the
     // artwork in TV mode shows it, and a single tap hides it again.
     var showTvDebug by remember { mutableStateOf(false) }
@@ -127,7 +131,7 @@ fun DockDashboardUI(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .debugToggleHoldGesture { showDebugInfo = !showDebugInfo }
+            .debugToggleHoldGesture(isSuppressed = { reorderingWidget }) { showDebugInfo = !showDebugInfo }
             .pointerInput(Unit) {
                 // Swipe down, left or right anywhere on the background to
                 // jump to Cover Flow, same as the button below - a descendant
@@ -207,7 +211,13 @@ fun DockDashboardUI(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            HaWidgetRow(haState = haState, onOpen = { openHaEntity = it }, onHaCommand = onHaCommand)
+            HaWidgetRow(
+                haState = haState,
+                onOpen = { openHaEntity = it },
+                onHaCommand = onHaCommand,
+                onReorder = onReorderHaWidgets,
+                onReorderActiveChange = { reorderingWidget = it }
+            )
         }
 
         Row(

@@ -74,7 +74,11 @@ data class AlbumHistoryItem(
     val playUri: String = "",
     val playMetadata: String = "",
     // Favorites only: "album", "playlist" or "radio" (blank for History).
-    val kind: String = ""
+    val kind: String = "",
+    // The music service's own ID for the album (e.g. Apple Music's
+    // "1004206calbum:1440935467") - stable across favorites refreshes, and
+    // tells apart albums sharing a title. Blank for older History entries.
+    val albumKey: String = ""
 )
 
 data class SonosSpeakerGroup(
@@ -123,9 +127,16 @@ enum class HaWidgetType(val domain: String, val label: String) {
 
 // One configured widget position (Settings > Home Assistant). Positions are
 // the index in SettingsManager.haWidgets; empty positions are null there.
-data class HaWidgetSlot(val type: HaWidgetType, val entityId: String)
+data class HaWidgetSlot(
+    val type: HaWidgetType,
+    val entityId: String,
+    // A name shown under the widget on Now Playing, when switched on - the
+    // custom label if one's set, else the entity's name in Home Assistant.
+    val showLabel: Boolean = false,
+    val label: String = ""
+)
 
-const val MAX_HA_WIDGETS = 5
+const val MAX_HA_WIDGETS = 10
 
 // Latest state of each widget's entity, keyed by entity id, plus the
 // widgets in display order. A widget only shows once its entity's state

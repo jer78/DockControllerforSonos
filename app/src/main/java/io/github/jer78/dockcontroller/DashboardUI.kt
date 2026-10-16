@@ -301,8 +301,12 @@ private const val DEBUG_TOGGLE_HOLD_MS = 3_000L
 // so hard to trigger. Tolerates a few touch-slops of finger drift, since
 // nobody holds perfectly still for seconds. Once triggered, the rest of the
 // gesture is consumed so releasing doesn't also count as a tap/click on
-// whatever was underneath.
-internal fun Modifier.debugToggleHoldGesture(onTrigger: () -> Unit): Modifier = pointerInput(Unit) {
+// whatever was underneath. isSuppressed is checked when the hold completes -
+// true while the hold is doing something else (moving a widget).
+internal fun Modifier.debugToggleHoldGesture(
+    isSuppressed: () -> Boolean = { false },
+    onTrigger: () -> Unit
+): Modifier = pointerInput(Unit) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
         val maxDrift = viewConfiguration.touchSlop * 4
@@ -313,7 +317,7 @@ internal fun Modifier.debugToggleHoldGesture(onTrigger: () -> Unit): Modifier = 
             }
             true
         }
-        if (endedEarly == null) {
+        if (endedEarly == null && !isSuppressed()) {
             onTrigger()
             do {
                 val event = awaitPointerEvent(PointerEventPass.Initial)

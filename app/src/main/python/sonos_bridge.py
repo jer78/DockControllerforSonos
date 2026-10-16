@@ -3,6 +3,7 @@ from soco.discovery import by_name
 from soco.data_structures import to_didl_string
 import re
 import requests
+from urllib.parse import unquote
 
 # Persistent hardware map to fix grouping and discovery hangs
 HARDWARE_MAP = {}
@@ -55,6 +56,43 @@ def _browse_all(master, ml_item):
         items.extend(page)
         if len(page) == 0 or len(items) >= page.total_matches:
             return items
+
+# Apple Music catalog album ID -> artist name (None = Apple doesn't know it),
+# so the hourly favorites refresh only looks up newly added albums.
+_APPLE_ARTISTS = {}
+_APPLE_LOOKUP_BATCH = 150
+
+def _apple_album_id(item_id, uri):
+    """
+    The Apple Music catalog ID of an album favorite, or None. Its resource
+    looks like x-rincon-cpcontainer:1004206calbum%3A1440935467?sid=204&...
+    (204 = Apple Music).
+    """
+    if 'sid=204' not in uri: return None
+    m = re.search(r'album:(\d+)$', item_id)
+    return m.group(1) if m else None
+
+def _lookup_apple_artists(album_ids):
+    """
+    Fills _APPLE_ARTISTS for any of album_ids not looked up yet, using
+    Apple's public (no key needed) iTunes lookup API - Sonos itself never
+    stores an artist for album favorites. Best-effort: a failed request just
+    leaves those albums to be learned by watching them play.
+    """
+    missing = [a for a in dict.fromkeys(album_ids) if a not in _APPLE_ARTISTS]
+    for i in range(0, len(missing), _APPLE_LOOKUP_BATCH):
+        batch = missing[i:i + _APPLE_LOOKUP_BATCH]
+        try:
+            resp = requests.get("https://itunes.apple.com/lookup",
+                                params={"id": ",".join(batch)}, timeout=8)
+            resp.raise_for_status()
+            for r in resp.json().get('results', []):
+                if r.get('collectionId') and r.get('artistName'):
+                    _APPLE_ARTISTS[str(r['collectionId'])] = r['artistName']
+            for a in batch:
+                _APPLE_ARTISTS.setdefault(a, None)
+        except Exception:
+            pass
 
 def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio", limit=100):
     """
@@ -127,6 +165,13 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
                     artist = str(getattr(item, 'creator', "Unknown Artist"))
                     if artist.lower() in ['sonos', 'apple music', 'amazon music']: artist = "Unknown Artist"
 
+                # The service's own ID for what the favorite points to
+                # (e.g. "1004206calbum:1440935467"). Unlike the FV:2/<n>
+                # favorite ID this stays the same across refreshes, and it
+                # tells apart albums that share a title ("MTV Unplugged").
+                album_key = unquote(resolved.item_id or '')
+                resource_uri = item.resources[0].uri if getattr(item, 'resources', None) else ''
+
                 art = str(getattr(item, 'album_art_uri', ""))
                 if art and art.startswith('/'): art = f"http://{master.ip_address}:1400{art}"
                 art = get_high_res_art(artist, title, art)
@@ -138,7 +183,9 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
                     # Lets Cover Flow show one kind of favorite at a time.
                     "kind": "playlist" if is_p else "radio" if is_r else "album",
                     "artist": artist,
-                    "art": art
+                    "art": art,
+                    "album_key": album_key,
+                    "apple_id": _apple_album_id(album_key, resource_uri) if is_a else None
                 })
 
         for fav in all_raw:
@@ -154,6 +201,13 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
             except: continue
 
         if not results: return [{"title": "DIAG", "artist": "No items matched filters."}]
+
+        _lookup_apple_artists([r['apple_id'] for r in results if r['apple_id'] and r['artist'] == "Unknown Artist"])
+        for r in results:
+            apple_id = r.pop('apple_id')
+            if apple_id and r['artist'] == "Unknown Artist" and _APPLE_ARTISTS.get(apple_id):
+                r['artist'] = _APPLE_ARTISTS[apple_id]
+
         results.sort(key=lambda x: x['title'].lower())
         if limit <= 0: return results
         per_kind = {}

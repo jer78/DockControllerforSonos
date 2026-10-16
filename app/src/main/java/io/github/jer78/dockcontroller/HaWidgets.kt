@@ -3,6 +3,9 @@ package io.github.jer78.dockcontroller
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -17,6 +20,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
@@ -29,52 +41,257 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.PI
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 private val CoverOpenColor = Color(0xFF64B5F6)
+
+// How long a widget has to be held to start edit mode - long enough that a
+// slow tap doesn't trigger it, well short of the 3s debug hold (see
+// debugToggleHoldGesture).
+private const val WIDGET_EDIT_HOLD_MS = 1_000L
+// Edit mode ends by itself after this long without a touch on the row.
+private const val WIDGET_EDIT_IDLE_MS = 5_000L
+private val WidgetSpacing = 12.dp
+// Longer labels are cut short with "…" rather than widening their widget.
+private val WidgetLabelMaxWidth = 120.dp
+
+// One widget as drawn in the row. id tells apart two widgets on the same
+// entity, so each keeps its own place while being dragged.
+private data class ShownWidget(val id: String, val slot: HaWidgetSlot, val entity: HaEntityState)
 
 // Now Playing's top-left row of Home Assistant widgets, in the positions
 // picked in Settings. Drawn by the entity's actual state type, so a light
 // typed into a "Climate" position still shows as a light. Scripts, scenes
 // and input booleans act straight away on a tap; the rest open a pop-up.
+//
+// Holding a widget for WIDGET_EDIT_HOLD_MS starts edit mode: every widget
+// wiggles, taps no longer open them, and any of them can be dragged
+// sideways past its neighbors - letting go saves the new order (onReorder).
+// Edit mode ends after WIDGET_EDIT_IDLE_MS without a touch. Scrolls
+// sideways when there are more widgets than fit.
 @Composable
 fun HaWidgetRow(
     haState: HAState,
     onOpen: (String) -> Unit,
     onHaCommand: (HaCommand) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onReorder: (List<HaWidgetSlot>) -> Unit = {},
+    // True while in edit mode.
+    onReorderActiveChange: (Boolean) -> Unit = {}
 ) {
+    // Only widgets with something to draw - the rest take no space, so
+    // they can't be picked up or dropped onto.
+    val shown = remember(haState) {
+        val seen = mutableMapOf<HaWidgetSlot, Int>()
+        haState.widgets.mapNotNull { slot ->
+            val entity = haState.entities[slot.entityId]?.takeUnless { it is HaSunState } ?: return@mapNotNull null
+            val n = seen.merge(slot, 1, Int::plus)
+            ShownWidget("${slot.type.domain}|${slot.entityId}#$n", slot, entity)
+        }
+    }
+    var editMode by remember { mutableStateOf(false) }
+    // Bumped on every touch in edit mode, restarting its idle timer.
+    var editTouches by remember { mutableIntStateOf(0) }
+    // While dragging, the row shows this order instead of haState's.
+    var dragOrder by remember { mutableStateOf<List<ShownWidget>?>(null) }
+    var draggedId by remember { mutableStateOf<String?>(null) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    val widths = remember { mutableStateMapOf<String, Int>() }
+
+    val currentShown by rememberUpdatedState(shown)
+    val currentOnReorder by rememberUpdatedState(onReorder)
+    val currentOnActiveChange by rememberUpdatedState(onReorderActiveChange)
+    val haptics = LocalHapticFeedback.current
+    val spacingPx = with(LocalDensity.current) { WidgetSpacing.toPx() }
+
+    LaunchedEffect(editMode) { currentOnActiveChange(editMode) }
+    LaunchedEffect(editMode, editTouches, draggedId) {
+        if (editMode && draggedId == null) {
+            delay(WIDGET_EDIT_IDLE_MS)
+            editMode = false
+        }
+    }
+    // Nothing left to arrange.
+    if (editMode && shown.isEmpty()) editMode = false
+
+    val wiggle = if (editMode) {
+        val transition = rememberInfiniteTransition(label = "widgetWiggle")
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(260, easing = LinearEasing)),
+            label = "widgetWigglePhase"
+        )
+    } else null
+
     Row(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(WidgetSpacing),
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
-    ) {
-        haState.widgets.forEach { slot ->
-            when (val entity = haState.entities[slot.entityId]) {
-                is HaClimateState -> ClimateWidget(entity) { onOpen(entity.entityId) }
-                is HaLightState -> LightWidget(entity) { onOpen(entity.entityId) }
-                is HaCoverState -> CoverWidget(entity) { onOpen(entity.entityId) }
-                is HaLockState -> LockWidget(entity) { onOpen(entity.entityId) }
-                is HaButtonState -> ButtonWidget(entity) {
-                    val id = entity.entityId
-                    onHaCommand(
-                        when (entity.type) {
-                            HaWidgetType.SCENE -> HaCommand.ActivateScene(id)
-                            HaWidgetType.INPUT_BOOLEAN -> HaCommand.ToggleInputBoolean(id)
-                            else -> HaCommand.RunScript(id)
+            .horizontalScroll(rememberScrollState())
+            // Watched on the Initial pass, ahead of the widgets' own taps.
+            // Outside edit mode nothing is consumed until the hold
+            // completes, so taps and scrolling behave as usual; in edit mode
+            // every touch on a widget is taken, so none of them open.
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val order = currentShown
+                    // Which widget the finger is on, from their widths
+                    // (positions only shift by whole widgets while dragging).
+                    var left = 0f
+                    var index = -1
+                    for ((i, w) in order.withIndex()) {
+                        val width = widths[w.id] ?: 0
+                        if (down.position.x >= left && down.position.x < left + width) { index = i; break }
+                        left += width + spacingPx
+                    }
+                    if (index < 0) {
+                        if (editMode) editTouches++
+                        return@awaitEachGesture
+                    }
+
+                    if (!editMode) {
+                        // Lifted, or moved (a scroll) before the hold
+                        // completed. A few slops of drift are allowed, as
+                        // nobody holds perfectly still for a second.
+                        val maxDrift = viewConfiguration.touchSlop * 4
+                        val endedEarly = withTimeoutOrNull(WIDGET_EDIT_HOLD_MS) {
+                            while (true) {
+                                val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id }
+                                if (change == null || !change.pressed ||
+                                    (change.position - down.position).getDistance() > maxDrift
+                                ) break
+                            }
+                            true
                         }
-                    )
+                        if (endedEarly != null) return@awaitEachGesture
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        editMode = true
+                    } else {
+                        down.consume()
+                    }
+                    editTouches++
+
+                    // The same finger can carry straight on into a drag.
+                    val working = order.toMutableList()
+                    dragOrder = working.toList()
+                    draggedId = working[index].id
+                    dragOffset = 0f
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null || !change.pressed) {
+                                // So the widget doesn't take the release as a tap.
+                                event.changes.forEach { it.consume() }
+                                break
+                            }
+                            // Read before consuming - a consumed change
+                            // reports no movement.
+                            dragOffset += change.positionChange().x
+                            event.changes.forEach { it.consume() }
+                            // Past halfway over a neighbor: swap with it. The
+                            // dragged widget's slot then jumps by that
+                            // neighbor's width, so the offset does too.
+                            while (index + 1 < working.size) {
+                                val step = (widths[working[index + 1].id] ?: 0) + spacingPx
+                                if (dragOffset <= step / 2) break
+                                working.add(index + 1, working.removeAt(index))
+                                index++
+                                dragOffset -= step
+                            }
+                            while (index > 0) {
+                                val step = (widths[working[index - 1].id] ?: 0) + spacingPx
+                                if (-dragOffset <= step / 2) break
+                                working.add(index - 1, working.removeAt(index))
+                                index--
+                                dragOffset += step
+                            }
+                            dragOrder = working.toList()
+                        }
+                    } finally {
+                        if (working.map { it.id } != order.map { it.id }) currentOnReorder(working.map { it.slot })
+                        dragOrder = null
+                        draggedId = null
+                        dragOffset = 0f
+                        editTouches++
+                    }
                 }
-                is HaWeatherState -> WeatherWidget(entity) { onOpen(entity.entityId) }
-                is HaSensorState -> SensorWidget(entity)
-                is HaBinarySensorState -> BinarySensorWidget(entity)
-                is HaFanState -> FanWidget(entity) { onOpen(entity.entityId) }
-                is HaAlarmState -> AlarmWidget(entity) { onOpen(entity.entityId) }
-                // Only read to feed the weather widget.
-                is HaSunState -> {}
-                null -> {}
+            }
+    ) {
+        // With any label showing, every widget gets the same space under it
+        // (blank if unlabeled), so the widgets themselves stay lined up.
+        val anyLabels = shown.any { it.slot.showLabel }
+        (dragOrder ?: shown).forEachIndexed { i, widget ->
+            key(widget.id) {
+                val isDragged = widget.id == draggedId
+                Box(
+                    modifier = Modifier
+                        .onSizeChanged { widths[widget.id] = it.width }
+                        .zIndex(if (isDragged) 1f else 0f)
+                        .graphicsLayer {
+                            if (isDragged) {
+                                translationX = dragOffset
+                                scaleX = 1.12f
+                                scaleY = 1.12f
+                                alpha = 0.9f
+                            } else if (wiggle != null) {
+                                // Neighbors rock out of step with each other.
+                                val phase = (wiggle.value + i * 0.37f) * 2f * PI.toFloat()
+                                rotationZ = sin(phase) * 2.5f
+                            }
+                        }
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        HaWidget(widget.entity, onOpen, onHaCommand)
+                        if (anyLabels) {
+                            Text(
+                                text = if (widget.slot.showLabel) widget.slot.label.ifBlank { widget.entity.name } else "",
+                                color = Color.White.copy(alpha = 0.8f),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .padding(top = 4.dp)
+                                    .widthIn(max = WidgetLabelMaxWidth)
+                            )
+                        }
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun HaWidget(entity: HaEntityState, onOpen: (String) -> Unit, onHaCommand: (HaCommand) -> Unit) {
+    when (entity) {
+        is HaClimateState -> ClimateWidget(entity) { onOpen(entity.entityId) }
+        is HaLightState -> LightWidget(entity) { onOpen(entity.entityId) }
+        is HaCoverState -> CoverWidget(entity) { onOpen(entity.entityId) }
+        is HaLockState -> LockWidget(entity) { onOpen(entity.entityId) }
+        is HaButtonState -> ButtonWidget(entity) {
+            val id = entity.entityId
+            onHaCommand(
+                when (entity.type) {
+                    HaWidgetType.SCENE -> HaCommand.ActivateScene(id)
+                    HaWidgetType.INPUT_BOOLEAN -> HaCommand.ToggleInputBoolean(id)
+                    else -> HaCommand.RunScript(id)
+                }
+            )
+        }
+        is HaWeatherState -> WeatherWidget(entity) { onOpen(entity.entityId) }
+        is HaSensorState -> SensorWidget(entity)
+        is HaBinarySensorState -> BinarySensorWidget(entity)
+        is HaFanState -> FanWidget(entity) { onOpen(entity.entityId) }
+        is HaAlarmState -> AlarmWidget(entity) { onOpen(entity.entityId) }
+        // Only read to feed the weather widget.
+        is HaSunState -> {}
     }
 }
 

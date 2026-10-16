@@ -22,6 +22,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -49,9 +50,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,6 +72,12 @@ import java.util.Calendar
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+// Gap under the Previous / Now Playing / Next Up cards - kept small so they
+// sit low and leave the albums more room.
+private val TrackCardBottomPadding = 8.dp
+// Clear space kept between the grid and those cards.
+private val TrackCardGridGap = 16.dp
 
 // One of Cover Flow's bottom track cards (Previous / Now Playing / Next Up).
 @Composable
@@ -148,6 +158,34 @@ private fun coverFlowInitialPage(
     return center - (center % albums.size) + index
 }
 
+private const val CONTROLS_AUTO_COLLAPSE_MS = 10_000L
+
+// History entries have no kind - they're always albums.
+private fun AlbumHistoryItem.isAlbum() = kind == "album" || kind.isEmpty()
+
+// One of the round buttons in Cover Flow's top-right controls.
+@Composable
+private fun CoverFlowControlButton(
+    icon: ImageVector,
+    contentDescription: String,
+    highlighted: Boolean = false,
+    onClick: () -> Unit
+) {
+    Surface(
+        color = if (highlighted) Color.White.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.55f),
+        shape = CircleShape,
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+        modifier = Modifier.clip(CircleShape).clickable(onClick = onClick)
+    ) {
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = if (highlighted) Color.Black else Color.White.copy(alpha = 0.85f),
+            modifier = Modifier.padding(12.dp).size(22.dp)
+        )
+    }
+}
+
 // Which favorites Cover Flow shows. Always starts on ALL - it isn't saved.
 private enum class FavoriteCategory(val label: String, val kind: String?) {
     ALL("All Favorites", null),
@@ -195,6 +233,10 @@ fun AmbientClockScreen(
     // The saved Cover Flow / grid choice, and where to save a new one.
     gridView: Boolean = false,
     onGridViewChange: (Boolean) -> Unit = {},
+    // The saved album order - by artist, or by album title - and where to
+    // save a new one. Playlists and radio always go by title.
+    sortByArtist: Boolean = true,
+    onSortChange: (Boolean) -> Unit = {},
     // Extra room on the left of the bottom-left Previous card, and above the
     // top-right controls, for overlays the system draws there (the Pixel
     // Tablet's Home button and status line over the screensaver).
@@ -219,9 +261,32 @@ fun AmbientClockScreen(
         else listOf(FavoriteCategory.ALL) + FavoriteCategory.entries.filter { c -> c.kind != null && albumHistory.any { it.kind == c.kind } }
     }
     if (category !in categories) category = FavoriteCategory.ALL
-    val shownAlbums = remember(albumHistory, category) {
-        category.kind?.let { kind -> albumHistory.filter { it.kind == kind } } ?: albumHistory
+    var isSortByArtist by remember(sortByArtist) { mutableStateOf(sortByArtist) }
+    // What each item is sorted (and the grid's A-Z bar lettered) by.
+    fun sortKey(item: AlbumHistoryItem): String =
+        if (isSortByArtist && item.isAlbum()) item.artist else item.albumTitle
+    val shownAlbums = remember(albumHistory, category, isSortByArtist) {
+        val inCategory = category.kind?.let { kind -> albumHistory.filter { it.kind == kind } } ?: albumHistory
+        inCategory.sortedWith(
+            compareBy<AlbumHistoryItem>({ sortKey(it).lowercase() }, { it.albumTitle.lowercase() }, { it.artist.lowercase() })
+        )
     }
+    val showsAlbums = shownAlbums.any { it.isAlbum() }
+
+    // The top-right controls fold away behind one button, and fold back up
+    // after CONTROLS_AUTO_COLLAPSE_MS without a tap (kept open while
+    // searching, whose button closes the search).
+    var controlsOpen by remember { mutableStateOf(false) }
+
+    // The bottom track cards' measured height, so the grid stops above them
+    // whatever the font size. Until they've been drawn, a close estimate.
+    val screenDensity = LocalDensity.current
+    var trackCardHeight by remember { mutableStateOf(126.dp) }
+    fun onTrackCardMeasured(heightPx: Int) {
+        val height = with(screenDensity) { heightPx.toDp() }
+        if (height > trackCardHeight) trackCardHeight = height
+    }
+    var controlsTaps by remember { mutableIntStateOf(0) }
 
     // Search, typed on Cover Flow's own keyboard. It narrows the grid only -
     // opening it switches to the grid, and closing it clears the search and
@@ -234,6 +299,12 @@ fun AmbientClockScreen(
         searchOpen = false
         query = ""
         isGridView = gridBeforeSearch
+    }
+    LaunchedEffect(controlsOpen, controlsTaps, searchOpen) {
+        if (controlsOpen && !searchOpen) {
+            delay(CONTROLS_AUTO_COLLAPSE_MS)
+            controlsOpen = false
+        }
     }
 
     // Fallback if no centered card picked up the confirmed delete (e.g. the
@@ -463,11 +534,12 @@ fun AmbientClockScreen(
                 // while they're showing.
                 bottomPadding = when {
                     searchOpen -> SearchPanelHeight + 16.dp
-                    trackState.isPlaying && !(hidePrevious && hideNowPlaying && hideNextUp) -> 150.dp
+                    trackState.isPlaying && !(hidePrevious && hideNowPlaying && hideNextUp) ->
+                        trackCardHeight + TrackCardBottomPadding + TrackCardGridGap
                     else -> 32.dp
                 },
                 // History is sorted by artist, Favorites by title.
-                letterOf = { if (isFavoritesMode) it.albumTitle else it.artist },
+                letterOf = { sortKey(it) },
                 showLetterBar = !searchOpen,
                 emptyText = "No matches for \"${query.trim()}\"",
                 onPlay = { album, bounds ->
@@ -760,7 +832,8 @@ fun AmbientClockScreen(
             exit = fadeOut(tween(600)),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 24.dp + bottomStartInset, top = 24.dp, end = 24.dp, bottom = 24.dp)
+                .padding(start = 24.dp + bottomStartInset, top = 24.dp, end = 24.dp, bottom = TrackCardBottomPadding)
+                .onSizeChanged { onTrackCardMeasured(it.height) }
                 .alpha(fadeAlpha)
         ) {
             CoverFlowTrackCard(
@@ -797,7 +870,8 @@ fun AmbientClockScreen(
                 },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(24.dp)
+                    .padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = TrackCardBottomPadding)
+                    .onSizeChanged { onTrackCardMeasured(it.height) }
                     .alpha(fadeAlpha),
                 label = "nowPlayingNextUp"
             ) { nextUp ->
@@ -872,66 +946,102 @@ fun AmbientClockScreen(
                     .padding(start = 24.dp, top = 24.dp + topEndInset, end = 24.dp, bottom = 24.dp)
                     .alpha(fadeAlpha)
             ) {
-                if (categories.size > 1) {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.55f),
-                        shape = RoundedCornerShape(24.dp),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(24.dp))
-                            .clickable { category = categories[(categories.indexOf(category) + 1) % categories.size] }
+                AnimatedVisibility(
+                    visible = controlsOpen,
+                    enter = expandHorizontally(tween(300), expandFrom = Alignment.End) + fadeIn(tween(300)),
+                    exit = shrinkHorizontally(tween(250), shrinkTowards = Alignment.End) + fadeOut(tween(250))
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                        if (categories.size > 1) {
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.55f),
+                                shape = RoundedCornerShape(24.dp),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .clickable {
+                                        controlsTaps++
+                                        category = categories[(categories.indexOf(category) + 1) % categories.size]
+                                    }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                                ) {
+                                    Icon(category.icon, contentDescription = null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(22.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        "${category.label} · ${shownAlbums.size}",
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                        // Only albums have an artist to sort by.
+                        if (showsAlbums) {
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.55f),
+                                shape = RoundedCornerShape(24.dp),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .clickable {
+                                        controlsTaps++
+                                        isSortByArtist = !isSortByArtist
+                                        onSortChange(isSortByArtist)
+                                    }
+                                    .semantics { contentDescription = if (isSortByArtist) "Sorted by artist" else "Sorted by album" }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(22.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        if (isSortByArtist) "Artist" else "Album",
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                        CoverFlowControlButton(
+                            icon = Icons.Default.Search,
+                            contentDescription = if (searchOpen) "Close search" else "Search",
+                            highlighted = searchOpen
                         ) {
-                            Icon(category.icon, contentDescription = null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(22.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "${category.label} · ${shownAlbums.size}",
-                                color = Color.White.copy(alpha = 0.85f),
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            controlsTaps++
+                            if (searchOpen) closeSearch() else {
+                                gridBeforeSearch = isGridView
+                                isGridView = true
+                                searchOpen = true
+                            }
+                        }
+                        CoverFlowControlButton(
+                            icon = if (isGridView) Icons.Default.ViewCarousel else Icons.Default.GridView,
+                            contentDescription = if (isGridView) "Show as Cover Flow" else "Show as grid"
+                        ) {
+                            controlsTaps++
+                            // Leaving the grid ends a search, which only narrows it.
+                            if (searchOpen) closeSearch()
+                            isGridView = !isGridView
+                            onGridViewChange(isGridView)
                         }
                     }
                 }
-                Surface(
-                    color = if (searchOpen) Color.White.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.55f),
-                    shape = CircleShape,
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
-                    modifier = Modifier.clip(CircleShape).clickable {
-                        if (searchOpen) closeSearch() else {
-                            gridBeforeSearch = isGridView
-                            isGridView = true
-                            searchOpen = true
-                        }
-                    }
+                CoverFlowControlButton(
+                    icon = if (controlsOpen) Icons.Default.Close else Icons.Default.Tune,
+                    contentDescription = if (controlsOpen) "Hide controls" else "Show filter, sort, search and view"
                 ) {
-                    Icon(
-                        Icons.Default.Search,
-                        contentDescription = if (searchOpen) "Close search" else "Search",
-                        tint = if (searchOpen) Color.Black else Color.White.copy(alpha = 0.85f),
-                        modifier = Modifier.padding(12.dp).size(22.dp)
-                    )
-                }
-                Surface(
-                    color = Color.Black.copy(alpha = 0.55f),
-                    shape = CircleShape,
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
-                    modifier = Modifier.clip(CircleShape).clickable {
-                        // Leaving the grid ends a search, which only narrows it.
-                        if (searchOpen) closeSearch()
-                        isGridView = !isGridView
-                        onGridViewChange(isGridView)
-                    }
-                ) {
-                    Icon(
-                        if (isGridView) Icons.Default.ViewCarousel else Icons.Default.GridView,
-                        contentDescription = if (isGridView) "Show as Cover Flow" else "Show as grid",
-                        tint = Color.White.copy(alpha = 0.85f),
-                        modifier = Modifier.padding(12.dp).size(22.dp)
-                    )
+                    if (controlsOpen && searchOpen) closeSearch()
+                    controlsOpen = !controlsOpen
                 }
             }
         }
@@ -1050,6 +1160,23 @@ private fun CoverGrid(
     // A new search or category starts from the beginning.
     LaunchedEffect(albums) { gridState.scrollToItem(0) }
 
+    // The letter just picked on the A-Z bar: its albums get a gold border
+    // until the grid starts drifting by itself.
+    var highlightLetter by remember { mutableStateOf<Char?>(null) }
+    // The A-Z bar's lit letter after a pick. Scrolling only ever lands on a
+    // whole column, whose top album can be from the letter before (when the
+    // picked letter starts lower down that column) - lighting the top
+    // album's letter then made such letters look impossible to pick. Kept
+    // until the grid is scrolled some other way.
+    var pickedLetter by remember { mutableStateOf<Char?>(null) }
+    // A re-sorted or different list has its letters in new places.
+    LaunchedEffect(letters) {
+        highlightLetter = null
+        pickedLetter = null
+    }
+    val gridDragged by gridState.interactionSource.collectIsDraggedAsState()
+    if (gridDragged && pickedLetter != null) pickedLetter = null
+
     // Lists long enough to fill the screen repeat end to end (as Cover Flow
     // wraps), so the grid can scroll forever. Search results don't.
     val endless = showLetterBar && albums.size > 24
@@ -1065,6 +1192,8 @@ private fun CoverGrid(
         if (!autoScroll || !endless) return@LaunchedEffect
         delay(GRID_DRIFT_DELAY_MS)
         drifting = true
+        pickedLetter = null
+        highlightLetter = null
         var lastFrame = 0L
         while (true) {
             val now = withFrameNanos { it }
@@ -1081,6 +1210,13 @@ private fun CoverGrid(
             }
         }
     }
+
+    // Album titles and artists fade out while drifting, back in on a touch.
+    val captionAlpha by animateFloatAsState(
+        targetValue = if (drifting) 0f else 1f,
+        animationSpec = tween(if (drifting) 1200 else 400),
+        label = "gridCaptions"
+    )
 
     Box(
         modifier = modifier.pointerInput(Unit) {
@@ -1111,12 +1247,18 @@ private fun CoverGrid(
             items(itemCount) { index ->
                 val album = albums[index % albums.size]
                 var bounds by remember { mutableStateOf(Rect.Zero) }
+                val highlightAlpha by animateFloatAsState(
+                    targetValue = if (highlightLetter != null && letters[index % albums.size] == highlightLetter) 1f else 0f,
+                    animationSpec = tween(400),
+                    label = "letterHighlight"
+                )
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
                         .aspectRatio(1f)
                         .onGloballyPositioned { bounds = it.boundsInWindow() }
                         .border(1.dp, Color.White.copy(alpha = 0.1f), RectangleShape)
+                        .border(3.dp, GridHighlightGold.copy(alpha = highlightAlpha), RectangleShape)
                         .combinedClickable(
                             onClick = { onPlay(album, bounds) },
                             onLongClick = onLongPress?.let { longPress -> { longPress(album) } }
@@ -1128,13 +1270,17 @@ private fun CoverGrid(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.05f))
                     )
-                    // Title and artist over a shade along the bottom of the art.
+                    // Title and artist on a dark band along the bottom of the
+                    // art, so they stay readable over artwork with writing
+                    // on it. Hidden while the grid drifts by itself, so
+                    // only the artwork is on show then.
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomStart)
                             .fillMaxWidth()
-                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
-                            .padding(start = 10.dp, end = 10.dp, top = 24.dp, bottom = 8.dp)
+                            .graphicsLayer { alpha = captionAlpha }
+                            .background(Color.Black.copy(alpha = 0.65f))
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
                     ) {
                         Text(
                             album.albumTitle,
@@ -1182,9 +1328,10 @@ private fun CoverGrid(
                 .align(Alignment.TopCenter)
                 .padding(top = GridLetterBarTop, start = 48.dp, end = 48.dp)
         ) {
-            val current by remember(letters) {
+            val scrolledTo by remember(letters) {
                 derivedStateOf { letters.getOrNull(gridState.firstVisibleItemIndex % letters.size.coerceAtLeast(1)) }
             }
+            val current = pickedLetter ?: scrolledTo
             LetterBar(
                 present = remember(letters) { letters.toSet() },
                 current = current,
@@ -1193,6 +1340,10 @@ private fun CoverGrid(
                     val target = INDEX_LETTERS.indexOf(letter)
                     val index = letters.indexOfFirst { INDEX_LETTERS.indexOf(it) >= target }.takeIf { it >= 0 } ?: letters.lastIndex
                     scope.launch { gridState.scrollToItem(index) }
+                    // The letter actually landed on, which for a dimmed
+                    // letter is the next one that has albums.
+                    highlightLetter = letters.getOrNull(index)
+                    pickedLetter = letters.getOrNull(index)
                 }
             )
         }
@@ -1208,6 +1359,9 @@ private val GridTop = 196.dp
 private const val GRID_LOOP_COPIES = 50
 private const val GRID_DRIFT_DELAY_MS = 8_000L
 private val GridDriftSpeed = 24.dp
+
+// The A-Z bar's gold border round the picked letter's albums.
+private val GridHighlightGold = Color(0xFFFFC94D)
 
 private fun lcm(a: Int, b: Int): Int {
     tailrec fun gcd(x: Int, y: Int): Int = if (y == 0) x else gcd(y, x % y)
@@ -1236,6 +1390,10 @@ private fun LetterBar(
     modifier: Modifier = Modifier
 ) {
     var width by remember { mutableIntStateOf(0) }
+    // The touch handler below is set up once, so it must reach the latest
+    // onLetter - an old one would still jump and highlight using the list
+    // as it was sorted when the bar first appeared.
+    val currentOnLetter by rememberUpdatedState(onLetter)
     // Where the finger is along the bar while it's down, else null.
     var touchX by remember { mutableStateOf<Float?>(null) }
     fun slotAt(x: Float): Float = x / width.coerceAtLeast(1) * INDEX_LETTERS.size
@@ -1259,7 +1417,7 @@ private fun LetterBar(
                         val letter = INDEX_LETTERS[slotAt(x).toInt().coerceIn(0, INDEX_LETTERS.lastIndex)]
                         if (letter != lastLetter) {
                             lastLetter = letter
-                            onLetter(letter)
+                            currentOnLetter(letter)
                         }
                     }
                     follow(down.position.x)

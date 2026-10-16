@@ -53,9 +53,15 @@ class SonosDashboardManager private constructor(context: Context) {
     private val _favoriteAlbumsRef = MutableStateFlow<List<AlbumHistoryItem>>(emptyList())
 
     // Artist names learned by observing a favorited album actually play
-    // (Sonos never reports a real artist for album favorites), keyed by
-    // playUri. Backfilled into the Favorites (Mode B) display.
+    // (Sonos never reports a real artist for album favorites, and only Apple
+    // Music ones get looked up during the sync), keyed by "id:<albumKey>" -
+    // or, for entries learned by older versions, the normalized album title.
+    // Backfilled into the Favorites (Mode B) display.
     private val _favoriteArtistCache = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    // The favorite this app last started, and when - tells apart favorites
+    // that share a title when it starts playing (see pickPlayingFavorite).
+    @Volatile private var lastStartedFavorite: Pair<AlbumHistoryItem, Long>? = null
 
     private val _discoveredSpeakers = MutableStateFlow<List<String>>(emptyList())
     val discoveredSpeakers: StateFlow<List<String>> = _discoveredSpeakers.asStateFlow()
@@ -109,6 +115,9 @@ class SonosDashboardManager private constructor(context: Context) {
         // The bridge pages through every favorite (100 per round trip to
         // the speaker), so large collections need longer than a single call.
         private const val FAVORITES_FETCH_TIMEOUT_MS = 20000L
+        // How long after this app starts a favorite that it's assumed to be
+        // what's playing, when telling apart same-titled favorites.
+        private const val LAST_STARTED_FAVORITE_TRUST_MS = 10 * 60 * 1000L
         private const val MAX_RECENT_ERRORS = 5
         // How far time remaining must jump UP between TV polls to count as
         // coming back from a commercial - well clear of poll/clock jitter,
@@ -427,26 +436,19 @@ class SonosDashboardManager private constructor(context: Context) {
                     if (title == "DIAGNOSTIC" || title == "DIAG") {
                         diagMsg = map[PyObject.fromJava("artist")]?.toString() ?: ""
                     } else {
-                        val uri = map[PyObject.fromJava("uri")]?.toString() ?: ""
-                        val rawArtist = map[PyObject.fromJava("artist")]?.toString() ?: "Unknown Artist"
-                        // Sonos doesn't report a real artist for album
-                        // favorites - use the name we've learned from
-                        // actually seeing it play, if we have one. Keyed by
-                        // title, not this fetch's uri, since that ID isn't
-                        // guaranteed stable across refreshes.
-                        val artist = learnedArtistFor(title) ?: rawArtist
                         favItems.add(AlbumHistoryItem(
                             artUrl = map[PyObject.fromJava("art")]?.toString() ?: "",
-                            artist = artist,
+                            artist = map[PyObject.fromJava("artist")]?.toString() ?: "Unknown Artist",
                             albumTitle = title,
-                            playUri = uri,
+                            playUri = map[PyObject.fromJava("uri")]?.toString() ?: "",
                             playMetadata = map[PyObject.fromJava("meta")]?.toString() ?: "",
-                            kind = map[PyObject.fromJava("kind")]?.toString() ?: ""
+                            kind = map[PyObject.fromJava("kind")]?.toString() ?: "",
+                            albumKey = map[PyObject.fromJava("album_key")]?.toString() ?: ""
                         ))
                     }
                 }
                 
-                _albumHistory.value = favItems
+                _albumHistory.value = withResolvedArtists(favItems)
                 _favoritesRefreshCount.value = favItems.size
                 if (favItems.isNotEmpty()) {
                     _favoritesRefreshStatus.value = "Success: Found ${favItems.size} items"
@@ -482,13 +484,14 @@ class SonosDashboardManager private constructor(context: Context) {
                     if (title == "DIAGNOSTIC" || title == "DIAG") continue
                     items.add(AlbumHistoryItem(
                         artUrl = map[PyObject.fromJava("art")]?.toString() ?: "",
-                        artist = map[PyObject.fromJava("artist")]?.toString() ?: "Sonos Favorite",
+                        artist = map[PyObject.fromJava("artist")]?.toString() ?: "Unknown Artist",
                         albumTitle = title,
                         playUri = map[PyObject.fromJava("uri")]?.toString() ?: "",
-                        playMetadata = map[PyObject.fromJava("meta")]?.toString() ?: ""
+                        playMetadata = map[PyObject.fromJava("meta")]?.toString() ?: "",
+                        albumKey = map[PyObject.fromJava("album_key")]?.toString() ?: ""
                     ))
                 }
-                _favoriteAlbumsRef.value = items
+                _favoriteAlbumsRef.value = withResolvedArtists(items)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -508,11 +511,53 @@ class SonosDashboardManager private constructor(context: Context) {
         return stripped.ifEmpty { title.trim().lowercase() }
     }
 
-    // Older cache entries were keyed by the full lowercased title (brackets
-    // and all), so check that form too rather than losing those artists.
-    private fun learnedArtistFor(title: String): String? {
+    // What get_sonos_favorites reports when it doesn't know the artist.
+    private fun isPlaceholderArtist(artist: String) =
+        artist.isBlank() || artist == "Unknown Artist" || artist == "Sonos Favorite"
+
+    private fun artistCacheKey(albumKey: String) = "id:$albumKey"
+
+    // Whether two favorites are the same album - by service ID when both
+    // have one, since a title can be shared ("MTV Unplugged (Live)").
+    private fun sameFavorite(a: AlbumHistoryItem, b: AlbumHistoryItem) =
+        if (a.albumKey.isNotBlank() && b.albumKey.isNotBlank()) a.albumKey == b.albumKey
+        else normalizeAlbumTitle(a.albumTitle) == normalizeAlbumTitle(b.albumTitle)
+
+    // Fills in each favorite's best known artist: what the sync itself found
+    // (Apple Music albums are looked up by catalog ID), else one learned by
+    // watching that exact album play. Older title-keyed learned names (some
+    // keyed by the full lowercased title, brackets and all) are only trusted
+    // for a title no other favorite shares - otherwise e.g. both "MTV
+    // Unplugged (Live)" albums would show the same artist.
+    private fun withResolvedArtists(items: List<AlbumHistoryItem>): List<AlbumHistoryItem> {
         val cache = _favoriteArtistCache.value
-        return cache[normalizeAlbumTitle(title)] ?: cache[title.lowercase()]
+        val titleCounts = (items + _favoriteAlbumsRef.value)
+            .distinctBy { it.albumKey.ifBlank { it.playUri } }
+            .groupingBy { normalizeAlbumTitle(it.albumTitle) }
+            .eachCount()
+        return items.map { item ->
+            if (!isPlaceholderArtist(item.artist)) return@map item
+            val learned = item.albumKey.takeIf { it.isNotBlank() }?.let { cache[artistCacheKey(it)] }
+                ?: if ((titleCounts[normalizeAlbumTitle(item.albumTitle)] ?: 0) <= 1) {
+                    cache[normalizeAlbumTitle(item.albumTitle)] ?: cache[item.albumTitle.lowercase()]
+                } else null
+            if (learned != null) item.copy(artist = learned) else item
+        }
+    }
+
+    // Which of the favorites matching the playing album's title is the one
+    // actually playing - null when that can't be told, so one album's
+    // artist is never stamped onto another that merely shares its title.
+    private fun pickPlayingFavorite(candidates: List<AlbumHistoryItem>, playingArtist: String): AlbumHistoryItem? {
+        if (candidates.size <= 1) return candidates.firstOrNull()
+        candidates.find { it.artist.equals(playingArtist, ignoreCase = true) }?.let { return it }
+        lastStartedFavorite?.let { (started, atMs) ->
+            if (System.currentTimeMillis() - atMs < LAST_STARTED_FAVORITE_TRUST_MS) {
+                candidates.find { sameFavorite(it, started) }?.let { return it }
+            }
+        }
+        // Every other one already has a different known artist.
+        return candidates.singleOrNull { isPlaceholderArtist(it.artist) }
     }
 
     // SoCo reports position/duration as "H:MM:SS" - live streams/radio (and
@@ -726,21 +771,25 @@ class SonosDashboardManager private constructor(context: Context) {
                                 // with those stripped when there's no exact
                                 // match. Exact still wins, so "Album" and
                                 // "Album (Live)" favorites stay distinct.
+                                //
+                                // Several favorites can share a title (Pearl
+                                // Jam's and Alice in Chains' "MTV Unplugged
+                                // (Live)") - see pickPlayingFavorite.
                                 val normalizedAlbum = normalizeAlbumTitle(album)
-                                val match = _favoriteAlbumsRef.value.find {
-                                    it.albumTitle.equals(album, ignoreCase = true)
-                                } ?: _favoriteAlbumsRef.value.find {
-                                    normalizeAlbumTitle(it.albumTitle) == normalizedAlbum
-                                }
+                                val favorites = _favoriteAlbumsRef.value
+                                val match = pickPlayingFavorite(
+                                    favorites.filter { it.albumTitle.equals(album, ignoreCase = true) }
+                                        .ifEmpty { favorites.filter { normalizeAlbumTitle(it.albumTitle) == normalizedAlbum } },
+                                    artist
+                                )
                                 if (match != null) {
-                                    // Keyed by album title, not playUri: Sonos
-                                    // favorite IDs reached via the category-
-                                    // folder sub-browse aren't guaranteed
-                                    // stable across refreshes, so a playUri-
-                                    // keyed cache could "forget" an already-
-                                    // learned artist the next time the same
-                                    // album resolves to a different ID.
-                                    val cacheKey = normalizeAlbumTitle(match.albumTitle)
+                                    // Keyed by the album's service ID, not
+                                    // playUri: Sonos favorite IDs ("FV:2/<n>")
+                                    // aren't guaranteed stable across
+                                    // refreshes, so a playUri-keyed cache could
+                                    // "forget" an already-learned artist.
+                                    val cacheKey = if (match.albumKey.isNotBlank()) artistCacheKey(match.albumKey)
+                                        else normalizeAlbumTitle(match.albumTitle)
 
                                     // Learned regardless of mode, so Favorites
                                     // (Mode B) can backfill its own display
@@ -751,26 +800,35 @@ class SonosDashboardManager private constructor(context: Context) {
                                         _favoriteArtistCache.value = updatedCache
                                         settingsManager.saveFavoriteArtistCache(updatedCache)
                                     }
+                                    if (match.artist != artist) {
+                                        _favoriteAlbumsRef.value = favorites.map { if (it === match) it.copy(artist = artist) else it }
+                                    }
 
                                     // Show it in Favorites straight away rather
                                     // than waiting for the next favorites refresh
                                     // to pick it up from the cache.
-                                    if (currentMode == "favorites" && _albumHistory.value.any { normalizeAlbumTitle(it.albumTitle) == cacheKey && it.artist != artist }) {
+                                    if (currentMode == "favorites" && _albumHistory.value.any { sameFavorite(it, match) && it.artist != artist }) {
                                         _albumHistory.value = _albumHistory.value.map {
-                                            if (normalizeAlbumTitle(it.albumTitle) == cacheKey) it.copy(artist = artist) else it
+                                            if (sameFavorite(it, match)) it.copy(artist = artist) else it
                                         }
                                     }
 
-                                    // Dedupe by title, not playUri, for the
-                                    // same reason - otherwise the same album
-                                    // can end up added 2-3x under different
+                                    // Dedupe by album ID (or, for entries
+                                    // saved before those existed, title +
+                                    // artist), not playUri, for the same
+                                    // reason - otherwise the same album can
+                                    // end up added 2-3x under different
                                     // (sometimes now-stale) IDs, showing as
                                     // duplicate cards in Cover Flow where only
                                     // the most recently captured one actually
                                     // still resolves to a playable favorite.
                                     if (currentMode == "history") {
                                         val stored = settingsManager.albumHistory.first()
-                                        if (stored.none { it.albumTitle.equals(match.albumTitle, ignoreCase = true) }) {
+                                        val alreadyStored = stored.any {
+                                            if (it.albumKey.isNotBlank() && match.albumKey.isNotBlank()) it.albumKey == match.albumKey
+                                            else it.albumTitle.equals(match.albumTitle, ignoreCase = true) && it.artist.equals(artist, ignoreCase = true)
+                                        }
+                                        if (!alreadyStored) {
                                             val updated = stored + match.copy(artist = artist)
                                             settingsManager.saveAlbumHistory(updated)
                                             showHistory(updated)
@@ -964,6 +1022,29 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
+    // Now Playing's drag-to-reorder: newOrder is the widgets it shows, in
+    // their new order. They take over the Settings positions those widgets
+    // held, so empty positions and widgets not shown yet (entity still
+    // loading) stay where they were.
+    fun reorderHaWidgets(newOrder: List<HaWidgetSlot>) {
+        // Shown in the new order straight away, before the save lands.
+        _haState.update { it.copy(widgets = newOrder + it.widgets.filter { w -> w !in newOrder }) }
+        scope.launch {
+            val positions = settingsManager.haWidgets.first()
+            // Which positions belong to the reordered widgets is decided
+            // against the full set of them (one match per widget, so a
+            // widget set up twice keeps both positions) - not against
+            // what's left to place, which made a swapped widget's old
+            // position keep it and so copied it instead of moving it.
+            val unmatched = newOrder.toMutableList()
+            val toPlace = ArrayDeque(newOrder)
+            val updated = positions.map { slot ->
+                if (slot != null && unmatched.remove(slot)) toPlace.removeFirst() else slot
+            }
+            settingsManager.saveHaWidgets(updated)
+        }
+    }
+
     // From Now Playing's Home Assistant widgets and their dialogs. Each
     // command names its own entity, since several widgets can share a type.
     // onResult (lock and alarm pop-ups) hears HA's answer, on the main
@@ -1145,6 +1226,7 @@ class SonosDashboardManager private constructor(context: Context) {
     }
 
     fun playAlbum(album: AlbumHistoryItem) {
+        lastStartedFavorite = album to System.currentTimeMillis()
         scope.launch {
             val py = Python.getInstance()
             val speaker = settingsManager.sonosSpeaker.first()
@@ -1284,8 +1366,7 @@ class SonosDashboardManager private constructor(context: Context) {
                     }
                     candidates.randomOrNull()?.let { album ->
                         Log.i("SonosDashboard", "Album finished - continuing with '${album.albumTitle}'")
-                        val artist = _favoriteArtistCache.value[normalizeAlbumTitle(album.albumTitle)]
-                        playAlbum(if (artist != null) album.copy(artist = artist) else album)
+                        playAlbum(album)
                     }
                 }
                 finalTrackEndsAtMs = null
