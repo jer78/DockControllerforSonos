@@ -54,16 +54,28 @@ private val ANY_EPISODE_MARKER = Regex("""\b$SEASON_EPISODE\b""", RegexOption.IG
 // artist or album instead, so a marker there makes the title the show.
 // Null when it doesn't look like a TV episode.
 fun detectTvShowName(title: String, seriesTitle: String, artist: String = "", album: String = ""): String? {
-    if (seriesTitle.isNotBlank()) return seriesTitle.trim()
+    if (seriesTitle.isNotBlank()) return cleanShowName(seriesTitle)
     EPISODE_MARKER.find(title)?.let { match ->
-        return match.groupValues[1].trim().trimEnd('-', '–', '—', ':', '·', '|', ',', '(', '[').trim()
-            .takeIf { it.length >= 2 }
+        return cleanShowName(match.groupValues[1])
     }
     if (ANY_EPISODE_MARKER.containsMatchIn(artist) || ANY_EPISODE_MARKER.containsMatchIn(album)) {
-        return title.trim().takeIf { it.length >= 2 }
+        return cleanShowName(title)
     }
     return null
 }
+
+// Separators left dangling at either end ("The Traitors Canada -") make the
+// logo searches find nothing, so they're trimmed off whichever way the name
+// was found. Titles can use non-breaking spaces and Unicode dashes or minus
+// signs that look just like the plain ones, so rather than listing
+// separators, anything that can't end a show name is trimmed: only letters,
+// digits and closing marks like ")", "!" or "?" are kept at the ends.
+private fun canEndShowName(c: Char) = c.isLetterOrDigit() || c in ")]!?'\"’&.+*#"
+
+private fun cleanShowName(name: String): String? =
+    name.dropWhile { !it.isLetterOrDigit() && it !in "(['\"‘“#" }
+        .dropLastWhile { !canEndShowName(it) }
+        .takeIf { it.length >= 2 }
 
 // Looks up show logos - TMDB (with the user's free API key, which has
 // transparent logos) first, then TVmaze (no key needed) - and remembers the
