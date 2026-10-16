@@ -1,6 +1,10 @@
 # Dock Controller for Sonos and Home Assistant
 
+[![Download the app](https://img.shields.io/badge/Download-Android%20app-3ddc84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/jer78/DockControllerforSonos/releases/latest)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/jeremypercival)
+
+**New here?** See [How to install](#how-to-install): it takes about five minutes,
+no computer needed.
 
 An Android app that turns a docked tablet or phone into an always-on controller
 for your Sonos speakers, with Home Assistant controls alongside. It runs as a
@@ -122,57 +126,68 @@ sits on its dock.
   available from it
 - Dims automatically in a dark room using the light sensor
 
-## Requirements
+## What you need
 
-- Android 8.0 (API 26) or newer, on an arm64 or x86_64 device
-- Sonos speakers on the same Wi-Fi network as the device
-- Optional: a Home Assistant server and a long-lived access token, for the
-  widgets and TV mode features
+- An Android tablet or phone running Android 8 or newer. **It has only been
+  tested on a Google Pixel Tablet**; other devices should work, but layouts may
+  not fit smaller screens well.
+- Sonos speakers, on the same Wi-Fi as the tablet.
+- Optional: a Home Assistant server, for the smart-home buttons and TV mode.
 
-Any music service connected to your Sonos system works; see
+Any music service you use with Sonos works; see
 [Music services](#music-services) for the small differences.
 
-> **Tested only on a Google Pixel Tablet.** It should run on other Android
-> tablets and phones that meet the requirements, but they haven't been tested,
-> and layouts may not fit smaller screens well.
+## How to install
 
-## Installing
+The app isn't in the Google Play Store, so you download it from this page and
+install it yourself. Android shows a few warnings along the way. They appear
+for every app from outside the Play Store, not because something is wrong.
+Do all of this **on the tablet itself**.
 
-The app isn't on the Play Store, so it's installed ("sideloaded") from an APK
-file.
+1. **Download the app.** On the tablet, open the
+   [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
+   Scroll down to **Assets** and tap the file ending in **.apk** (for example
+   `DockController-v1.0.24.apk`). It's about 55 MB.
+2. **If Chrome warns you about the file** ("This type of file can harm your
+   device"), tap **Download anyway**.
+3. **Open the file.** When the download finishes, tap **Open** in the message
+   at the bottom of the screen. If you missed it, open the **Files** app and
+   look in **Downloads**.
+4. **Allow the install.** Android will say it can't install unknown apps from
+   this source. Tap **Settings**, switch on **Allow from this source**, then tap
+   the back arrow.
+5. **Tap Install.** If a Google Play Protect message appears:
+   - "App scan recommended": tap **Install without scanning** (or **Scan app**,
+     then **Install** when it's done).
+   - "Unsafe app blocked" or "Unrecognised app": tap **More details**, then
+     **Install anyway**.
+6. **Tap Open** when it's finished, and carry on with [Setup](#setup) below.
 
-**On the device itself**
+You can switch **Allow from this source** off again afterwards; it isn't
+needed to use the app, only to install it.
 
-1. On the Android device, open the
-   [latest release](https://github.com/jer78/DockControllerforSonos/releases/latest)
-   and download the `.apk` file under **Assets**.
-2. Open the downloaded file (from the download notification, or the Files app's
-   Downloads folder).
-3. Android will say your browser or Files app isn't allowed to install unknown
-   apps. Tap **Settings**, turn on **Allow from this source**, then go back.
-4. Tap **Install**. If Google Play Protect asks about an unrecognised app, tap
-   **More details → Install anyway**.
-5. Optionally, turn **Allow from this source** back off afterwards (Android
-   Settings → Apps → Special app access → Install unknown apps).
+**Updating:** when a new version comes out, download and install it the same
+way. Your settings are kept.
 
-**From a computer with adb**
+<details>
+<summary><b>For advanced users</b>: installing from a computer, and "App not installed" errors</summary>
 
-1. On the device, turn on Developer options (Settings → About tablet → tap
-   **Build number** seven times), then turn on **USB debugging** in Settings →
-   System → Developer options.
-2. Download the `.apk` from the
-   [latest release](https://github.com/jer78/DockControllerforSonos/releases/latest)
-   to the computer.
-3. Connect the device by USB, accept the debugging prompt on it, and run
-   (with the file name you downloaded):
-   ```
-   adb install -r DockController-v1.0.24.apk
-   ```
+To install from a computer with [adb](https://developer.android.com/tools/adb),
+turn on **USB debugging** on the device (Settings → About tablet → tap **Build
+number** seven times, then Settings → System → Developer options), connect it
+by USB, and run:
 
-To update, install a newer APK the same way; your settings are kept. Every
-release is signed with the same key, so if Android refuses the update as
-conflicting with an existing package, it means the installed copy came from
-somewhere else (such as your own build) - uninstall that first.
+```
+adb install -r DockController-v1.0.24.apk
+```
+
+Every release is signed with the same key. If Android says **App not
+installed** or the package **conflicts with an existing package**, the copy
+already on the device was signed differently (for example, one you built
+yourself). Uninstall it first, then install the release; this resets the app's
+settings.
+
+</details>
 
 ## Setup
 
@@ -193,9 +208,13 @@ somewhere else (such as your own build) - uninstall that first.
    logos.
 5. Tap **Save & Apply**.
 
-To use it as a screensaver: Android Settings → Display → Screen saver → choose
-**Dock Controller for Sonos and Home Assistant**, and set it to start while
-docked or charging.
+**To have it come on whenever the tablet is docked**, make it the screen saver:
+
+- **Pixel Tablet**: Settings → **Hub mode** → **Screen saver** → choose
+  **Dock Controller for Sonos and Home Assistant**.
+- **Other devices**: Settings → **Display** → **Screen saver** → choose
+  **Dock Controller for Sonos and Home Assistant**, and set it to start while
+  docked or charging.
 
 ## Music services
 
