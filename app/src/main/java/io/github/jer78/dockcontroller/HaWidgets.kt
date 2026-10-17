@@ -130,6 +130,9 @@ fun HaWidgetRow(
         horizontalArrangement = Arrangement.spacedBy(WidgetSpacing),
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
+            // As tall as the tallest widget, so each can center itself in
+            // the same height and their labels line up (see below).
+            .height(IntrinsicSize.Max)
             .horizontalScroll(rememberScrollState())
             // Watched on the Initial pass, ahead of the widgets' own taps.
             // Outside edit mode nothing is consumed until the hold
@@ -230,6 +233,7 @@ fun HaWidgetRow(
                 val isDragged = widget.id == draggedId
                 Box(
                     modifier = Modifier
+                        .fillMaxHeight()
                         .onSizeChanged { widths[widget.id] = it.width }
                         .zIndex(if (isDragged) 1f else 0f)
                         .graphicsLayer {
@@ -245,8 +249,16 @@ fun HaWidgetRow(
                             }
                         }
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        HaWidget(widget.entity, onOpen, onHaCommand)
+                    // Round widgets are shorter than pill-shaped ones, so
+                    // each is centered in the row's full height, above its
+                    // label - keeping every label at the same height.
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxHeight()
+                    ) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.weight(1f)) {
+                            HaWidget(widget.entity, onOpen, onHaCommand)
+                        }
                         if (anyLabels) {
                             Text(
                                 text = if (widget.slot.showLabel) widget.slot.label.ifBlank { widget.entity.name } else "",

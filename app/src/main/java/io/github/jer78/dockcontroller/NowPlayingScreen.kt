@@ -553,89 +553,65 @@ fun DockDashboardUI(
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(
+                    // Same glass buttons as Speaker Groups and Sound
+                    // Settings below, with Play/Pause the largest.
+                    GlassIconButton(
+                        icon = Icons.Default.SkipPrevious,
+                        contentDescription = "Previous",
                         onClick = { onCommand("previous") },
-                        modifier = Modifier
-                            .size(56.dp)
-                            .background(Color.White.copy(alpha = 0.2f), CircleShape)
-                    ) {
-                        Icon(Icons.Default.SkipPrevious, "Previous", tint = Color.White)
-                    }
+                        size = 56.dp,
+                        iconSize = 28.dp
+                    )
 
-                    FloatingActionButton(
+                    GlassIconButton(
+                        icon = if (trackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (trackState.isPlaying) "Pause" else "Play",
                         onClick = { onCommand(if (trackState.isPlaying) "pause" else "play") },
-                        containerColor = Color.White,
-                        contentColor = Color.Black,
-                        shape = CircleShape,
-                        modifier = Modifier.size(72.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (trackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = "Play/Pause",
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
+                        size = 72.dp,
+                        iconSize = 40.dp
+                    )
 
-                    IconButton(
+                    GlassIconButton(
+                        icon = Icons.Default.SkipNext,
+                        contentDescription = "Next",
                         onClick = { onCommand("next") },
-                        modifier = Modifier
-                            .size(56.dp)
-                            .background(Color.White.copy(alpha = 0.2f), CircleShape)
-                    ) {
-                        Icon(Icons.Default.SkipNext, "Next", tint = Color.White)
-                    }
+                        size = 56.dp,
+                        iconSize = 28.dp
+                    )
 
                     // Only the Sonos queue can be shuffled, so no button for
                     // radio, line-in, TV etc. Filled white while on.
                     if (!isTvMode && trackState.shuffleAvailable) {
-                        IconButton(
+                        GlassIconButton(
+                            icon = Icons.Default.Shuffle,
+                            contentDescription = if (trackState.isShuffled) "Shuffle on" else "Shuffle off",
                             onClick = onToggleShuffle,
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(
-                                    if (trackState.isShuffled) Color.White else Color.White.copy(alpha = 0.2f),
-                                    CircleShape
-                                )
-                        ) {
-                            Icon(
-                                Icons.Default.Shuffle,
-                                if (trackState.isShuffled) "Shuffle on" else "Shuffle off",
-                                tint = if (trackState.isShuffled) Color.Black else Color.White
-                            )
-                        }
+                            size = 56.dp,
+                            active = trackState.isShuffled
+                        )
 
                         // Same availability as shuffle. Off -> All -> One;
                         // filled white while on, with the "1" icon for One.
                         val repeatOn = trackState.repeatMode != "OFF"
-                        IconButton(
+                        GlassIconButton(
+                            icon = if (trackState.repeatMode == "ONE") Icons.Default.RepeatOne else Icons.Default.Repeat,
+                            contentDescription = when (trackState.repeatMode) {
+                                "ALL" -> "Repeat all"
+                                "ONE" -> "Repeat one"
+                                else -> "Repeat off"
+                            },
                             onClick = onCycleRepeat,
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(
-                                    if (repeatOn) Color.White else Color.White.copy(alpha = 0.2f),
-                                    CircleShape
-                                )
-                        ) {
-                            Icon(
-                                if (trackState.repeatMode == "ONE") Icons.Default.RepeatOne else Icons.Default.Repeat,
-                                when (trackState.repeatMode) {
-                                    "ALL" -> "Repeat all"
-                                    "ONE" -> "Repeat one"
-                                    else -> "Repeat off"
-                                },
-                                tint = if (repeatOn) Color.Black else Color.White
-                            )
-                        }
+                            size = 56.dp,
+                            active = repeatOn
+                        )
 
                         // The queue's songs, to pick one to play.
-                        IconButton(
+                        GlassIconButton(
+                            icon = Icons.AutoMirrored.Filled.QueueMusic,
+                            contentDescription = "Song list",
                             onClick = { showQueue = true },
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(Color.White.copy(alpha = 0.2f), CircleShape)
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.QueueMusic, "Song list", tint = Color.White)
-                        }
+                            size = 56.dp
+                        )
                     }
                 }
 
@@ -664,26 +640,9 @@ fun DockDashboardUI(
                     modifier = Modifier.fillMaxWidth(0.9f),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    // Grouped or not, the main slider keeps the same width -
+                    // its "Group" prefix says it's the whole group's volume.
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (trackState.groupMembers.size > 1) {
-                            Icon(
-                                Icons.Default.SpeakerGroup,
-                                contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.5f),
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "ALL ROOMS",
-                                color = Color.White.copy(alpha = 0.5f),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.width(120.dp),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        
                         // Same reasoning as LargeVolumeSlider's muteFlashAlpha - only
                         // animate while actually muted so this stops keeping the
                         // frame clock alive the rest of the time.

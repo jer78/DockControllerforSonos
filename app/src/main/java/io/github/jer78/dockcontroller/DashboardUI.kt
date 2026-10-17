@@ -891,27 +891,38 @@ fun LabeledIconButton(
 // Frosted-glass look without a real backdrop blur: the dashboard behind it is
 // already heavily blurred album art, so a translucent top-lit fill, a thin
 // bright rim and a soft shadow read as glass at no rendering cost.
+// active: a toggle that's on (shuffle, repeat) - filled near-white with a
+// dark icon, still with the glass rim and shading.
 @Composable
 fun GlassIconButton(
     icon: ImageVector,
     contentDescription: String,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    size: Dp = 40.dp,
+    iconSize: Dp = 24.dp,
+    active: Boolean = false
 ) {
     IconButton(
         onClick = onClick,
         modifier = modifier
-            .size(40.dp)
+            .size(size)
             .shadow(elevation = 6.dp, shape = CircleShape)
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(Color.White.copy(alpha = 0.26f), Color.White.copy(alpha = 0.10f))
+                    colors = if (active) listOf(Color.White.copy(alpha = 0.95f), Color.White.copy(alpha = 0.75f))
+                    else listOf(Color.White.copy(alpha = 0.26f), Color.White.copy(alpha = 0.10f))
                 ),
                 CircleShape
             )
-            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+            .border(1.dp, Color.White.copy(alpha = if (active) 0.6f else 0.25f), CircleShape)
     ) {
-        Icon(icon, contentDescription = contentDescription, tint = Color.White)
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = if (active) Color.Black else Color.White,
+            modifier = Modifier.size(iconSize)
+        )
     }
 }
 
