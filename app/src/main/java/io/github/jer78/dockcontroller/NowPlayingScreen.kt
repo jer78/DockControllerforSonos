@@ -384,7 +384,11 @@ fun DockDashboardUI(
                                     "artist: ${trackState.artist}\n" +
                                     "series: ${trackState.seriesTitle.ifBlank { "(none)" }}\n" +
                                     "TV show: ${detected ?: "NOT DETECTED"}\n" +
-                                    "logo: $logoSource",
+                                    "logo: $logoSource\n" +
+                                    "app: ${trackState.appName.ifBlank { "(none)" }}\n" +
+                                    "app ID: ${trackState.appId.ifBlank { "(none)" }}\n" +
+                                    "content ID: ${trackState.contentId.ifBlank { "(none)" }}\n" +
+                                    "content type: ${trackState.contentType.ifBlank { "(none)" }}",
                                 color = Color.White,
                                 fontSize = 11.sp,
                                 lineHeight = 13.sp,

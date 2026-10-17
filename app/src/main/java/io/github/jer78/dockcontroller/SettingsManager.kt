@@ -103,6 +103,20 @@ class SettingsManager(private val context: Context) {
         // TV mode: replace Home Assistant's artwork with the show's logo or
         // poster from TMDB / TVmaze (see TvShowLogos). Off uses HA's images.
         val TV_SHOW_IMAGES = booleanPreferencesKey("tv_show_images")
+        // Experimental: TV mode artwork for YouTube videos, from the video
+        // ID, or found with the optional YouTube Data API key (see
+        // YouTubeThumbnails).
+        val YOUTUBE_THUMBNAILS = booleanPreferencesKey("youtube_thumbnails")
+        val YOUTUBE_API_KEY = stringPreferencesKey("youtube_api_key")
+        // This device's YouTube searches on YOUTUBE_USAGE_DAY (Google's
+        // Pacific-time quota day), whether Google said the quota ran out
+        // that day, and how the last search went (a
+        // YouTubeThumbnails.SearchResult name) and what for.
+        val YOUTUBE_USAGE_DAY = stringPreferencesKey("youtube_usage_day")
+        val YOUTUBE_SEARCHES_TODAY = intPreferencesKey("youtube_searches_today")
+        val YOUTUBE_QUOTA_REACHED = booleanPreferencesKey("youtube_quota_reached")
+        val YOUTUBE_LAST_RESULT = stringPreferencesKey("youtube_last_result")
+        val YOUTUBE_LAST_QUERY = stringPreferencesKey("youtube_last_query")
 
         // When a queued album plays to the end, start another random album
         // from Sonos Favorites (see SonosDashboardManager.maybeContinueWithRandomAlbum).
@@ -301,6 +315,48 @@ class SettingsManager(private val context: Context) {
         context.dataStore.edit { it[TV_SHOW_IMAGES] = enabled }
     }
 
+    val youTubeThumbnails: Flow<Boolean> = context.dataStore.data.map { it[YOUTUBE_THUMBNAILS] ?: false }
+
+    suspend fun setYouTubeThumbnails(enabled: Boolean) {
+        context.dataStore.edit { it[YOUTUBE_THUMBNAILS] = enabled }
+    }
+
+    val youTubeApiKey: Flow<String> = context.dataStore.data.map { it[YOUTUBE_API_KEY] ?: "" }
+
+    // Today's count and quota flag start over once Google's quota day has
+    // moved on; the last result is kept.
+    val youTubeUsage: Flow<YouTubeUsage> = context.dataStore.data.map { prefs ->
+        val today = prefs[YOUTUBE_USAGE_DAY] == YouTubeThumbnails.quotaDay()
+        YouTubeUsage(
+            searchesToday = if (today) prefs[YOUTUBE_SEARCHES_TODAY] ?: 0 else 0,
+            quotaReached = today && prefs[YOUTUBE_QUOTA_REACHED] == true,
+            lastResult = prefs[YOUTUBE_LAST_RESULT]?.let { name ->
+                YouTubeThumbnails.SearchResult.entries.find { it.name == name }
+            },
+            lastQuery = prefs[YOUTUBE_LAST_QUERY] ?: ""
+        )
+    }
+
+    // Successful searches (found or not) are what count against the quota.
+    suspend fun recordYouTubeSearch(result: YouTubeThumbnails.SearchResult, query: String) {
+        context.dataStore.edit { prefs ->
+            val day = YouTubeThumbnails.quotaDay()
+            if (prefs[YOUTUBE_USAGE_DAY] != day) {
+                prefs[YOUTUBE_USAGE_DAY] = day
+                prefs[YOUTUBE_SEARCHES_TODAY] = 0
+                prefs[YOUTUBE_QUOTA_REACHED] = false
+            }
+            when (result) {
+                YouTubeThumbnails.SearchResult.FOUND, YouTubeThumbnails.SearchResult.NO_MATCH ->
+                    prefs[YOUTUBE_SEARCHES_TODAY] = (prefs[YOUTUBE_SEARCHES_TODAY] ?: 0) + 1
+                YouTubeThumbnails.SearchResult.QUOTA_EXCEEDED -> prefs[YOUTUBE_QUOTA_REACHED] = true
+                else -> {}
+            }
+            prefs[YOUTUBE_LAST_RESULT] = result.name
+            prefs[YOUTUBE_LAST_QUERY] = query
+        }
+    }
+
     val continueWithRandomAlbum: Flow<Boolean> = context.dataStore.data.map { it[CONTINUE_WITH_RANDOM_ALBUM] ?: false }
 
     suspend fun setContinueWithRandomAlbum(enabled: Boolean) {
@@ -331,6 +387,7 @@ class SettingsManager(private val context: Context) {
         haWidgets: List<HaWidgetSlot?>,
         haMediaPlayer: String,
         tmdbApiKey: String,
+        youTubeApiKey: String,
         fAlbums: Boolean = true,
         fPlaylists: Boolean = true,
         fRadio: Boolean = true
@@ -342,6 +399,7 @@ class SettingsManager(private val context: Context) {
             prefs[HA_WIDGETS] = haWidgetsJson(haWidgets)
             prefs[SELECTED_HA_MEDIA_PLAYER] = haMediaPlayer
             prefs[TMDB_API_KEY] = tmdbApiKey.trim()
+            prefs[YOUTUBE_API_KEY] = youTubeApiKey.trim()
             prefs[FILTER_ALBUMS] = fAlbums
             prefs[FILTER_PLAYLISTS] = fPlaylists
             prefs[FILTER_RADIO] = fRadio

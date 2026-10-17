@@ -34,8 +34,9 @@ sits on its dock.
 - Volume and mute; when rooms are grouped, they control the whole group
 - Previous (the song that actually played last, even across album changes)
   and Next Up (from the Sonos queue); tap Previous for details
-- Song list: see every song in the album or playlist playing, with its
-  length, and tap one to play it
+- **Browse the queue**: open the album's or playlist's track list, see every
+  song in the queue with its length and which one is playing, and tap one to
+  jump straight to it
 - Speaker Groups: join and unjoin rooms; each grouped room also gets its own
   volume slider
 - Sound Settings: bass, treble, loudness, Night Sound, Speech Enhancement and
@@ -50,6 +51,9 @@ sits on its dock.
 - A 3D carousel of albums standing on a glass table, shown when music is
   paused; the reflection, glass surface and side light are adjustable
 - Shows all your Sonos Favorites: albums, playlists and radio
+- **Keeps favorites past Sonos's limit**: the app saves every favorite it
+  finds, and keeps it after it's removed from Sonos. Remove favorites from
+  Sonos to make room for new ones there, and they stay in Cover Flow
 - **Controls** fold away behind one button in the top right; tap it to show
   the filter, sort, refresh, search and view buttons
 - **Category filter**: cycles between all favorites, albums, playlists and
@@ -64,22 +68,32 @@ sits on its dock.
 - **Grid view**: the button beside it swaps the 3D carousel for a grid of
   album covers, several rows deep, that scrolls left and right - much
   quicker for finding one album among all your favorites. Tap a cover to
-  play it, or long-press it to delete it from your Sonos Favorites (after a
-  confirmation)
+  play it, or long-press it to delete it (after a confirmation)
 - **A-Z bar** above the grid: tap a letter, or drag along the bar, to jump
   straight to it
 - **Search**: the magnifier button opens an on-screen keyboard; type any
   part of a title or artist (case and accents don't matter) and the grid
   narrows as you type
 - Cover Flow always opens on all favorites in the carousel
-- Tap an album to play it, or tap its X to delete it from your Sonos
-  Favorites (after a confirmation)
+- Tap an album to play it, or tap its X to delete it (after a
+  confirmation). A favorite still on Sonos is deleted from Sonos too
+- If a favorite that's no longer on Sonos won't play (say the music service
+  removed the album), the app asks whether to delete it or keep it
 - Previous, Now Playing and Next Up cards along the bottom, each of which
   can be hidden
 - Ambient clock, in 12- or 24-hour time, with the current weather under the
   date when you have a Home Assistant weather widget
 - Optional: when an album finishes, carry on with a random album from your
   Sonos Favorites
+
+**Managing favorites** (Settings > Favorites)
+- Lists every favorite together, each with a badge: **Sonos** (still in your
+  Sonos Favorites) or **App only** (kept by the app after it was removed
+  from Sonos), with a filter for each
+- **Remove from Sonos** frees up a Sonos slot but keeps the favorite in the
+  app
+- **Delete** removes a favorite for good: from Sonos and the app, or, for
+  an app-only favorite, from the app alone (Sonos isn't touched)
 
 **TV mode**
 - Detects when a Sonos soundbar is playing TV audio and shows what's on, using
@@ -94,7 +108,8 @@ sits on its dock.
 - Turn off **Replace TV Show Images** to keep the images Home Assistant sends
 - Pick one fallback image for when there's no artwork, or rotate through them
 - Drops into a TV screensaver after a configurable delay
-- Experimental: Auto-Unmute After Commercials (see below)
+- Experimental: Auto-Unmute After Commercials and YouTube Thumbnails (see
+  below)
 
 **Home Assistant**
 - Connect button in Settings that checks your URL and token and says what's
@@ -158,6 +173,34 @@ Experimental**.
   differently, it won't trigger; it can also unmute when you skip back
   in a show while muted.
 
+### YouTube Thumbnails
+
+Most TVs send no artwork for YouTube, so TV mode shows the video's own
+thumbnail instead. Turn it on in **Settings → Home Assistant →
+Experimental**.
+
+- **How it works**: when the media player's app is YouTube, the thumbnail
+  comes straight from the video ID if the player reports one (Google Cast
+  usually does). Players that only report the title and channel, like Apple
+  TV, need a free [YouTube Data API](https://console.cloud.google.com/apis/library/youtube.googleapis.com)
+  key to search for the video, preferring a result from that channel.
+- **What it needs**: TV mode set up with a Home Assistant media player that
+  reports the app (`app_name` or `app_id`).
+- **Limits**: without a key (or the video ID), nothing changes and the TV
+  mode fallback artwork shows. Each new video uses one search; the free
+  quota allows about 100 a day. Settings shows today's searches (counted on
+  the device, as Google doesn't report what's left), warns once the quota
+  runs out, and says how the last search went. A search can occasionally
+  pick the wrong video when titles are similar.
+- **Your key, your responsibility**: the API key is your own, created in
+  your own Google Cloud project. You're responsible for how it's used,
+  for staying within Google's quotas and the [YouTube API Services Terms of
+  Service](https://developers.google.com/youtube/terms/api-services-terms-of-service),
+  and for any charges on your Google Cloud account. The app only uses the
+  key for the searches described above, and it's never sent anywhere but
+  Google. Restricting the key to the YouTube Data API v3 in Google Cloud
+  is recommended.
+
 ## What you need
 
 - An Android tablet or phone running Android 8 or newer. **It has only been
@@ -179,7 +222,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.31.apk`). It's about 55 MB.
+   `DockController-v1.0.32.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -210,7 +253,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.31.apk
+adb install -r DockController-v1.0.32.apk
 ```
 
 Every release is signed with the same key. If Android says **App not
@@ -224,13 +267,13 @@ settings.
 ## Setup
 
 1. Open the app. Settings opens automatically on first launch.
-2. **General**: pick your Sonos speaker (the app scans your Wi-Fi for them).
-3. **Cover Flow**: choose which kinds of favorites to show (albums,
-   playlists, radio) and tap **Refresh Favorites**. Then, on the Cover Flow
-   screen itself, use the
-   buttons in the top right to filter by albums, playlists or radio, and to
-   switch to the grid view.
-4. **Home Assistant** (optional): enter your server URL and a long-lived access
+2. **Setup**: pick the Sonos speaker for the room the dock is in (the app
+   scans your Wi-Fi for them). Then choose which kinds of favorites to show
+   (albums, playlists, radio) and tap **Refresh Favorites**. On the Cover
+   Flow screen itself, use the buttons in the top right to filter by albums,
+   playlists or radio, and to switch to the grid view. The **Favorites** tab
+   lists every favorite the app keeps, on Sonos or not.
+3. **Home Assistant** (optional): enter your server URL and a long-lived access
    token (Home Assistant → your profile → Security → Long-lived access tokens)
    and tap **Connect**. Once connected, the token is hidden; tap **Change**
    to replace it. Then choose a type (light, climate, cover, lock,
@@ -240,7 +283,7 @@ settings.
    them, and pick the media player for TV mode. Optionally add a free
    [TMDB](https://www.themoviedb.org/settings/api) API key for better TV show
    logos.
-5. Tap **Save & Apply**.
+4. Tap **Save & Apply**.
 
 **To have it come on whenever the tablet is docked**, make it the screen saver:
 
@@ -266,13 +309,25 @@ own music library, AirPlay and Spotify Connect.
 
 ## Known limitations
 
-- **About 70 Sonos Favorites at most (a Sonos limit).** Sonos itself caps
+- **About 70 Sonos Favorites at a time (a Sonos limit).** Sonos itself caps
   how many favorites a system can hold, at around 70 across albums,
-  playlists and radio. Cover Flow shows every favorite you have, so it can't
-  show more than Sonos allows; to make room for new ones, remove some in the
-  Sonos app (or with Cover Flow's X button).
-- Albums only appear in Cover Flow once they're saved as Sonos Favorites,
-  since those are the only albums Sonos can reliably play again later.
+  playlists and radio. Cover Flow can hold more: once the app has synced a
+  favorite, you can remove it from Sonos to free up a slot, and it stays in
+  the app until you delete it here. To make room:
+  1. Tap **Refresh Favorites** (in Settings > Setup, or in Cover Flow) so
+     the app has saved everything currently on Sonos. A favorite removed
+     from Sonos before the app has seen it is gone for good.
+  2. Remove older ones with **Remove from Sonos** in Settings > Favorites,
+     or in the Sonos app. They're then marked **App only** and still play
+     from Cover Flow.
+  3. To get rid of one completely, use **Delete** in Settings > Favorites
+     or the X in Cover Flow.
+- Albums only appear in Cover Flow once they've been saved as Sonos
+  Favorites at least once, since that's where the app gets what it needs to
+  play them.
+- A favorite that's no longer on Sonos is played from the link the app saved
+  when it was. If the music service changes or removes the album, that link
+  can stop working; the app then offers to delete it.
 
 ## Building from source
 
@@ -291,12 +346,16 @@ own music library, AirPlay and Spotify Connect.
   plus its WebSocket API for instant updates.
 - **UI**: Kotlin and Jetpack Compose.
 
-Your Home Assistant URL and token, and your TMDB key, are stored only on the
-device.
+Your Home Assistant URL and token, and your TMDB and YouTube keys, are stored
+only on the device.
 
 TV show logos come from [TMDB](https://www.themoviedb.org) (when you add an
 API key) or [TVmaze](https://www.tvmaze.com). This product uses the TMDB API
 but is not endorsed or certified by TMDB.
+
+YouTube thumbnails use YouTube API Services, with your own API key, and
+YouTube's [Terms of Service](https://www.youtube.com/t/terms) apply. This
+app is not affiliated with or endorsed by YouTube or Google.
 
 Home Assistant icons are drawn with [Material Design
 Icons](https://pictogrammers.com/library/mdi/) by Pictogrammers, and weather

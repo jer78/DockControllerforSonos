@@ -220,8 +220,8 @@ fun AmbientClockScreen(
     reflectionStrength: Float = SettingsManager.COVER_FLOW_REFLECTION_DEFAULT,
     glassTableStrength: Float = SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT,
     sideLightStrength: Float = SettingsManager.COVER_FLOW_SIDE_LIGHT_DEFAULT,
-    // The X (and the grid's long press) permanently deletes the Sonos
-    // Favorite, after a confirmation prompt.
+    // The X (and the grid's long press) permanently deletes the favorite,
+    // from Sonos too if it's still there, after a confirmation prompt.
     onDeleteFavorite: (AlbumHistoryItem) -> Unit = {},
     // Album to start centered on, and a callback whenever a new one settles
     // in the center - lets the caller resume the rotation where it left off.
@@ -1237,15 +1237,21 @@ fun AmbientClockScreen(
                 ) {
                     Column(modifier = Modifier.padding(28.dp)) {
                         Text(
-                            "Delete from Sonos Favorites?",
+                            if (item.onSonos) "Delete from Sonos Favorites?" else "Delete from the app?",
                             color = Color.White,
                             fontSize = 22.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            "\"${item.albumTitle}\" will be permanently removed from your Sonos " +
-                                "Favorites, including in the Sonos app. This can't be undone here.",
+                            if (item.onSonos) {
+                                "\"${item.albumTitle}\" will be permanently removed from your Sonos " +
+                                    "Favorites, including in the Sonos app, and from this app. To keep it " +
+                                    "here, remove it from Sonos in Settings > Favorites instead."
+                            } else {
+                                "\"${item.albumTitle}\" is no longer in your Sonos Favorites, so deleting " +
+                                    "it here removes it for good."
+                            },
                             color = Color.White.copy(alpha = 0.75f),
                             fontSize = 16.sp
                         )

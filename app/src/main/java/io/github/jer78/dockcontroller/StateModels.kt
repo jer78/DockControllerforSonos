@@ -53,7 +53,17 @@ data class TrackState(
     val seriesTitle: String = "",
     // TV mode: the recognised show's title logo, shown in place of the
     // artwork (see TvShowLogos).
-    val tvShowLogo: TvShowLogo? = null
+    val tvShowLogo: TvShowLogo? = null,
+    // TV mode: which app the HA media player says is showing, and what it's
+    // playing - reported differently (or not at all) by each integration,
+    // e.g. Cast gives YouTube's video ID as media_content_id.
+    val appName: String = "",
+    val appId: String = "",
+    val contentId: String = "",
+    val contentType: String = "",
+    // TV mode: every attribute the HA media player reported, pretty-printed
+    // for the Metadata Debugger.
+    val haAttributes: String = ""
 )
 
 // A failed command (album play, favorite delete, ...), kept in
@@ -90,7 +100,14 @@ data class AlbumHistoryItem(
     // tells apart albums sharing a title. Blank for older History entries.
     val albumKey: String = "",
     // Apple Music albums only (from Apple's catalog); blank otherwise.
-    val genre: String = ""
+    val genre: String = "",
+    // Favorites only: false once it's gone from Sonos Favorites but the app
+    // still keeps it (see SavedFavorites). playUri is then a local key, not
+    // a Sonos ID.
+    val onSonos: Boolean = true,
+    // Favorites only: what sonos_bridge.play_stored_favorite needs to play
+    // it without Sonos's help (JSON from get_sonos_favorites).
+    val replay: String = ""
 )
 
 data class SonosSpeakerGroup(

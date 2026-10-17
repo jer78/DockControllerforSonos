@@ -2,6 +2,7 @@ import soco
 from soco.discovery import by_name
 from soco.data_structures import to_didl_string
 import re
+import json
 import requests
 from urllib.parse import unquote
 
@@ -179,6 +180,16 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
                 if art and art.startswith('/'): art = f"http://{master.ip_address}:1400{art}"
                 art = get_high_res_art(artist, title, art)
 
+                # Everything needed to play it again without Sonos's help,
+                # so the app can keep the favorite after it's removed from
+                # Sonos (see play_stored_favorite). Blank if it has nothing
+                # playable.
+                try:
+                    replay_title, candidates = _replay_candidates(item)
+                    replay = json.dumps({"title": replay_title, "candidates": candidates})
+                except Exception:
+                    replay = ""
+
                 results.append({
                     "title": title,
                     "uri": item_id, # Store native ID for HA replay
@@ -188,6 +199,7 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
                     "artist": artist,
                     "art": art,
                     "album_key": album_key,
+                    "replay": replay,
                     "apple_id": _apple_album_id(album_key, resource_uri) if is_a else None
                 })
 
@@ -437,6 +449,142 @@ def _describe_error(e):
         return f"UPnP Error {code}: {SONOS_UPNP_ERRORS.get(code, getattr(e, 'error_description', '') or 'Unknown error')}"
     return str(e)
 
+def _replay_candidates(target):
+    """
+    (title, [[label, uri, meta], ...]): the ways to play a favorite, best
+    first. Raises ValueError when it has nothing playable.
+    """
+    # Crucial Fix: HA uses favorite.reference to get the real,
+    # playable item (correct class + account tokens). The
+    # DidlFavorite wrapper's own item_class is always the generic
+    # "object.itemobject.item.sonos-favorite" string, so checking
+    # it (as before) never detects radio/streams and everything
+    # fell through to add_to_queue() -> error 714.
+    # Some resolved references come back with an empty <res>
+    # list (no resources) - prefer whichever candidate actually
+    # has one, instead of blindly using .reference and crashing
+    # with "list index out of range".
+    media_item = None
+    try:
+        ref = target.reference
+        if getattr(ref, 'resources', None):
+            media_item = ref
+    except Exception:
+        pass
+    if media_item is None and getattr(target, 'resources', None):
+        media_item = target
+    if media_item is None:
+        raise ValueError("No playable resource for this favorite")
+
+    # Crucial Fix #2: resMD often omits the <desc> element (the
+    # account-linking token for cloud services like Apple/Amazon
+    # Music). When that happens SoCo sets reference.desc = None,
+    # which serializes to an EMPTY <desc> tag. AddURIToQueue still
+    # succeeds in that case, but Sonos can't authenticate to the
+    # service, so the track silently fails to stream - this is
+    # the "returns SUCCESS but nothing plays" case. Borrow the
+    # favorite's own desc token (it always has the real one) when
+    # the resolved reference is missing it.
+    own_desc = getattr(media_item, 'desc', None)
+    candidates = []
+    if media_item is not target and not own_desc:
+        fav_desc = getattr(target, 'desc', None)
+        if fav_desc:
+            media_item.desc = fav_desc
+            candidates.append(["reference", media_item.get_uri(), to_didl_string(media_item)])
+            media_item.desc = own_desc
+    candidates.append(["reference (own desc)", media_item.get_uri(), to_didl_string(media_item)])
+    # Last resort: replay the favorite exactly as the Sonos app
+    # does - its own <res> URI plus the raw resMD Sonos stored
+    # with it, with no SoCo re-serialization in between. Sonos
+    # rejects some re-serialized references (UPnP error 804)
+    # that it accepts in this original form.
+    fav_res = getattr(target, 'resources', None)
+    fav_md = getattr(target, 'resource_meta_data', None)
+    if fav_res and fav_md:
+        candidates.append(["favorite resMD", fav_res[0].uri, fav_md])
+    return media_item.title, candidates
+
+def _play_candidates(master, candidates, title):
+    """Tries each [label, uri, meta] in turn until one starts playing."""
+    try:
+        import time
+
+        # HA-STYLE SOURCE DETECTION: classify by the resolved URI,
+        # exactly what music_source_from_uri() uses under the hood.
+        source = master.music_source_from_uri(candidates[0][1])
+
+        errors = []
+        started = False
+        for label, uri, meta in candidates:
+            try:
+                if source == 'RADIO':
+                    master.play_uri(uri, meta=meta, title=title)
+                else:
+                    # Containers/tracks (Albums/Playlists/Songs): Clear -> Add REFERENCE -> Play
+                    master.clear_queue()
+                    master.avTransport.AddURIToQueue([
+                        ("InstanceID", 0),
+                        ("EnqueuedURI", uri),
+                        ("EnqueuedURIMetaData", meta),
+                        ("DesiredFirstTrackNumberEnqueued", 0),
+                        ("EnqueueAsNext", 0),
+                    ])
+
+                    # Large cloud playlists/albums can take a moment to
+                    # resolve into actual queue tracks server-side. Poll
+                    # instead of guessing a fixed delay.
+                    waited = 0.0
+                    while master.queue_size in (None, 0) and waited < 4.0:
+                        time.sleep(0.25)
+                        waited += 0.25
+
+                    master.play_from_queue(0)
+                    master.play()
+                started = True
+                break
+            except Exception as ce:
+                errors.append(f"{label}: {_describe_error(ce)}")
+        if not started:
+            # Report the first attempt's error - it's the real
+            # rejection; later ones are just the fallbacks failing too.
+            return f"FAIL: {errors[0].split(': ', 1)[1]}" + (f" (+{len(errors) - 1} fallback(s) failed)" if len(errors) > 1 else "")
+
+        # Verify playback actually started. AVTransport calls can
+        # return success even when the speaker silently rejects or
+        # skips content it can't resolve (stale account tokens,
+        # unsupported item, etc.) - don't report SUCCESS if nothing
+        # is actually playing.
+        waited = 0.0
+        state = ""
+        while waited < 3.0:
+            time.sleep(0.3)
+            waited += 0.3
+            state = master.get_current_transport_info().get('current_transport_state', '')
+            if state in ('PLAYING', 'TRANSITIONING'):
+                return "SUCCESS"
+
+        return f"FAIL: Speaker did not start playback (state: {state or 'UNKNOWN'})"
+    except Exception as pe:
+        return f"FAIL: {_describe_error(pe)}"
+
+def play_stored_favorite(replay, speaker_name=None):
+    """
+    Plays a favorite from the replay data get_sonos_favorites captured -
+    for favorites the app keeps after they're gone from Sonos Favorites.
+    The data can go stale (e.g. the album is pulled from the service), in
+    which case this fails like any other play.
+    """
+    try:
+        data = json.loads(replay or "{}")
+        candidates = data.get("candidates") or []
+        if not candidates: return "FAIL: No saved playback data for this favorite"
+        device = get_speaker_instance(speaker_name)
+        if not device: return "ERR: Speaker Offline"
+        return _play_candidates(device.group.coordinator, candidates, data.get("title", ""))
+    except Exception as e:
+        return f"CRITICAL ERR: {str(e)}"
+
 def play_album_smart(*args):
     """
     HA PLAYBACK REPLICATION: Uses native reference injection.
@@ -466,124 +614,18 @@ def play_album_smart(*args):
                         except: continue
 
             if not target:
-                # Sonos requires a reference it resolved itself (via Browse/
-                # Favorites) to reliably queue and play cloud-service content -
-                # a captured/replayed URI+metadata, even when byte-accurate,
-                # gets rejected (UPnP error 800). So only real Sonos Favorite
-                # IDs are playable here; anything else can't be resolved.
+                # Gone from Sonos Favorites since the last refresh. The app
+                # falls back to the replay data it saved for it (see
+                # play_stored_favorite) when it sees this exact message.
                 return "FAIL: Not a valid Sonos Favorite"
 
-            # 2. HA NATIVE COMMANDS
             try:
-                import time
-
-                # Crucial Fix: HA uses favorite.reference to get the real,
-                # playable item (correct class + account tokens). The
-                # DidlFavorite wrapper's own item_class is always the generic
-                # "object.itemobject.item.sonos-favorite" string, so checking
-                # it (as before) never detects radio/streams and everything
-                # fell through to add_to_queue() -> error 714.
-                # Some resolved references come back with an empty <res>
-                # list (no resources) - prefer whichever candidate actually
-                # has one, instead of blindly using .reference and crashing
-                # with "list index out of range".
-                media_item = None
-                try:
-                    ref = target.reference
-                    if getattr(ref, 'resources', None):
-                        media_item = ref
-                except Exception:
-                    pass
-                if media_item is None and getattr(target, 'resources', None):
-                    media_item = target
-                if media_item is None:
-                    return "FAIL: No playable resource for this favorite"
-
-                # Crucial Fix #2: resMD often omits the <desc> element (the
-                # account-linking token for cloud services like Apple/Amazon
-                # Music). When that happens SoCo sets reference.desc = None,
-                # which serializes to an EMPTY <desc> tag. AddURIToQueue still
-                # succeeds in that case, but Sonos can't authenticate to the
-                # service, so the track silently fails to stream - this is
-                # the "returns SUCCESS but nothing plays" case. Borrow the
-                # favorite's own desc token (it always has the real one) when
-                # the resolved reference is missing it.
-                own_desc = getattr(media_item, 'desc', None)
-                candidates = []
-                if media_item is not target and not own_desc:
-                    fav_desc = getattr(target, 'desc', None)
-                    if fav_desc:
-                        media_item.desc = fav_desc
-                        candidates.append(("reference", media_item.get_uri(), to_didl_string(media_item)))
-                        media_item.desc = own_desc
-                candidates.append(("reference (own desc)", media_item.get_uri(), to_didl_string(media_item)))
-                # Last resort: replay the favorite exactly as the Sonos app
-                # does - its own <res> URI plus the raw resMD Sonos stored
-                # with it, with no SoCo re-serialization in between. Sonos
-                # rejects some re-serialized references (UPnP error 804)
-                # that it accepts in this original form.
-                fav_res = getattr(target, 'resources', None)
-                fav_md = getattr(target, 'resource_meta_data', None)
-                if fav_res and fav_md:
-                    candidates.append(("favorite resMD", fav_res[0].uri, fav_md))
-
-                # HA-STYLE SOURCE DETECTION: classify by the resolved URI,
-                # exactly what music_source_from_uri() uses under the hood.
-                source = master.music_source_from_uri(candidates[0][1])
-
-                errors = []
-                started = False
-                for label, uri, meta in candidates:
-                    try:
-                        if source == 'RADIO':
-                            master.play_uri(uri, meta=meta, title=media_item.title)
-                        else:
-                            # Containers/tracks (Albums/Playlists/Songs): Clear -> Add REFERENCE -> Play
-                            master.clear_queue()
-                            master.avTransport.AddURIToQueue([
-                                ("InstanceID", 0),
-                                ("EnqueuedURI", uri),
-                                ("EnqueuedURIMetaData", meta),
-                                ("DesiredFirstTrackNumberEnqueued", 0),
-                                ("EnqueueAsNext", 0),
-                            ])
-
-                            # Large cloud playlists/albums can take a moment to
-                            # resolve into actual queue tracks server-side. Poll
-                            # instead of guessing a fixed delay.
-                            waited = 0.0
-                            while master.queue_size in (None, 0) and waited < 4.0:
-                                time.sleep(0.25)
-                                waited += 0.25
-
-                            master.play_from_queue(0)
-                            master.play()
-                        started = True
-                        break
-                    except Exception as ce:
-                        errors.append(f"{label}: {_describe_error(ce)}")
-                if not started:
-                    # Report the first attempt's error - it's the real
-                    # rejection; later ones are just the fallbacks failing too.
-                    return f"FAIL: {errors[0].split(': ', 1)[1]}" + (f" (+{len(errors) - 1} fallback(s) failed)" if len(errors) > 1 else "")
-
-                # Verify playback actually started. AVTransport calls can
-                # return success even when the speaker silently rejects or
-                # skips content it can't resolve (stale account tokens,
-                # unsupported item, etc.) - don't report SUCCESS if nothing
-                # is actually playing.
-                waited = 0.0
-                state = ""
-                while waited < 3.0:
-                    time.sleep(0.3)
-                    waited += 0.3
-                    state = master.get_current_transport_info().get('current_transport_state', '')
-                    if state in ('PLAYING', 'TRANSITIONING'):
-                        return "SUCCESS"
-
-                return f"FAIL: Speaker did not start playback (state: {state or 'UNKNOWN'})"
+                title, candidates = _replay_candidates(target)
+            except ValueError as ve:
+                return f"FAIL: {ve}"
             except Exception as pe:
                 return f"FAIL: {_describe_error(pe)}"
+            return _play_candidates(master, candidates, title)
         return "FAIL: No ID"
     except Exception as e:
         return f"CRITICAL ERR: {str(e)}"

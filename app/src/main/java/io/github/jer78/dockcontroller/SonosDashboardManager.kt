@@ -8,6 +8,7 @@ import com.chaquo.python.Python
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.withLock
 
 class SonosDashboardManager private constructor(context: Context) {
     private val appContext = context.applicationContext
@@ -48,6 +49,24 @@ class SonosDashboardManager private constructor(context: Context) {
     // for matching what's playing (to learn album artists) and for
     // Continue With a Random Album, not shown directly in the UI.
     private val _favoriteAlbumsRef = MutableStateFlow<List<AlbumHistoryItem>>(emptyList())
+
+    // Every favorite of every kind, on Sonos or kept only here (see
+    // SavedFavorites) - the source both lists above are built from, and
+    // what Settings > Favorites manages. Changes go through savedLock, so a
+    // refresh and a delete can't overwrite each other.
+    private val savedFavoritesStore = SavedFavoritesStore(appContext)
+    private val savedLock = kotlinx.coroutines.sync.Mutex()
+    private var savedLoaded = false
+    private val _savedFavorites = MutableStateFlow<List<AlbumHistoryItem>>(emptyList())
+    val savedFavorites: StateFlow<List<AlbumHistoryItem>> = _savedFavorites.asStateFlow()
+    // Cover Flow's category filters (Settings > Cover Flow > Sync
+    // Categories) as last applied: albums, playlists, radio.
+    @Volatile private var shownKinds = Triple(true, true, true)
+
+    // A favorite the user tried to play that's no longer on Sonos and whose
+    // saved data didn't play - the hosts ask whether to delete or keep it.
+    private val _unplayableFavorite = MutableStateFlow<AlbumHistoryItem?>(null)
+    val unplayableFavorite: StateFlow<AlbumHistoryItem?> = _unplayableFavorite.asStateFlow()
 
     // Artist names learned by observing a favorited album actually play
     // (Sonos never reports a real artist for album favorites, and only Apple
@@ -143,10 +162,6 @@ class SonosDashboardManager private constructor(context: Context) {
     // Called right after Settings saves, so a new speaker or new category
     // filters show in Cover Flow straight away.
     fun refreshAfterSettingsSave() {
-        // The speaker may have just been picked (first-time setup) or
-        // changed - artist learning and "Continue With a Random Album" both
-        // need this list, which otherwise only loads at startup and hourly.
-        refreshFavoriteAlbumsRef()
         scope.launch { reloadFavorites() }
     }
 
@@ -165,8 +180,15 @@ class SonosDashboardManager private constructor(context: Context) {
         if (pollingJob != null) return
         scope.launch {
             _favoriteArtistCache.value = settingsManager.favoriteArtistCache.first()
-            // Artist learning (see pollSonos) matches plays against it.
-            refreshFavoriteAlbumsRef()
+            // The saved favorites show straight away, even with the
+            // speaker offline, until the refresh below brings them up to date.
+            shownKinds = Triple(
+                settingsManager.filterAlbums.first(),
+                settingsManager.filterPlaylists.first(),
+                settingsManager.filterRadio.first()
+            )
+            savedLock.withLock { ensureSavedLoaded() }
+            publishFavorites()
 
             reloadFavorites()
         }
@@ -390,22 +412,19 @@ class SonosDashboardManager private constructor(context: Context) {
             val py = Python.getInstance()
             val pyModule = py.getModule("sonos_bridge")
             val speaker = speakerOverride?.takeIf { it.isNotBlank() } ?: settingsManager.sonosSpeaker.first()
-            
+
             if (speaker.isBlank()) {
                 _favoritesRefreshStatus.value = "Error: Select a speaker first"
                 report(FavoritesRefreshResult(0, 0, "Select a speaker first"))
                 return@launch
             }
 
-            val filters = mutableListOf<String>()
-            if (fAlbums) filters.add("albums")
-            if (fPlaylists) filters.add("playlists")
-            if (fRadio) filters.add("radio")
-            val filterString = if (filters.isEmpty()) "none" else filters.joinToString(",")
-
             try {
+                // Always every kind: the saved list holds them all, and
+                // something filtered out here mustn't look removed from
+                // Sonos. The category filters only pick what Cover Flow shows.
                 val pyFavs = withTimeoutOrNull(FAVORITES_FETCH_TIMEOUT_MS) {
-                    pyModule.callAttr("get_sonos_favorites", speaker, filterString).asList()
+                    pyModule.callAttr("get_sonos_favorites", speaker, "albums,playlists,radio").asList()
                 }
 
                 if (pyFavs == null) {
@@ -416,11 +435,11 @@ class SonosDashboardManager private constructor(context: Context) {
 
                 val favItems = mutableListOf<AlbumHistoryItem>()
                 var diagMsg = ""
-                
+
                 for (item in pyFavs) {
                     val map = item.asMap()
                     val title = map[PyObject.fromJava("title")]?.toString() ?: ""
-                    
+
                     if (title == "DIAGNOSTIC" || title == "DIAG") {
                         diagMsg = map[PyObject.fromJava("artist")]?.toString() ?: ""
                     } else {
@@ -432,24 +451,36 @@ class SonosDashboardManager private constructor(context: Context) {
                             playMetadata = map[PyObject.fromJava("meta")]?.toString() ?: "",
                             kind = map[PyObject.fromJava("kind")]?.toString() ?: "",
                             albumKey = map[PyObject.fromJava("album_key")]?.toString() ?: "",
-                            genre = map[PyObject.fromJava("genre")]?.toString() ?: ""
+                            genre = map[PyObject.fromJava("genre")]?.toString() ?: "",
+                            replay = map[PyObject.fromJava("replay")]?.toString() ?: ""
                         ))
                     }
                 }
-                
-                // New = not among the favorites shown before the refresh.
-                val before = _albumHistory.value.map { it.playUri.ifBlank { it.albumTitle } }.toSet()
-                val added = favItems.count { it.playUri.ifBlank { it.albumTitle } !in before }
-                _albumHistory.value = withResolvedArtists(favItems)
-                _favoritesRefreshCount.value = favItems.size
-                report(FavoritesRefreshResult(added, favItems.size))
-                if (favItems.isNotEmpty()) {
-                    _favoritesRefreshStatus.value = "Success: Found ${favItems.size} items"
-                } else if (diagMsg.isNotBlank()) {
-                    _favoritesRefreshStatus.value = "0 items | $diagMsg"
-                } else {
-                    _favoritesRefreshStatus.value = "Success: 0 items found"
+
+                // "No items matched" is Sonos genuinely having no favorites;
+                // any other diagnostic (speaker offline, crawl error) means
+                // the list couldn't be read, so nothing gets marked as gone.
+                if (favItems.isEmpty() && diagMsg.isNotBlank() && !diagMsg.startsWith("No items matched")) {
+                    _favoritesRefreshStatus.value = "Error: $diagMsg"
+                    report(FavoritesRefreshResult(0, _albumHistory.value.size, diagMsg))
+                    return@launch
                 }
+
+                // New = not among the favorites shown before the refresh.
+                val before = _albumHistory.value.map { favoriteKey(it) }.toSet()
+                shownKinds = Triple(fAlbums, fPlaylists, fRadio)
+                savedLock.withLock {
+                    ensureSavedLoaded()
+                    updateSaved(mergeSavedFavorites(_savedFavorites.value, favItems))
+                }
+                publishFavorites()
+                val shown = _albumHistory.value
+                val added = shown.count { favoriteKey(it) !in before }
+                val localOnly = _savedFavorites.value.count { !it.onSonos }
+                _favoritesRefreshCount.value = shown.size
+                report(FavoritesRefreshResult(added, shown.size))
+                _favoritesRefreshStatus.value = "Success: Found ${favItems.size} on Sonos" +
+                    if (localOnly > 0) ", $localOnly saved in app only" else ""
             } catch (e: Exception) {
                 _favoritesRefreshStatus.value = "Critical Error: ${e.message}"
                 report(FavoritesRefreshResult(0, _albumHistory.value.size, e.message ?: "Unknown error"))
@@ -457,39 +488,34 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
-    private fun refreshFavoriteAlbumsRef() {
-        scope.launch {
-            val py = Python.getInstance()
-            val pyModule = py.getModule("sonos_bridge")
-            val speaker = settingsManager.sonosSpeaker.first()
-            if (speaker.isBlank()) return@launch
+    // Callers hold savedLock.
+    private fun ensureSavedLoaded() {
+        if (savedLoaded) return
+        _savedFavorites.value = savedFavoritesStore.load()
+        savedLoaded = true
+    }
 
-            try {
-                // Always every album, whatever Cover Flow's filters.
-                val pyFavs = withTimeoutOrNull(FAVORITES_FETCH_TIMEOUT_MS) {
-                    pyModule.callAttr("get_sonos_favorites", speaker, "albums").asList()
-                } ?: return@launch
+    // Callers hold savedLock.
+    private fun updateSaved(items: List<AlbumHistoryItem>) {
+        val sorted = items.sortedBy { it.albumTitle.lowercase() }
+        _savedFavorites.value = sorted
+        savedFavoritesStore.save(sorted)
+    }
 
-                val items = mutableListOf<AlbumHistoryItem>()
-                for (item in pyFavs) {
-                    val map = item.asMap()
-                    val title = map[PyObject.fromJava("title")]?.toString() ?: ""
-                    if (title == "DIAGNOSTIC" || title == "DIAG") continue
-                    items.add(AlbumHistoryItem(
-                        artUrl = map[PyObject.fromJava("art")]?.toString() ?: "",
-                        artist = map[PyObject.fromJava("artist")]?.toString() ?: "Unknown Artist",
-                        albumTitle = title,
-                        playUri = map[PyObject.fromJava("uri")]?.toString() ?: "",
-                        playMetadata = map[PyObject.fromJava("meta")]?.toString() ?: "",
-                        albumKey = map[PyObject.fromJava("album_key")]?.toString() ?: "",
-                        genre = map[PyObject.fromJava("genre")]?.toString() ?: ""
-                    ))
-                }
-                _favoriteAlbumsRef.value = withResolvedArtists(items)
-            } catch (e: Exception) {
-                e.printStackTrace()
+    // Rebuilds Cover Flow's list (the shown kinds) and the album list
+    // (every album, whatever the filters) from the saved favorites.
+    private fun publishFavorites() {
+        val saved = _savedFavorites.value
+        val (albums, playlists, radio) = shownKinds
+        val shown = saved.filter {
+            when (it.kind) {
+                "playlist" -> playlists
+                "radio" -> radio
+                else -> albums
             }
         }
+        _favoriteAlbumsRef.value = withResolvedArtists(saved.filter { it.kind == "album" })
+        _albumHistory.value = withResolvedArtists(shown)
     }
 
     // Album-title comparison key that ignores edition/version suffixes in
@@ -579,10 +605,8 @@ class SonosDashboardManager private constructor(context: Context) {
                 if (speaker.isNotBlank()) {
                     val now = System.currentTimeMillis()
                     if (now - lastFavoritesRefreshMs >= FAVORITES_REFRESH_INTERVAL_MS) {
-                        // Hourly - artist learning below needs the album
-                        // list too. Timed, not counted in loops, since the
+                        // Hourly. Timed, not counted in loops, since the
                         // loop runs as often as events arrive.
-                        refreshFavoriteAlbumsRef()
                         reloadFavorites()
                         lastFavoritesRefreshMs = now
                     }
@@ -623,16 +647,22 @@ class SonosDashboardManager private constructor(context: Context) {
                             val autoUnmute = settingsManager.autoUnmuteAfterAds.first()
                             val tmdbKey = settingsManager.tmdbApiKey.first()
                             val tvShowImages = settingsManager.tvShowImages.first()
+                            val youTubeThumbs = settingsManager.youTubeThumbnails.first()
+                            val youTubeKey = settingsManager.youTubeApiKey.first()
+                            val youTubeQuotaReached = youTubeThumbs && settingsManager.youTubeUsage.first().quotaReached
 
                             if (haMedia.isNotBlank()) {
                                 haManager.fetchHAMediaPlayer(url, token, haMedia) { haTrack ->
                                     maybeAutoUnmuteAfterAds(haTrack, speaker, muted, autoUnmute)
                                     val showLogo = if (tvShowImages) tvShowLogoFor(haTrack, tmdbKey) else null
+                                    val art = haTrack.albumArtUrl.ifBlank {
+                                        if (youTubeThumbs) youTubeThumbnailFor(haTrack, youTubeKey, youTubeQuotaReached) ?: "" else ""
+                                    }
                                     _trackState.update { it.copy(
                                         title = haTrack.title,
                                         artist = haTrack.artist,
                                         album = haTrack.album,
-                                        albumArtUrl = haTrack.albumArtUrl,
+                                        albumArtUrl = art,
                                         seriesTitle = haTrack.seriesTitle,
                                         tvShowLogo = showLogo,
                                         isPlaying = haTrack.isPlaying,
@@ -641,7 +671,12 @@ class SonosDashboardManager private constructor(context: Context) {
                                         groupMembers = memberVolumes,
                                         positionSeconds = haTrack.positionSeconds,
                                         durationSeconds = haTrack.durationSeconds,
-                                        shuffleAvailable = false
+                                        shuffleAvailable = false,
+                                        appName = haTrack.appName,
+                                        appId = haTrack.appId,
+                                        contentId = haTrack.contentId,
+                                        contentType = haTrack.contentType,
+                                        haAttributes = haTrack.haAttributes
                                     )}
                                 }
                             } else {
@@ -655,7 +690,12 @@ class SonosDashboardManager private constructor(context: Context) {
                                     groupMembers = memberVolumes,
                                     positionSeconds = 0,
                                     durationSeconds = 0,
-                                    shuffleAvailable = false
+                                    shuffleAvailable = false,
+                                    appName = "",
+                                    appId = "",
+                                    contentId = "",
+                                    contentType = "",
+                                    haAttributes = ""
                                 )}
                             }
                         } else {
@@ -709,6 +749,11 @@ class SonosDashboardManager private constructor(context: Context) {
                                 albumArtUrl = art,
                                 seriesTitle = "",
                                 tvShowLogo = null,
+                                appName = "",
+                                appId = "",
+                                contentId = "",
+                                contentType = "",
+                                haAttributes = "",
                                 isPlaying = state == "PLAYING",
                                 groupMembers = memberVolumes,
                                 positionSeconds = position,
@@ -837,6 +882,31 @@ class SonosDashboardManager private constructor(context: Context) {
                 val logo = tvShowLogos.lookUp(show, tmdbKey) ?: return@launch
                 _trackState.update {
                     if (_isTvMode.value && detectTvShowName(it.title, it.seriesTitle, it.artist, it.album) == show) it.copy(tvShowLogo = logo) else it
+                }
+            }
+        }
+        return null
+    }
+
+    private val youTubeThumbnails = YouTubeThumbnails { result, query ->
+        scope.launch { settingsManager.recordYouTubeSearch(result, query) }
+    }
+
+    // The thumbnail for the YouTube video in this HA track, if it's already
+    // been found. Otherwise starts the lookup and fills it in once it
+    // arrives - if that video is still on, still without artwork, by then.
+    // Once Google says the day's quota is used up, no more searches are
+    // sent until it resets (a known video ID still works).
+    private fun youTubeThumbnailFor(track: TrackState, apiKey: String, quotaReached: Boolean): String? {
+        if (!YouTubeThumbnails.isYouTube(track)) return null
+        youTubeThumbnails.cached(track, apiKey)?.let { return it }
+        val searchBlocked = quotaReached && YouTubeThumbnails.videoIdFrom(track.contentId) == null
+        if (!searchBlocked && youTubeThumbnails.claimLookup(track, apiKey)) {
+            scope.launch {
+                val thumbnail = youTubeThumbnails.lookUp(track, apiKey) ?: return@launch
+                _trackState.update {
+                    val sameVideo = it.title == track.title && it.artist == track.artist && it.contentId == track.contentId
+                    if (_isTvMode.value && sameVideo && it.albumArtUrl.isBlank()) it.copy(albumArtUrl = thumbnail) else it
                 }
             }
         }
@@ -1208,37 +1278,99 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
-    fun playAlbum(album: AlbumHistoryItem) {
+    // askIfUnplayable: a user's tap rather than e.g. Continue With a Random
+    // Album - if a favorite that's no longer on Sonos won't play, the hosts
+    // then ask whether to delete it (see unplayableFavorite).
+    fun playAlbum(album: AlbumHistoryItem, askIfUnplayable: Boolean = false) {
         lastStartedFavorite = album to System.currentTimeMillis()
         scope.launch {
             val py = Python.getInstance()
             val speaker = settingsManager.sonosSpeaker.first()
             _trackState.update { it.copy(lastCommandSent = "Attempting: '${album.albumTitle}'...") }
+            fun playStored(): String = py.getModule("sonos_bridge")
+                .callAttr("play_stored_favorite", album.replay, speaker).toString()
+            var fromSavedData = album.isSavedLocally()
             val result = try {
-                py.getModule("sonos_bridge").callAttr(
-                    "play_album_smart",
-                    album.albumTitle,
-                    album.artist,
-                    album.playUri,
-                    album.playMetadata,
-                    speaker
-                ).toString()
+                if (fromSavedData) playStored() else {
+                    val live = py.getModule("sonos_bridge").callAttr(
+                        "play_album_smart",
+                        album.albumTitle,
+                        album.artist,
+                        album.playUri,
+                        album.playMetadata,
+                        speaker
+                    ).toString()
+                    // Removed from Sonos since the last refresh - play what
+                    // was saved for it, and refresh so it's marked as gone.
+                    if (live == "FAIL: Not a valid Sonos Favorite" && album.replay.isNotBlank()) {
+                        fromSavedData = true
+                        scope.launch { reloadFavorites() }
+                        playStored()
+                    } else live
+                }
             } catch (e: Exception) {
                 "CRITICAL ERR: ${e.message}"
             }
             val status = "$result: '${album.albumTitle}'"
             _trackState.update { it.copy(lastCommandSent = status) }
-            if (result.contains("FAIL") || result.contains("ERR")) reportError(status)
+            val failed = result.contains("FAIL") || result.contains("ERR")
+            if (failed) reportError(status)
+            // An offline speaker says nothing about whether the favorite
+            // itself still works.
+            if (failed && fromSavedData && askIfUnplayable && result != "ERR: Speaker Offline") {
+                _unplayableFavorite.value = album
+            }
         }
     }
 
-    // Cover Flow's X button and the grid's long press. This PERMANENTLY
-    // deletes the favorite from the user's Sonos system - the UI must
-    // confirm before calling it. The card
-    // is removed optimistically; on failure the list is reloaded from the
-    // speaker so it reappears, and the reason is shown as a Toast.
-    fun deleteSonosFavorite(item: AlbumHistoryItem) {
-        _albumHistory.value = _albumHistory.value.filterNot { it.playUri == item.playUri }
+    fun dismissUnplayableFavorite() {
+        _unplayableFavorite.value = null
+    }
+
+    // Removes a favorite from the app only - nothing on Sonos changes. For
+    // one still on Sonos the next refresh would bring it back, so the UI
+    // only offers this for favorites no longer there.
+    fun deleteSavedFavorite(item: AlbumHistoryItem) {
+        val key = favoriteKey(item)
+        scope.launch {
+            savedLock.withLock {
+                ensureSavedLoaded()
+                updateSaved(_savedFavorites.value.filterNot { favoriteKey(it) == key })
+            }
+            publishFavorites()
+        }
+    }
+
+    // Cover Flow's X button and the grid's long press: gone everywhere. A
+    // favorite still on Sonos is deleted from Sonos too (the UI confirms
+    // first); one that's only saved here is just removed.
+    fun deleteFavoriteEverywhere(item: AlbumHistoryItem) {
+        if (item.onSonos) deleteSonosFavorite(item, keepInApp = false) else deleteSavedFavorite(item)
+    }
+
+    // PERMANENTLY deletes the favorite from the user's Sonos system - the
+    // UI must confirm before calling it. keepInApp keeps it here as a
+    // local-only favorite (freeing up one of Sonos's ~70 slots); otherwise
+    // it's removed from the app too. The change shows optimistically; on
+    // failure the list is reloaded from the speaker, and the reason is
+    // shown as a Toast.
+    fun deleteSonosFavorite(item: AlbumHistoryItem, keepInApp: Boolean = false) {
+        val key = favoriteKey(item)
+        fun applyLocally() {
+            val updated = _savedFavorites.value.mapNotNull {
+                when {
+                    favoriteKey(it) != key -> it
+                    keepInApp -> it.asLocalOnly()
+                    else -> null
+                }
+            }
+            updateSaved(updated)
+        }
+        _albumHistory.value = if (keepInApp) {
+            _albumHistory.value.map { if (favoriteKey(it) == key) it.asLocalOnly() else it }
+        } else {
+            _albumHistory.value.filterNot { favoriteKey(it) == key }
+        }
         scope.launch {
             val speaker = settingsManager.sonosSpeaker.first()
             val result = try {
@@ -1252,8 +1384,13 @@ class SonosDashboardManager private constructor(context: Context) {
             }
 
             val message = if (result == "OK") {
-                _favoriteAlbumsRef.value = _favoriteAlbumsRef.value.filterNot { it.playUri == item.playUri }
-                "Deleted \"${item.albumTitle}\" from Sonos Favorites"
+                savedLock.withLock {
+                    ensureSavedLoaded()
+                    applyLocally()
+                }
+                publishFavorites()
+                if (keepInApp) "Removed \"${item.albumTitle}\" from Sonos Favorites - still saved in the app"
+                else "Deleted \"${item.albumTitle}\" from Sonos Favorites"
             } else {
                 reloadFavorites()
                 "Couldn't delete: ${result.removePrefix("FAIL: ")}".also { reportError("$it: '${item.albumTitle}'") }

@@ -270,14 +270,14 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onPlayAlbum = { album, rect ->
                                             transitionSourceRect = rect
                                             transitioningAlbum = album
-                                            manager.playAlbum(album)
+                                            manager.playAlbum(album, askIfUnplayable = true)
                                         },
                                         onWakeUp = { isAmbientMode = false },
                                         use24HourClock = use24HourClock,
                                         reflectionStrength = coverFlowReflection,
                                         glassTableStrength = coverFlowGlassTable,
                                         sideLightStrength = coverFlowSideLight,
-                                        onDeleteFavorite = { manager.deleteSonosFavorite(it) },
+                                        onDeleteFavorite = { manager.deleteFavoriteEverywhere(it) },
                                         initialCenterAlbum = manager.coverFlowCenterAlbum,
                                         onCenterAlbumChanged = { manager.coverFlowCenterAlbum = it },
                                         hidePrevious = coverFlowHidePrevious,
@@ -385,6 +385,9 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                         }
                     }
 
+                    val savedFavorites by manager.savedFavorites.collectAsState()
+                    val unplayableFavorite by manager.unplayableFavorite.collectAsState()
+
                     if (showSettings) {
                         SettingsModal(
                             discoveredSpeakers = discoveredSpeakers,
@@ -395,7 +398,22 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                             onSettingsSaved = { manager.refreshAfterSettingsSave() },
                             onDismiss = { showSettings = false },
                             micPermissionGranted = micPermissionGranted,
-                            onRequestMicPermission = { requestMicPermissionViaApp() }
+                            onRequestMicPermission = { requestMicPermissionViaApp() },
+                            savedFavorites = savedFavorites,
+                            onRemoveFromSonos = { manager.deleteSonosFavorite(it, keepInApp = true) },
+                            onDeleteEverywhere = { manager.deleteSonosFavorite(it, keepInApp = false) },
+                            onDeleteSaved = { manager.deleteSavedFavorite(it) }
+                        )
+                    }
+
+                    unplayableFavorite?.let { item ->
+                        UnplayableFavoriteDialog(
+                            item = item,
+                            onKeep = { manager.dismissUnplayableFavorite() },
+                            onDelete = {
+                                manager.dismissUnplayableFavorite()
+                                manager.deleteSavedFavorite(item)
+                            }
                         )
                     }
 

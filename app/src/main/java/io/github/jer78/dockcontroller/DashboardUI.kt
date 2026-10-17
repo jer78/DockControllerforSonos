@@ -248,8 +248,24 @@ fun MetadataDebuggerOverlay(
                     color = Color.Black
                 )
 
+                if (trackState.haAttributes.isNotBlank()) {
+                    HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color.Black.copy(alpha = 0.2f))
+
+                    // TV mode only: what the HA media player reports, to see
+                    // which app/content details a given integration offers.
+                    Text("HOME ASSISTANT MEDIA PLAYER:", color = Color.Blue, fontWeight = FontWeight.Bold)
+                    fun orNone(value: String) = value.ifBlank { "(not reported)" }
+                    Text("APP NAME: ${orNone(trackState.appName)}", color = Color.Black)
+                    Text("APP ID: ${orNone(trackState.appId)}", color = Color.Black)
+                    Text("CONTENT ID: ${orNone(trackState.contentId)}", color = Color.Black)
+                    Text("CONTENT TYPE: ${orNone(trackState.contentType)}", color = Color.Black)
+                    Spacer(Modifier.height(8.dp))
+                    Text("ALL ATTRIBUTES:", color = Color.DarkGray, fontWeight = FontWeight.Bold)
+                    Text(trackState.haAttributes, color = Color.DarkGray, fontSize = 12.sp)
+                }
+
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color.Black.copy(alpha = 0.2f))
-                
+
                 Text("SYSTEM METADATA (XML):", color = Color.DarkGray, fontWeight = FontWeight.Bold)
                 Text(trackState.rawMetadata, color = Color.DarkGray, fontSize = 12.sp)
                 

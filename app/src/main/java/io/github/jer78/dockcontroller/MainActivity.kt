@@ -293,7 +293,7 @@ class MainActivity : ComponentActivity() {
                                 onPlayAlbum = { album, rect ->
                                     transitionSourceRect = rect
                                     transitioningAlbum = album
-                                    manager.playAlbum(album)
+                                    manager.playAlbum(album, askIfUnplayable = true)
                                 },
                                 onWakeUp = {
                                     isAmbientMode = false
@@ -303,7 +303,7 @@ class MainActivity : ComponentActivity() {
                                 reflectionStrength = coverFlowReflection,
                                 glassTableStrength = coverFlowGlassTable,
                                 sideLightStrength = coverFlowSideLight,
-                                onDeleteFavorite = { manager.deleteSonosFavorite(it) },
+                                onDeleteFavorite = { manager.deleteFavoriteEverywhere(it) },
                                 initialCenterAlbum = manager.coverFlowCenterAlbum,
                                 onCenterAlbumChanged = { manager.coverFlowCenterAlbum = it },
                                 hidePrevious = coverFlowHidePrevious,
@@ -415,6 +415,9 @@ class MainActivity : ComponentActivity() {
             val refreshStatus by manager.favoritesRefreshStatus.collectAsState()
             val refreshCount by manager.favoritesRefreshCount.collectAsState()
 
+            val savedFavorites by manager.savedFavorites.collectAsState()
+            val unplayableFavorite by manager.unplayableFavorite.collectAsState()
+
             if (showSettings) {
                 SettingsModal(
                     discoveredSpeakers = discoveredSpeakers,
@@ -425,7 +428,22 @@ class MainActivity : ComponentActivity() {
                     onSettingsSaved = { manager.refreshAfterSettingsSave() },
                     onDismiss = { showSettings = false },
                     micPermissionGranted = micPermissionGranted,
-                    onRequestMicPermission = { requestMicPermission() }
+                    onRequestMicPermission = { requestMicPermission() },
+                    savedFavorites = savedFavorites,
+                    onRemoveFromSonos = { manager.deleteSonosFavorite(it, keepInApp = true) },
+                    onDeleteEverywhere = { manager.deleteSonosFavorite(it, keepInApp = false) },
+                    onDeleteSaved = { manager.deleteSavedFavorite(it) }
+                )
+            }
+
+            unplayableFavorite?.let { item ->
+                UnplayableFavoriteDialog(
+                    item = item,
+                    onKeep = { manager.dismissUnplayableFavorite() },
+                    onDelete = {
+                        manager.dismissUnplayableFavorite()
+                        manager.deleteSavedFavorite(item)
+                    }
                 )
             }
         }

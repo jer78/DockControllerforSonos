@@ -198,7 +198,12 @@ class HomeAssistantManager {
                             seriesTitle = attrs.optString("media_series_title", ""),
                             isPlaying = isPlaying,
                             positionSeconds = position.coerceIn(0.0, duration).toInt(),
-                            durationSeconds = duration.toInt()
+                            durationSeconds = duration.toInt(),
+                            appName = attrs.optString("app_name", ""),
+                            appId = attrs.optString("app_id", ""),
+                            contentId = attrs.optString("media_content_id", ""),
+                            contentType = attrs.optString("media_content_type", ""),
+                            haAttributes = "state: $state\n" + attrs.toString(2)
                         )
                         callback(track)
                         return

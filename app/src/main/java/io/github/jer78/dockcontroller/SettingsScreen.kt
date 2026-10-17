@@ -97,6 +97,76 @@ fun EntityAutocompleteField(
     }
 }
 
+// A token or API key field that, once the secret is saved, shows only
+// "Saved and hidden" until Change is tapped.
+@Composable
+private fun SecretField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    hidden: Boolean,
+    onChange: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (hidden) {
+        OutlinedTextField(
+            value = "Saved and hidden",
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+            trailingIcon = {
+                TextButton(onClick = onChange) { Text("Change") }
+            },
+            singleLine = true,
+            modifier = modifier
+        )
+    } else {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            singleLine = true,
+            modifier = modifier
+        )
+    }
+}
+
+// Under the YouTube key: this device's searches today (Google never says
+// how much quota is left, so they're counted here), a warning once Google
+// says the quota's used up, and how the last search went.
+@Composable
+private fun YouTubeUsageInfo(usage: YouTubeUsage?) {
+    if (usage == null) return
+    Text(
+        "Searches today: ${usage.searchesToday} of ~${YouTubeThumbnails.FREE_SEARCHES_PER_DAY} " +
+            "(counted on this device; resets at midnight Pacific time)",
+        fontSize = 12.sp,
+        color = Color.Gray
+    )
+    if (usage.quotaReached) {
+        Text(
+            "Daily quota reached - searches resume after midnight Pacific time.",
+            fontSize = 12.sp,
+            color = Color(0xFFFF8A80)
+        )
+    }
+    val result = usage.lastResult ?: return
+    val (color, text) = when (result) {
+        YouTubeThumbnails.SearchResult.FOUND -> Color(0xFF81C784) to "found"
+        YouTubeThumbnails.SearchResult.NO_MATCH -> Color.Gray to "no match"
+        YouTubeThumbnails.SearchResult.QUOTA_EXCEEDED -> Color(0xFFFF8A80) to "daily quota reached"
+        YouTubeThumbnails.SearchResult.KEY_REJECTED -> Color(0xFFFF8A80) to
+            "key rejected - check it's right, the YouTube Data API v3 is enabled, and its restrictions allow it"
+        YouTubeThumbnails.SearchResult.FAILED -> Color(0xFFFF8A80) to "couldn't reach YouTube"
+    }
+    Text(
+        "Last search: $text" + if (usage.lastQuery.isNotBlank()) " (\"${usage.lastQuery}\")" else "",
+        fontSize = 12.sp,
+        color = color
+    )
+}
+
 // Settings > Now Playing's TV Mode Artwork choice: "Rotate Randomly" (saved
 // as "") followed by a thumbnail of every image in assets/tv_fallback/, so
 // newly added images appear here on their own.
@@ -340,7 +410,13 @@ fun SettingsModal(
     onSettingsSaved: () -> Unit,
     onDismiss: () -> Unit,
     micPermissionGranted: Boolean = false,
-    onRequestMicPermission: () -> Unit = {}
+    onRequestMicPermission: () -> Unit = {},
+    // The Favorites tab: every saved favorite, and what it can do to one
+    // (see SonosDashboardManager.deleteSonosFavorite / deleteSavedFavorite).
+    savedFavorites: List<AlbumHistoryItem> = emptyList(),
+    onRemoveFromSonos: (AlbumHistoryItem) -> Unit = {},
+    onDeleteEverywhere: (AlbumHistoryItem) -> Unit = {},
+    onDeleteSaved: (AlbumHistoryItem) -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
 
@@ -355,6 +431,10 @@ fun SettingsModal(
     val widgetLabels = remember { mutableStateListOf<String>().apply { repeat(MAX_HA_WIDGETS) { add("") } } }
     var selectedHaMediaPlayer by remember { mutableStateOf("") }
     var tmdbApiKey by remember { mutableStateOf("") }
+    var youTubeThumbnails by remember { mutableStateOf(false) }
+    var youTubeApiKey by remember { mutableStateOf("") }
+    // Live, so a search made while Settings is open shows straight away.
+    val youTubeUsage by remember { settingsManager.youTubeUsage }.collectAsState(initial = null)
     var use24HourClock by remember { mutableStateOf(true) }
     var coverFlowReflection by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_REFLECTION_DEFAULT) }
     var coverFlowGlassTable by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT) }
@@ -393,6 +473,12 @@ fun SettingsModal(
     var haConnection by remember { mutableStateOf<HaConnectionStatus>(HaConnectionStatus.NotTested) }
     // Once the token has connected, it's hidden behind a Change button.
     var tokenHidden by remember { mutableStateOf(false) }
+    // Stays true after editing the URL or token, so the widget settings
+    // don't vanish mid-edit.
+    var haEverConnected by remember { mutableStateOf(false) }
+    // Saved API keys open hidden behind a Change button too.
+    var tmdbKeyHidden by remember { mutableStateOf(false) }
+    var youTubeKeyHidden by remember { mutableStateOf(false) }
 
     // Tests the URL + token, and on success (re)loads the entity lists so
     // the fields below autocomplete against whatever server just connected.
@@ -406,6 +492,7 @@ fun SettingsModal(
             haConnection = status
             if (status is HaConnectionStatus.Connected) {
                 tokenHidden = true
+                haEverConnected = true
                 haManager.fetchEntities(url, token) { all ->
                     widgetEntityOptions = HaWidgetType.entries.associateWith { type ->
                         all.filter { it.startsWith("${type.domain}.") }.sorted()
@@ -428,6 +515,10 @@ fun SettingsModal(
         }
         selectedHaMediaPlayer = settingsManager.selectedHaMediaPlayer.first()
         tmdbApiKey = settingsManager.tmdbApiKey.first()
+        youTubeThumbnails = settingsManager.youTubeThumbnails.first()
+        youTubeApiKey = settingsManager.youTubeApiKey.first()
+        tmdbKeyHidden = tmdbApiKey.isNotBlank()
+        youTubeKeyHidden = youTubeApiKey.isNotBlank()
         use24HourClock = settingsManager.use24HourClock.first()
         coverFlowReflection = settingsManager.coverFlowReflection.first()
         coverFlowGlassTable = settingsManager.coverFlowGlassTable.first()
@@ -461,7 +552,7 @@ fun SettingsModal(
         }
     }
 
-    val tabs = listOf("General", "Cover Flow", "Now Playing", "Home Assistant")
+    val tabs = listOf("Setup", "Cover Flow / Grid", "Favorites", "Now Playing", "Home Assistant")
     var selectedTab by remember { mutableIntStateOf(0) }
 
     // The refresh status line doesn't visibly change when a re-scan finds
@@ -505,7 +596,8 @@ fun SettingsModal(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     when (selectedTab) {
-                        // GENERAL: which speaker, and dock-wide display basics
+                        // SETUP: which speaker and which of its favorites,
+                        // and dock-wide basics
                         0 -> {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -516,6 +608,12 @@ fun SettingsModal(
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Text("Sonos Speaker:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "The room this dock belongs to - usually the one it sits in. Now Playing follows it, " +
+                                            "and music and controls go to it, along with any rooms grouped with it.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
                                     if (discoveredSpeakers.isEmpty()) {
                                         Text("Scanning Wi-Fi for speakers...", fontSize = 12.sp, color = Color.Gray)
                                     } else {
@@ -532,6 +630,62 @@ fun SettingsModal(
                                             }
                                         }
                                     }
+                                    HorizontalDivider()
+
+                                    Text("Sonos Favorites:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "Cover Flow shows your Sonos Favorites. Add them in the Sonos app; Sonos keeps up to " +
+                                            "about 70. The app keeps them even after they're removed there - see the Favorites tab.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    Text("Sync Categories:", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Checkbox(checked = fAlbums, onCheckedChange = { fAlbums = it })
+                                            Text("Albums", fontSize = 12.sp)
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Checkbox(checked = fPlaylists, onCheckedChange = { fPlaylists = it })
+                                            Text("Playlists", fontSize = 12.sp)
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Checkbox(checked = fRadio, onCheckedChange = { fRadio = it })
+                                            Text("Radio", fontSize = 12.sp)
+                                        }
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            refreshPressed = true
+                                            onRefreshFavorites(selectedSpeaker, fAlbums, fPlaylists, fRadio)
+                                        },
+                                        enabled = !isRefreshing,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f), contentColor = Color.White)
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            when {
+                                                !refreshPressed -> "Refresh Favorites"
+                                                isRefreshing -> "Refreshing..."
+                                                refreshCount != null -> "Refreshed $refreshCount Favorite${if (refreshCount == 1) "" else "s"}"
+                                                else -> "Refresh Failed - Tap to Retry"
+                                            }
+                                        )
+                                    }
+
+                                    Text(
+                                        text = "Status: $refreshStatus",
+                                        fontSize = 12.sp,
+                                        color = if (refreshStatus.contains("Error")) Color(0xFFFF8A80) else Color.White,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
 
                                 Column(
@@ -557,113 +711,16 @@ fun SettingsModal(
                                             label = { Text("24-Hour") }
                                         )
                                     }
-                                    HorizontalDivider()
-
-                                    Text("TV Screensaver Delay:", fontWeight = FontWeight.SemiBold)
-                                    Text(
-                                        "Time on Now Playing before the TV screensaver starts: ${formatScreensaverDelay(tvScreensaverDelaySeconds)}",
-                                        fontSize = 12.sp,
-                                        color = Color.Gray
-                                    )
-                                    Slider(
-                                        value = tvScreensaverDelaySeconds.toFloat(),
-                                        onValueChange = {
-                                            tvScreensaverDelaySeconds = (it.roundToInt() / 30) * 30
-                                            pendingScreensaverDelay?.cancel()
-                                            pendingScreensaverDelay = scope.launch {
-                                                delay(300)
-                                                settingsManager.setTvScreensaverDelaySeconds(tvScreensaverDelaySeconds)
-                                            }
-                                        },
-                                        valueRange = SettingsManager.TV_SCREENSAVER_DELAY_MIN_SECONDS.toFloat()..
-                                            SettingsManager.TV_SCREENSAVER_DELAY_MAX_SECONDS.toFloat(),
-                                        // One tick per 30s step between the endpoints.
-                                        steps = (SettingsManager.TV_SCREENSAVER_DELAY_MAX_SECONDS -
-                                            SettingsManager.TV_SCREENSAVER_DELAY_MIN_SECONDS) / 30 - 1
-                                    )
-                                    HorizontalDivider()
-
-                                    Text("When an Album Ends:", fontWeight = FontWeight.SemiBold)
-                                    Text(
-                                        "Starts another random album from your Sonos Favorites. Doesn't apply to radio.",
-                                        fontSize = 12.sp,
-                                        color = Color.Gray
-                                    )
-                                    SettingsToggleRow("Continue With a Random Album", continueWithRandomAlbum) {
-                                        continueWithRandomAlbum = it
-                                        scope.launch { settingsManager.setContinueWithRandomAlbum(it) }
-                                    }
                                 }
                             }
                         }
 
-                        // COVER FLOW: what it shows, its track cards, and the
-                        // glass table look
+                        // COVER FLOW: its track cards and the glass table look
                         1 -> {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(24.dp)
                             ) {
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Text("Sonos Favorites:", fontWeight = FontWeight.SemiBold)
-                                    Text(
-                                        "Cover Flow shows your Sonos Favorites. Add or remove them in the Sonos app; " +
-                                            "Sonos keeps up to about 70.",
-                                        fontSize = 12.sp,
-                                        color = Color.Gray
-                                    )
-                                        Text("Sync Categories:", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Checkbox(checked = fAlbums, onCheckedChange = { fAlbums = it })
-                                                Text("Albums", fontSize = 12.sp)
-                                            }
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Checkbox(checked = fPlaylists, onCheckedChange = { fPlaylists = it })
-                                                Text("Playlists", fontSize = 12.sp)
-                                            }
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Checkbox(checked = fRadio, onCheckedChange = { fRadio = it })
-                                                Text("Radio", fontSize = 12.sp)
-                                            }
-                                        }
-
-                                        Button(
-                                            onClick = {
-                                                refreshPressed = true
-                                                onRefreshFavorites(selectedSpeaker, fAlbums, fPlaylists, fRadio)
-                                            },
-                                            enabled = !isRefreshing,
-                                            modifier = Modifier.fillMaxWidth(),
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f), contentColor = Color.White)
-                                        ) {
-                                            Icon(Icons.Default.Refresh, contentDescription = null)
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(
-                                                when {
-                                                    !refreshPressed -> "Refresh Favorites"
-                                                    isRefreshing -> "Refreshing..."
-                                                    refreshCount != null -> "Refreshed $refreshCount Favorite${if (refreshCount == 1) "" else "s"}"
-                                                    else -> "Refresh Failed - Tap to Retry"
-                                                }
-                                            )
-                                        }
-
-                                        Text(
-                                            text = "Status: $refreshStatus",
-                                            fontSize = 12.sp,
-                                            color = if (refreshStatus.contains("Error")) Color(0xFFFF8A80) else Color.White,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                }
-
                                 Column(
                                     modifier = Modifier.weight(1f),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -758,9 +815,19 @@ fun SettingsModal(
                             }
                         }
 
-                        // NOW PLAYING: track info chips and the mic-driven
-                        // spectrum analyzer drawn behind the screen
-                        2 -> {
+                        // FAVORITES: everything the app keeps, on Sonos or
+                        // not, with where each one lives
+                        2 -> FavoritesManagerTab(
+                            favorites = savedFavorites,
+                            onRemoveFromSonos = onRemoveFromSonos,
+                            onDeleteEverywhere = onDeleteEverywhere,
+                            onDeleteSaved = onDeleteSaved
+                        )
+
+                        // NOW PLAYING: track info chips, the mic-driven
+                        // spectrum analyzer drawn behind the screen, what
+                        // happens when an album ends, and the TV screensaver
+                        3 -> {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(24.dp)
@@ -950,94 +1017,189 @@ fun SettingsModal(
                                             )
                                         }
                                     }
+                                    HorizontalDivider()
+
+                                    Text("When an Album Ends:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "Starts another random album from your Sonos Favorites. Doesn't apply to radio.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    SettingsToggleRow("Continue With a Random Album", continueWithRandomAlbum) {
+                                        continueWithRandomAlbum = it
+                                        scope.launch { settingsManager.setContinueWithRandomAlbum(it) }
+                                    }
+                                    HorizontalDivider()
+
+                                    Text("TV Screensaver Delay:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "Time on Now Playing before the TV screensaver starts: ${formatScreensaverDelay(tvScreensaverDelaySeconds)}",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    Slider(
+                                        value = tvScreensaverDelaySeconds.toFloat(),
+                                        onValueChange = {
+                                            tvScreensaverDelaySeconds = (it.roundToInt() / 30) * 30
+                                            pendingScreensaverDelay?.cancel()
+                                            pendingScreensaverDelay = scope.launch {
+                                                delay(300)
+                                                settingsManager.setTvScreensaverDelaySeconds(tvScreensaverDelaySeconds)
+                                            }
+                                        },
+                                        valueRange = SettingsManager.TV_SCREENSAVER_DELAY_MIN_SECONDS.toFloat()..
+                                            SettingsManager.TV_SCREENSAVER_DELAY_MAX_SECONDS.toFloat(),
+                                        // One tick per 30s step between the endpoints.
+                                        steps = (SettingsManager.TV_SCREENSAVER_DELAY_MAX_SECONDS -
+                                            SettingsManager.TV_SCREENSAVER_DELAY_MIN_SECONDS) / 30 - 1
+                                    )
                                 }
                             }
                         }
 
-                        // HOME ASSISTANT: connection and entities, in two
-                        // columns to make the most of the dialog's width.
-                        3 -> {
-                            Text("Home Assistant Integration:", fontWeight = FontWeight.SemiBold)
-
+                        // HOME ASSISTANT: connection, TV mode and experimental
+                        // features down the left; the Now Playing widgets down
+                        // the right.
+                        4 -> {
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(24.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                OutlinedTextField(
-                                    value = haUrl,
-                                    onValueChange = {
-                                        haUrl = it
-                                        haConnection = HaConnectionStatus.NotTested
-                                    },
-                                    label = { Text("Server URL") },
-                                    placeholder = { Text("http://homeassistant.local:8123") },
-                                    singleLine = true,
+                                // Left: connection, TV mode and experimental features.
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
                                     modifier = Modifier.weight(1f)
-                                )
-                                if (tokenHidden) {
+                                ) {
+                                    Text("Home Assistant Integration:", fontWeight = FontWeight.SemiBold)
                                     OutlinedTextField(
-                                        value = "Saved and hidden",
-                                        onValueChange = {},
-                                        readOnly = true,
-                                        label = { Text("Long-Lived Access Token") },
-                                        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
-                                        trailingIcon = {
-                                            TextButton(onClick = { tokenHidden = false }) { Text("Change") }
+                                        value = haUrl,
+                                        onValueChange = {
+                                            haUrl = it
+                                            haConnection = HaConnectionStatus.NotTested
                                         },
+                                        label = { Text("Server URL") },
+                                        placeholder = { Text("http://homeassistant.local:8123") },
                                         singleLine = true,
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.fillMaxWidth()
                                     )
-                                } else {
-                                    OutlinedTextField(
+                                    SecretField(
                                         value = haToken,
                                         onValueChange = {
                                             haToken = it
                                             haConnection = HaConnectionStatus.NotTested
                                         },
-                                        label = { Text("Long-Lived Access Token") },
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1f)
+                                        label = "Long-Lived Access Token",
+                                        hidden = tokenHidden,
+                                        onChange = { tokenHidden = false },
+                                        modifier = Modifier.fillMaxWidth()
                                     )
-                                }
-                            }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Button(
+                                            onClick = { connectToHa() },
+                                            enabled = haUrl.isNotBlank() && haToken.isNotBlank() &&
+                                                haConnection != HaConnectionStatus.Testing
+                                        ) {
+                                            Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("Connect")
+                                        }
+                                        HaConnectionIndicator(haConnection, modifier = Modifier.weight(1f))
+                                    }
 
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Button(
-                                    onClick = { connectToHa() },
-                                    enabled = haUrl.isNotBlank() && haToken.isNotBlank() &&
-                                        haConnection != HaConnectionStatus.Testing
-                                ) {
-                                    Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Connect")
-                                }
-                                HaConnectionIndicator(haConnection, modifier = Modifier.weight(1f))
-                            }
+                                    HorizontalDivider()
+                                    Text("TV Mode:", fontWeight = FontWeight.SemiBold)
+                                    EntityAutocompleteField(
+                                        label = "Fallback Media Player",
+                                        value = selectedHaMediaPlayer,
+                                        onValueChange = { selectedHaMediaPlayer = it },
+                                        suggestions = mediaPlayerEntities,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    SettingsToggleRow("Replace TV Show Images", tvShowImages) {
+                                        tvShowImages = it
+                                        scope.launch { settingsManager.setTvShowImages(it) }
+                                    }
+                                    Text(
+                                        if (tvShowImages) {
+                                            "When a TV show is playing, its title logo from TMDB replaces the artwork " +
+                                                "(with a free key from themoviedb.org), or else its poster from TVmaze."
+                                        } else {
+                                            "Off: TV mode shows the images Home Assistant sends."
+                                        },
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    if (tvShowImages) {
+                                        SecretField(
+                                            value = tmdbApiKey,
+                                            onValueChange = { tmdbApiKey = it },
+                                            label = "TMDB API Key (optional)",
+                                            hidden = tmdbKeyHidden,
+                                            onChange = { tmdbKeyHidden = false },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Text(
+                                            "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+                                            fontSize = 12.sp,
+                                            color = Color.Gray
+                                        )
+                                    }
 
-                            HorizontalDivider()
-                            Text("Now Playing Widgets:", fontWeight = FontWeight.SemiBold)
-                            Text(
-                                "Up to $MAX_HA_WIDGETS, shown left to right across the top of Now Playing in this order " +
-                                    "(1 to 5 down the left, then 6 to 10). " +
-                                    "You can also hold a widget on Now Playing for a second, then drag it to move it.",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                            val perColumn = (MAX_HA_WIDGETS + 1) / 2
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                for (column in 0 until 2) {
+                                    HorizontalDivider()
+                                    Text("Experimental:", fontWeight = FontWeight.SemiBold)
+                                    SettingsToggleRow("Auto-Unmute After Commercials", autoUnmuteAfterAds) {
+                                        autoUnmuteAfterAds = it
+                                        scope.launch { settingsManager.setAutoUnmuteAfterAds(it) }
+                                    }
+                                    Text(
+                                        "In TV mode, unmutes the speaker when the media player's time remaining jumps up - usually a sign a commercial break just ended.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    SettingsToggleRow("YouTube Thumbnails", youTubeThumbnails) {
+                                        youTubeThumbnails = it
+                                        scope.launch { settingsManager.setYouTubeThumbnails(it) }
+                                    }
+                                    Text(
+                                        "When YouTube is playing with no artwork, shows the video's thumbnail. Players that " +
+                                            "don't report the video (like Apple TV) need a free YouTube Data API key from " +
+                                            "Google Cloud to search for it; without one, the TV mode artwork shows instead.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    if (youTubeThumbnails) {
+                                        SecretField(
+                                            value = youTubeApiKey,
+                                            onValueChange = { youTubeApiKey = it },
+                                            label = "YouTube Data API Key (optional)",
+                                            hidden = youTubeKeyHidden,
+                                            onChange = { youTubeKeyHidden = false },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        YouTubeUsageInfo(youTubeUsage)
+                                    }
+                                }
+
+                                // Right: the Now Playing widgets, once Home Assistant has
+                                // connected - they need its entities. The space stays
+                                // either way, so the left column keeps its width.
+                                if (haEverConnected) {
                                     Column(
                                         verticalArrangement = Arrangement.spacedBy(8.dp),
                                         modifier = Modifier.weight(1f)
                                     ) {
-                                        for (i in column * perColumn until minOf((column + 1) * perColumn, MAX_HA_WIDGETS)) {
+                                        Text("Now Playing Widgets:", fontWeight = FontWeight.SemiBold)
+                                        Text(
+                                            "Up to $MAX_HA_WIDGETS, shown left to right across the top of Now Playing in this order " +
+                                                "(1 to 5 down the left, then 6 to 10). " +
+                                                "You can also hold a widget on Now Playing for a second, then drag it to move it.",
+                                            fontSize = 12.sp,
+                                            color = Color.Gray
+                                        )
+                                        for (i in 0 until MAX_HA_WIDGETS) {
                                             HaWidgetSlotRow(
                                                 position = i + 1,
                                                 type = widgetTypes[i],
@@ -1066,72 +1228,8 @@ fun SettingsModal(
                                             )
                                         }
                                     }
-                                }
-                            }
-                            HorizontalDivider()
-
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(24.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                // Left: TV mode.
-                                Column(
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("TV Mode:", fontWeight = FontWeight.SemiBold)
-                                    EntityAutocompleteField(
-                                        label = "Fallback Media Player",
-                                        value = selectedHaMediaPlayer,
-                                        onValueChange = { selectedHaMediaPlayer = it },
-                                        suggestions = mediaPlayerEntities,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                    SettingsToggleRow("Replace TV Show Images", tvShowImages) {
-                                        tvShowImages = it
-                                        scope.launch { settingsManager.setTvShowImages(it) }
-                                    }
-                                    Text(
-                                        if (tvShowImages) {
-                                            "When a TV show is playing, its title logo from TMDB replaces the artwork " +
-                                                "(with a free key from themoviedb.org), or else its poster from TVmaze."
-                                        } else {
-                                            "Off: TV mode shows the images Home Assistant sends."
-                                        },
-                                        fontSize = 12.sp,
-                                        color = Color.Gray
-                                    )
-                                    if (tvShowImages) {
-                                        OutlinedTextField(
-                                            value = tmdbApiKey,
-                                            onValueChange = { tmdbApiKey = it },
-                                            label = { Text("TMDB API Key (optional)") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                        Text(
-                                            "This product uses the TMDB API but is not endorsed or certified by TMDB.",
-                                            fontSize = 12.sp,
-                                            color = Color.Gray
-                                        )
-                                    }
-                                }
-
-                                // Right: experimental.
-                                Column(
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Experimental:", fontWeight = FontWeight.SemiBold)
-                                    SettingsToggleRow("Auto-Unmute After Commercials", autoUnmuteAfterAds) {
-                                        autoUnmuteAfterAds = it
-                                        scope.launch { settingsManager.setAutoUnmuteAfterAds(it) }
-                                    }
-                                    Text(
-                                        "In TV mode, unmutes the speaker when the media player's time remaining jumps up - usually a sign a commercial break just ended.",
-                                        fontSize = 12.sp,
-                                        color = Color.Gray
-                                    )
+                                } else {
+                                    Spacer(Modifier.weight(1f))
                                 }
                             }
                         }
@@ -1151,6 +1249,7 @@ fun SettingsModal(
                         },
                         selectedHaMediaPlayer,
                         tmdbApiKey,
+                        youTubeApiKey,
                         fAlbums,
                         fPlaylists,
                         fRadio
