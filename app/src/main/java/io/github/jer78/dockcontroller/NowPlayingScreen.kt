@@ -36,11 +36,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import java.util.Calendar
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 
 // Taps on the TV-mode artwork closer together than this count towards the
 // triple tap that shows the TV show detection debug.
 private const val TV_DEBUG_TAP_WINDOW_MS = 500L
+
+// How long TV mode's clock shows the time, then the finish time, in turn.
+private const val TV_CLOCK_SWAP_MS = 6_000L
+private val TvClockEndColor = Color(0xFFFFC94D)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -79,6 +85,10 @@ fun DockDashboardUI(
     onRequestMicPermission: () -> Unit = {},
     spectrumColorScheme: SpectrumColorScheme = SpectrumColorScheme.RAINBOW,
     spectrumHeightPercent: Float = 1f,
+    // Settings > Now Playing > Background Blur, in dp. TV's is
+    // SettingsManager.BACKGROUND_BLUR_SAME_AS_MUSIC to follow music's.
+    musicBackgroundBlur: Float = SettingsManager.BACKGROUND_BLUR_DEFAULT,
+    tvBackgroundBlur: Float = SettingsManager.BACKGROUND_BLUR_SAME_AS_MUSIC,
     spectrumConfineToAlbumArt: Boolean = false,
     audioSettings: SonosAudioSettings = SonosAudioSettings(),
     // Settings > Now Playing > Track Info.
@@ -169,25 +179,17 @@ fun DockDashboardUI(
             }
     ) {
         // A recognised TV show's own background image, when TVmaze has one,
-        // replaces the blurred artwork.
-        val showBackgroundUrl = trackState.tvShowLogo?.backgroundUrl?.takeIf { isTvMode }
-        if (showBackgroundUrl != null) {
+        // replaces the artwork - blurred the same way.
+        val backgroundBlur = (if (isTvMode && tvBackgroundBlur >= 0f) tvBackgroundBlur else musicBackgroundBlur).dp
+        val backgroundUrl = trackState.tvShowLogo?.backgroundUrl?.takeIf { isTvMode } ?: artworkUrl
+        if (backgroundUrl.isNotBlank()) {
             AsyncImage(
-                model = showBackgroundUrl,
+                model = backgroundUrl,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .alpha(0.55f)
-            )
-        } else if (artworkUrl.isNotBlank()) {
-            AsyncImage(
-                model = artworkUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .blur(40.dp)
+                    .then(if (backgroundBlur > 0.dp) Modifier.blur(backgroundBlur) else Modifier)
                     .alpha(0.55f)
             )
         }
@@ -279,6 +281,10 @@ fun DockDashboardUI(
                     animationSpec = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
                     label = "artAspectRatio"
                 )
+                // Music mode: above the artwork. TV mode puts it above the
+                // show's title instead (below), clear of the widget labels -
+                // but keeps its room here, invisible, so the artwork stays
+                // the same size and clear of the widgets.
                 if (clockMode.showsClock(isTvMode)) {
                     val currentTime = rememberMinuteClock()
                     Text(
@@ -289,6 +295,7 @@ fun DockDashboardUI(
                         modifier = Modifier
                             .align(Alignment.CenterHorizontally)
                             .padding(bottom = 12.dp)
+                            .alpha(if (isTvMode) 0f else 1f)
                     )
                 }
                 Card(
@@ -433,6 +440,10 @@ fun DockDashboardUI(
                 modifier = Modifier.weight(1.2f),
                 verticalArrangement = Arrangement.Center
             ) {
+                // TV mode's clock, above the title and beside the artwork.
+                if (isTvMode && clockMode.showsClock(isTvMode)) {
+                    TvClock(trackState, use24HourClock, modifier = Modifier.padding(bottom = 4.dp))
+                }
                 if (!isTvMode) {
                     if (trackState.prevTrack != "None" && !hidePrevious) {
                         Surface(
@@ -800,6 +811,53 @@ fun DockDashboardUI(
                 onSetLoudness = onSetLoudness,
                 onToggleSubEnabled = onToggleSubEnabled,
                 onDismiss = { showSoundSettings = false }
+            )
+        }
+    }
+}
+
+// TV mode's clock: the time, taking turns every TV_CLOCK_SWAP_MS with when
+// what's on will finish (now + time remaining) while that's known.
+@Composable
+private fun TvClock(trackState: TrackState, use24HourClock: Boolean, modifier: Modifier = Modifier) {
+    val currentTime = rememberMinuteClock()
+    val knowsEnd = trackState.durationSeconds > 0
+    val remainingSeconds = if (knowsEnd) {
+        (trackState.durationSeconds - rememberInterpolatedPosition(trackState)).coerceAtLeast(0)
+    } else 0
+    var showEnd by remember { mutableStateOf(false) }
+    LaunchedEffect(knowsEnd) {
+        showEnd = false
+        while (knowsEnd) {
+            delay(TV_CLOCK_SWAP_MS)
+            showEnd = !showEnd
+        }
+    }
+    // The finish time is set apart from the time now: gold, after a solid
+    // gold "ENDS AT" badge.
+    Crossfade(targetState = showEnd && knowsEnd, animationSpec = tween(600), label = "tvClock", modifier = modifier) { end ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (end) {
+                Text(
+                    text = "ENDS AT",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.5.sp,
+                    color = Color.Black,
+                    modifier = Modifier
+                        .padding(end = 14.dp)
+                        .background(TvClockEndColor, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                )
+            }
+            val shown = if (end) {
+                (Calendar.getInstance().clone() as Calendar).apply { add(Calendar.SECOND, remainingSeconds) }
+            } else currentTime
+            Text(
+                text = formatClockTime(shown, use24HourClock),
+                fontSize = 64.sp,
+                fontWeight = FontWeight.Light,
+                color = if (end) TvClockEndColor else Color.White.copy(alpha = 0.85f)
             )
         }
     }

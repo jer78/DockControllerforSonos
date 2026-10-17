@@ -58,6 +58,10 @@ class SettingsManager(private val context: Context) {
         // Fraction (0-1) of the screen height, measured from the bottom, the
         // visualizer occupies when it's not confined to the album art.
         val SPECTRUM_HEIGHT_PERCENT = floatPreferencesKey("spectrum_height_percent")
+        // Now Playing's blurred background, in dp; TV's is
+        // BACKGROUND_BLUR_SAME_AS_MUSIC unless set on its own.
+        val MUSIC_BACKGROUND_BLUR = floatPreferencesKey("music_background_blur")
+        val TV_BACKGROUND_BLUR = floatPreferencesKey("tv_background_blur")
         // When true, bars are drawn only over the Now Playing album art
         // square instead of spanning the full screen.
         val SPECTRUM_CONFINE_TO_ALBUM_ART = booleanPreferencesKey("spectrum_confine_to_album_art")
@@ -120,6 +124,10 @@ class SettingsManager(private val context: Context) {
 
         const val TV_SCREENSAVER_DELAY_MIN_SECONDS = 30
         const val TV_SCREENSAVER_DELAY_MAX_SECONDS = 1800
+        const val BACKGROUND_BLUR_DEFAULT = 40f
+        const val BACKGROUND_BLUR_MAX = 80f
+        // TV's blur follows the music one.
+        const val BACKGROUND_BLUR_SAME_AS_MUSIC = -1f
         const val TV_SCREENSAVER_DELAY_DEFAULT_SECONDS = 30
 
 
@@ -176,6 +184,18 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setSpectrumColorScheme(scheme: SpectrumColorScheme) {
         context.dataStore.edit { it[SPECTRUM_COLOR_SCHEME] = scheme.name }
+    }
+
+    val musicBackgroundBlur: Flow<Float> = context.dataStore.data.map { it[MUSIC_BACKGROUND_BLUR] ?: BACKGROUND_BLUR_DEFAULT }
+
+    suspend fun setMusicBackgroundBlur(dp: Float) {
+        context.dataStore.edit { it[MUSIC_BACKGROUND_BLUR] = dp }
+    }
+
+    val tvBackgroundBlur: Flow<Float> = context.dataStore.data.map { it[TV_BACKGROUND_BLUR] ?: BACKGROUND_BLUR_SAME_AS_MUSIC }
+
+    suspend fun setTvBackgroundBlur(dp: Float) {
+        context.dataStore.edit { it[TV_BACKGROUND_BLUR] = dp }
     }
 
     val spectrumHeightPercent: Flow<Float> = context.dataStore.data.map { it[SPECTRUM_HEIGHT_PERCENT] ?: 1f }

@@ -128,6 +128,8 @@ class MainActivity : ComponentActivity() {
             val showSpectrumAnalyzer by settingsManager.showSpectrumAnalyzer.collectAsState(initial = false)
             val spectrumColorScheme by settingsManager.spectrumColorScheme.collectAsState(initial = SpectrumColorScheme.RAINBOW)
             val spectrumHeightPercent by settingsManager.spectrumHeightPercent.collectAsState(initial = 1f)
+            val musicBackgroundBlur by settingsManager.musicBackgroundBlur.collectAsState(initial = SettingsManager.BACKGROUND_BLUR_DEFAULT)
+            val tvBackgroundBlur by settingsManager.tvBackgroundBlur.collectAsState(initial = SettingsManager.BACKGROUND_BLUR_SAME_AS_MUSIC)
             val spectrumConfineToAlbumArt by settingsManager.spectrumConfineToAlbumArt.collectAsState(initial = false)
             val use24HourClock by settingsManager.use24HourClock.collectAsState(initial = true)
             val coverFlowReflection by settingsManager.coverFlowReflection.collectAsState(initial = SettingsManager.COVER_FLOW_REFLECTION_DEFAULT)
@@ -354,6 +356,8 @@ class MainActivity : ComponentActivity() {
                                 onRequestMicPermission = { requestMicPermission() },
                                 spectrumColorScheme = spectrumColorScheme,
                                 spectrumHeightPercent = spectrumHeightPercent,
+                                musicBackgroundBlur = musicBackgroundBlur,
+                                tvBackgroundBlur = tvBackgroundBlur,
                                 spectrumConfineToAlbumArt = spectrumConfineToAlbumArt,
                                 audioSettings = audioSettings,
                                 onToggleNightMode = { manager.toggleNightMode() },

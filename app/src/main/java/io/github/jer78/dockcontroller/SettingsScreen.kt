@@ -335,6 +335,9 @@ fun SettingsModal(
     var spectrumHeightPercent by remember { mutableFloatStateOf(1f) }
     var spectrumConfineToAlbumArt by remember { mutableStateOf(false) }
     var pendingSpectrumHeight by remember { mutableStateOf<Job?>(null) }
+    var musicBackgroundBlur by remember { mutableFloatStateOf(SettingsManager.BACKGROUND_BLUR_DEFAULT) }
+    var tvBackgroundBlur by remember { mutableFloatStateOf(SettingsManager.BACKGROUND_BLUR_SAME_AS_MUSIC) }
+    var pendingBackgroundBlur by remember { mutableStateOf<Job?>(null) }
 
     var fAlbums by remember { mutableStateOf(true) }
     var fPlaylists by remember { mutableStateOf(true) }
@@ -405,6 +408,8 @@ fun SettingsModal(
         spectrumColorScheme = settingsManager.spectrumColorScheme.first()
         spectrumHeightPercent = settingsManager.spectrumHeightPercent.first()
         spectrumConfineToAlbumArt = settingsManager.spectrumConfineToAlbumArt.first()
+        musicBackgroundBlur = settingsManager.musicBackgroundBlur.first()
+        tvBackgroundBlur = settingsManager.tvBackgroundBlur.first()
 
         // Check the saved connection straight away, so the status shows
         // without needing to tap Connect - this also loads the entity lists
@@ -755,6 +760,49 @@ fun SettingsModal(
                                                 label = { Text(mode.label) }
                                             )
                                         }
+                                    }
+                                    HorizontalDivider()
+
+                                    // Saved a moment after the slider stops, like
+                                    // the spectrum height.
+                                    fun saveBlur(save: suspend () -> Unit) {
+                                        pendingBackgroundBlur?.cancel()
+                                        pendingBackgroundBlur = scope.launch {
+                                            delay(300)
+                                            save()
+                                        }
+                                    }
+                                    fun blurLabel(dp: Float) = if (dp.roundToInt() == 0) "Off" else "${dp.roundToInt()}"
+                                    Text("Background Blur:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "How soft the artwork (or a TV show's background) behind Now Playing is.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    Text("Music: ${blurLabel(musicBackgroundBlur)}", fontSize = 12.sp, color = Color.Gray)
+                                    Slider(
+                                        value = musicBackgroundBlur,
+                                        onValueChange = {
+                                            musicBackgroundBlur = it
+                                            saveBlur { settingsManager.setMusicBackgroundBlur(it) }
+                                        },
+                                        valueRange = 0f..SettingsManager.BACKGROUND_BLUR_MAX
+                                    )
+                                    val tvSameAsMusic = tvBackgroundBlur < 0f
+                                    SettingsToggleRow("TV: Same as Music", tvSameAsMusic) { same ->
+                                        tvBackgroundBlur = if (same) SettingsManager.BACKGROUND_BLUR_SAME_AS_MUSIC else musicBackgroundBlur
+                                        scope.launch { settingsManager.setTvBackgroundBlur(tvBackgroundBlur) }
+                                    }
+                                    if (!tvSameAsMusic) {
+                                        Text("TV: ${blurLabel(tvBackgroundBlur)}", fontSize = 12.sp, color = Color.Gray)
+                                        Slider(
+                                            value = tvBackgroundBlur,
+                                            onValueChange = {
+                                                tvBackgroundBlur = it
+                                                saveBlur { settingsManager.setTvBackgroundBlur(it) }
+                                            },
+                                            valueRange = 0f..SettingsManager.BACKGROUND_BLUR_MAX
+                                        )
                                     }
                                     HorizontalDivider()
 

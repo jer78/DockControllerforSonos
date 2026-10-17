@@ -28,6 +28,7 @@ sits on its dock.
 
 **Now Playing**
 - Large album art, track, artist and album, with a blurred-art background
+  (how blurred is adjustable, separately for TV mode if you like)
 - Play/pause, next/previous, shuffle and repeat (off, all, one)
 - Progress bar you can tap or drag to seek
 - Volume and mute; when rooms are grouped, they control the whole group
@@ -39,7 +40,8 @@ sits on its dock.
   volume slider
 - Sound Settings: bass, treble, loudness, Night Sound, Speech Enhancement and
   subwoofer, where the speaker supports them
-- Optional clock above the artwork, in music mode, TV mode or both
+- Optional clock, in music mode, TV mode or both. In TV mode it sits above
+  the show's title and takes turns with the time the show will end
 - Optional spectrum analyzer behind the screen (or just over the artwork),
   driven by the microphone
 - Swipe left, right or down to go to Cover Flow
@@ -52,6 +54,8 @@ sits on its dock.
   the filter, sort, refresh, search and view buttons
 - **Category filter**: cycles between all favorites, albums, playlists and
   radio stations, with a count of each
+- **Genre filter**: cycles through the genres of your Apple Music albums
+  (looked up from Apple's catalog)
 - **Sort** albums by artist or by album title, remembered for next time.
   Sorted by artist, each album shows its artist first, and playlists are
   grouped under V (Various Artists)
@@ -175,7 +179,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.28.apk`). It's about 55 MB.
+   `DockController-v1.0.30.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -206,7 +210,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.28.apk
+adb install -r DockController-v1.0.30.apk
 ```
 
 Every release is signed with the same key. If Android says **App not
