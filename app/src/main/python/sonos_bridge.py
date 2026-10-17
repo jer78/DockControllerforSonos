@@ -57,9 +57,9 @@ def _browse_all(master, ml_item):
         if len(page) == 0 or len(items) >= page.total_matches:
             return items
 
-# Apple Music catalog album ID -> artist name (None = Apple doesn't know it),
-# so the hourly favorites refresh only looks up newly added albums.
-_APPLE_ARTISTS = {}
+# Apple Music catalog album ID -> {"artist", "genre"} (None = Apple doesn't
+# know it), so the hourly favorites refresh only looks up newly added albums.
+_APPLE_ALBUMS = {}
 _APPLE_LOOKUP_BATCH = 150
 
 def _apple_album_id(item_id, uri):
@@ -72,14 +72,15 @@ def _apple_album_id(item_id, uri):
     m = re.search(r'album:(\d+)$', item_id)
     return m.group(1) if m else None
 
-def _lookup_apple_artists(album_ids):
+def _lookup_apple_albums(album_ids):
     """
-    Fills _APPLE_ARTISTS for any of album_ids not looked up yet, using
+    Fills _APPLE_ALBUMS for any of album_ids not looked up yet, using
     Apple's public (no key needed) iTunes lookup API - Sonos itself never
-    stores an artist for album favorites. Best-effort: a failed request just
-    leaves those albums to be learned by watching them play.
+    stores an artist or genre for album favorites. Best-effort: a failed
+    request leaves the artist to be learned by watching the album play, and
+    the genre blank.
     """
-    missing = [a for a in dict.fromkeys(album_ids) if a not in _APPLE_ARTISTS]
+    missing = [a for a in dict.fromkeys(album_ids) if a not in _APPLE_ALBUMS]
     for i in range(0, len(missing), _APPLE_LOOKUP_BATCH):
         batch = missing[i:i + _APPLE_LOOKUP_BATCH]
         try:
@@ -87,10 +88,13 @@ def _lookup_apple_artists(album_ids):
                                 params={"id": ",".join(batch)}, timeout=8)
             resp.raise_for_status()
             for r in resp.json().get('results', []):
-                if r.get('collectionId') and r.get('artistName'):
-                    _APPLE_ARTISTS[str(r['collectionId'])] = r['artistName']
+                if r.get('collectionId'):
+                    _APPLE_ALBUMS[str(r['collectionId'])] = {
+                        "artist": r.get('artistName') or '',
+                        "genre": r.get('primaryGenreName') or ''
+                    }
             for a in batch:
-                _APPLE_ARTISTS.setdefault(a, None)
+                _APPLE_ALBUMS.setdefault(a, None)
         except Exception:
             pass
 
@@ -201,11 +205,12 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
 
         if not results: return [{"title": "DIAG", "artist": "No items matched filters."}]
 
-        _lookup_apple_artists([r['apple_id'] for r in results if r['apple_id'] and r['artist'] == "Unknown Artist"])
+        _lookup_apple_albums([r['apple_id'] for r in results if r['apple_id']])
         for r in results:
-            apple_id = r.pop('apple_id')
-            if apple_id and r['artist'] == "Unknown Artist" and _APPLE_ARTISTS.get(apple_id):
-                r['artist'] = _APPLE_ARTISTS[apple_id]
+            info = _APPLE_ALBUMS.get(r.pop('apple_id')) or {}
+            if r['artist'] == "Unknown Artist" and info.get('artist'):
+                r['artist'] = info['artist']
+            r['genre'] = info.get('genre', '')
 
         results.sort(key=lambda x: x['title'].lower())
         return results

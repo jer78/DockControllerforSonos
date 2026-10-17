@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
@@ -267,6 +268,13 @@ fun AmbientClockScreen(
         listOf(FavoriteCategory.ALL) + FavoriteCategory.entries.filter { c -> c.kind != null && albumHistory.any { it.kind == c.kind } }
     }
     if (category !in categories) category = FavoriteCategory.ALL
+    // Genres known for the favorites (Apple Music albums only, from Apple's
+    // catalog), A-Z. null = all genres. Like the category, not saved.
+    var genre by remember { mutableStateOf<String?>(null) }
+    val genres = remember(albumHistory) {
+        albumHistory.map { it.genre }.filter { it.isNotBlank() }.distinct().sortedBy { it.lowercase() }
+    }
+    if (genre != null && genre !in genres) genre = null
     var isSortByArtist by remember(sortByArtist) { mutableStateOf(sortByArtist) }
     // What each item is sorted (and the grid's A-Z bar lettered) by. By
     // artist, playlists count as Various Artists, so they gather under V.
@@ -278,9 +286,10 @@ fun AmbientClockScreen(
     }
     // Sorted by artist, albums show their artist first, in bold.
     fun artistFirst(item: AlbumHistoryItem) = isSortByArtist && item.isAlbum() && item.artist.isNotBlank()
-    val shownAlbums = remember(albumHistory, category, isSortByArtist) {
+    val shownAlbums = remember(albumHistory, category, genre, isSortByArtist) {
         val inCategory = category.kind?.let { kind -> albumHistory.filter { it.kind == kind } } ?: albumHistory
-        inCategory.sortedWith(
+        val inGenre = genre?.let { g -> inCategory.filter { it.genre == g } } ?: inCategory
+        inGenre.sortedWith(
             compareBy<AlbumHistoryItem>({ sortKey(it).lowercase() }, { it.albumTitle.lowercase() }, { it.artist.lowercase() })
         )
     }
@@ -915,15 +924,23 @@ fun AmbientClockScreen(
             }
         }
 
-        // The open controls stretch across the top right, so the time
-        // moves out of their way to the left.
+        // The open controls stretch across the top right, so a centered
+        // time slides over to the left as they open - in step with them, as
+        // if they push it - and back as they close. (Its periodic move
+        // between the left and the center still fades.)
+        val pushBias by animateFloatAsState(
+            targetValue = if (controlsOpen) -1f else 0f,
+            animationSpec = tween(if (controlsOpen) 300 else 250, easing = FastOutSlowInEasing),
+            label = "clockPush"
+        )
         AnimatedContent(
-            targetState = if (controlsOpen) Alignment.TopStart else clockAlignment,
+            targetState = clockAlignment,
             transitionSpec = { fadeIn(tween(1500)) togetherWith fadeOut(tween(1500)) },
             modifier = Modifier.fillMaxSize().padding(top = 20.dp, start = 60.dp, end = 60.dp).alpha(fadeAlpha),
             label = "clockMove"
         ) { alignment ->
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = alignment) {
+            val boxAlignment = if (alignment == Alignment.TopCenter) BiasAlignment(pushBias, -1f) else alignment
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = boxAlignment) {
                 Column(
                     horizontalAlignment = when {
                         alignment.toString().contains("End") -> Alignment.End
@@ -1000,6 +1017,41 @@ fun AmbientClockScreen(
                                         color = Color.White.copy(alpha = 0.85f),
                                         fontSize = 15.sp,
                                         fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                        // Cycles All Genres -> each genre, A-Z. Only shown
+                        // once some favorites have a genre.
+                        if (genres.isNotEmpty()) {
+                            Surface(
+                                color = if (genre != null) Color.White.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.55f),
+                                shape = RoundedCornerShape(24.dp),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .clickable {
+                                        controlsTaps++
+                                        val options = listOf<String?>(null) + genres
+                                        genre = options[(options.indexOf(genre) + 1) % options.size]
+                                    }
+                                    .semantics { contentDescription = "Genre: ${genre ?: "all genres"}" }
+                            ) {
+                                val tint = if (genre != null) Color.Black else Color.White.copy(alpha = 0.85f)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                                ) {
+                                    Icon(Icons.Default.Category, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        genre ?: "All Genres",
+                                        color = tint,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.widthIn(max = 180.dp)
                                     )
                                 }
                             }

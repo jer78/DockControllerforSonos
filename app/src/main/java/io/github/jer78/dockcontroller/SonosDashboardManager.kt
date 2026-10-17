@@ -431,7 +431,8 @@ class SonosDashboardManager private constructor(context: Context) {
                             playUri = map[PyObject.fromJava("uri")]?.toString() ?: "",
                             playMetadata = map[PyObject.fromJava("meta")]?.toString() ?: "",
                             kind = map[PyObject.fromJava("kind")]?.toString() ?: "",
-                            albumKey = map[PyObject.fromJava("album_key")]?.toString() ?: ""
+                            albumKey = map[PyObject.fromJava("album_key")]?.toString() ?: "",
+                            genre = map[PyObject.fromJava("genre")]?.toString() ?: ""
                         ))
                     }
                 }
@@ -480,7 +481,8 @@ class SonosDashboardManager private constructor(context: Context) {
                         albumTitle = title,
                         playUri = map[PyObject.fromJava("uri")]?.toString() ?: "",
                         playMetadata = map[PyObject.fromJava("meta")]?.toString() ?: "",
-                        albumKey = map[PyObject.fromJava("album_key")]?.toString() ?: ""
+                        albumKey = map[PyObject.fromJava("album_key")]?.toString() ?: "",
+                        genre = map[PyObject.fromJava("genre")]?.toString() ?: ""
                     ))
                 }
                 _favoriteAlbumsRef.value = withResolvedArtists(items)

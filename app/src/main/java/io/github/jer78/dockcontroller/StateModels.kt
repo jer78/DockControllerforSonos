@@ -88,7 +88,9 @@ data class AlbumHistoryItem(
     // The music service's own ID for the album (e.g. Apple Music's
     // "1004206calbum:1440935467") - stable across favorites refreshes, and
     // tells apart albums sharing a title. Blank for older History entries.
-    val albumKey: String = ""
+    val albumKey: String = "",
+    // Apple Music albums only (from Apple's catalog); blank otherwise.
+    val genre: String = ""
 )
 
 data class SonosSpeakerGroup(
