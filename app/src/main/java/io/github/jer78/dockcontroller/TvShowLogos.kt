@@ -1,9 +1,6 @@
 package io.github.jer78.dockcontroller
 
-import android.graphics.Bitmap
 import android.util.Log
-import coil.size.Size
-import coil.transform.Transformation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -14,8 +11,8 @@ import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
-// A TV show's title logo, shown in place of the artwork in TV mode - or,
-// for shows with no logo anywhere, the show's poster.
+// A TV show's title logo (TMDB), shown in place of the artwork in TV mode -
+// or, from TVmaze, the show's poster.
 // aspectRatio: the image's width / height, for a poster, so the artwork
 // card can take its shape. backgroundUrl: the show's background image
 // (TVmaze), shown behind the whole screen in place of the blurred artwork.
@@ -28,9 +25,7 @@ data class TvShowLogo(
     enum class Kind {
         // A cut-out PNG (TMDB) that sits on the artwork.
         TRANSPARENT_LOGO,
-        // A logo on its own white background (TVmaze), keyed out first.
-        WHITE_BACKGROUND_LOGO,
-        // The show's poster (TVmaze), when there's no logo.
+        // The show's poster (TVmaze), when TMDB has no logo.
         POSTER
     }
 }
@@ -157,8 +152,8 @@ class TvShowLogos {
         return TvShowLogo("https://image.tmdb.org/t/p/w500${best.optString("file_path")}", TvShowLogo.Kind.TRANSPARENT_LOGO)
     }
 
-    // The show's logo ("typography" image), or failing that its poster -
-    // the main one of each first - plus its background, if it has one.
+    // The show's poster - the main one first - plus its background, if it
+    // has one. TVmaze's logos sit on a white background, so they're not used.
     private fun fromTvMaze(show: String): TvShowLogo? {
         val url = "https://api.tvmaze.com/singlesearch/shows".toHttpUrl().newBuilder()
             .addQueryParameter("q", show)
@@ -175,9 +170,6 @@ class TvShowLogos {
 
         val background = original("background")?.optString("url")
 
-        original("typography")?.let {
-            return TvShowLogo(it.optString("url"), TvShowLogo.Kind.WHITE_BACKGROUND_LOGO, backgroundUrl = background)
-        }
         original("poster")?.let { poster ->
             val width = poster.optInt("width")
             val height = poster.optInt("height")
@@ -194,62 +186,5 @@ class TvShowLogos {
         private const val RETRY_MISS_MS = 30 * 60 * 1000L
         // TVmaze's posters are 680 x 1000, for when it doesn't say.
         private const val POSTER_ASPECT = 0.68f
-    }
-}
-
-// Turns a TVmaze logo's baked-in white background transparent, so it can sit
-// on the artwork like a TMDB logo. Each pixel is unmixed from white ("colour
-// to alpha"), which keeps anti-aliased edges smooth and also clears the
-// insides of letters like O and A. A logo left mostly dark by that - black
-// text, the usual case - would vanish on the darkened artwork, so it's
-// recoloured white; colourful logos keep their colours.
-class RemoveWhiteBackground : Transformation {
-    override val cacheKey = "RemoveWhiteBackground"
-
-    override suspend fun transform(input: Bitmap, size: Size): Bitmap {
-        val w = input.width
-        val h = input.height
-        val pixels = IntArray(w * h)
-        input.getPixels(pixels, 0, w, 0, 0, w, h)
-
-        var lumSum = 0.0
-        var alphaSum = 0.0
-        for (i in pixels.indices) {
-            val p = pixels[i]
-            val srcA = (p ushr 24) and 0xFF
-            val r = (p shr 16) and 0xFF
-            val g = (p shr 8) and 0xFF
-            val b = p and 0xFF
-            // How far the pixel is from white, as the foreground's alpha.
-            val a = maxOf(255 - r, 255 - g, 255 - b) * srcA / 255
-            if (a < 12) {
-                pixels[i] = 0
-                continue
-            }
-            val fa = a / 255f
-            fun unmix(c: Int) = ((c - 255 * (1 - fa)) / fa).toInt().coerceIn(0, 255)
-            val ur = unmix(r)
-            val ug = unmix(g)
-            val ub = unmix(b)
-            pixels[i] = (a shl 24) or (ur shl 16) or (ug shl 8) or ub
-            lumSum += (0.2126 * ur + 0.7152 * ug + 0.0722 * ub) / 255 * fa
-            alphaSum += fa
-        }
-
-        if (alphaSum > 0 && lumSum / alphaSum < DARK_LOGO_LUMINANCE) {
-            for (i in pixels.indices) if (pixels[i] != 0) pixels[i] = pixels[i] or 0x00FFFFFF
-        }
-
-        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
-            setHasAlpha(true)
-            setPixels(pixels, 0, w, 0, 0, w, h)
-        }
-    }
-
-    override fun equals(other: Any?) = other is RemoveWhiteBackground
-    override fun hashCode() = cacheKey.hashCode()
-
-    companion object {
-        private const val DARK_LOGO_LUMINANCE = 0.3
     }
 }

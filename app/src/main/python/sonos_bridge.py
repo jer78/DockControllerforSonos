@@ -592,6 +592,49 @@ def play_album_smart(*args):
     except Exception as e:
         return f"CRITICAL ERR: {str(e)}"
 
+def _short_duration(duration):
+    """"0:04:12" -> "4:12", "1:02:03" -> "1:02:03"; "" when unknown."""
+    try:
+        h, m, s = (int(part) for part in (duration or '').split(':'))
+    except ValueError:
+        return ''
+    if h == m == s == 0:
+        return ''
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+def get_queue(speaker_name=None, limit=500):
+    """
+    The Sonos queue, for picking a song: {"tracks": [{title, artist,
+    duration}], "current": index of the playing track or -1}, or
+    {"error": ...}.
+    """
+    device = get_speaker_instance(speaker_name)
+    if not device: return {"error": "No Sonos device found"}
+    try:
+        master = device.group.coordinator
+        info = master.get_current_track_info()
+        current = int(info.get('playlist_position') or 0) - 1
+        tracks = []
+        for track in master.get_queue(start=0, max_items=int(limit)):
+            resources = getattr(track, 'resources', None) or []
+            duration = getattr(resources[0], 'duration', '') if resources else ''
+            tracks.append({
+                "title": getattr(track, 'title', '') or '',
+                "artist": getattr(track, 'creator', '') or '',
+                "duration": _short_duration(duration)
+            })
+        return {"tracks": tracks, "current": current}
+    except Exception as e:
+        return {"error": str(e)}
+
+def play_queue_track(index, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        device.group.coordinator.play_from_queue(int(index))
+        return True
+    except: return False
+
 def control_playback(action, speaker_name=None):
     try:
         device = get_speaker_instance(speaker_name)

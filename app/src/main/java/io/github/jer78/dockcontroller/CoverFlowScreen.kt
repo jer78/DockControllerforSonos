@@ -160,6 +160,10 @@ private fun coverFlowInitialPage(
 
 private const val CONTROLS_AUTO_COLLAPSE_MS = 10_000L
 
+private const val VARIOUS_ARTISTS = "Various Artists"
+
+private const val REFRESH_RESULT_MS = 5_000L
+
 // History entries have no kind - they're always albums.
 private fun AlbumHistoryItem.isAlbum() = kind == "album" || kind.isEmpty()
 
@@ -169,6 +173,7 @@ private fun CoverFlowControlButton(
     icon: ImageVector,
     contentDescription: String,
     highlighted: Boolean = false,
+    iconModifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     Surface(
@@ -181,7 +186,7 @@ private fun CoverFlowControlButton(
             icon,
             contentDescription = contentDescription,
             tint = if (highlighted) Color.Black else Color.White.copy(alpha = 0.85f),
-            modifier = Modifier.padding(12.dp).size(22.dp)
+            modifier = Modifier.padding(12.dp).size(22.dp).then(iconModifier)
         )
     }
 }
@@ -237,6 +242,10 @@ fun AmbientClockScreen(
     // save a new one. Playlists and radio always go by title.
     sortByArtist: Boolean = true,
     onSortChange: (Boolean) -> Unit = {},
+    // Favorites mode's refresh button, spinning while a refresh runs, and
+    // then saying what it found.
+    onRefreshFavorites: ((FavoritesRefreshResult) -> Unit) -> Unit = {},
+    isRefreshingFavorites: Boolean = false,
     // Extra room on the left of the bottom-left Previous card, and above the
     // top-right controls, for overlays the system draws there (the Pixel
     // Tablet's Home button and status line over the screensaver).
@@ -262,9 +271,16 @@ fun AmbientClockScreen(
     }
     if (category !in categories) category = FavoriteCategory.ALL
     var isSortByArtist by remember(sortByArtist) { mutableStateOf(sortByArtist) }
-    // What each item is sorted (and the grid's A-Z bar lettered) by.
-    fun sortKey(item: AlbumHistoryItem): String =
-        if (isSortByArtist && item.isAlbum()) item.artist else item.albumTitle
+    // What each item is sorted (and the grid's A-Z bar lettered) by. By
+    // artist, playlists count as Various Artists, so they gather under V.
+    fun sortKey(item: AlbumHistoryItem): String = when {
+        !isSortByArtist -> item.albumTitle
+        item.isAlbum() -> item.artist
+        item.kind == "playlist" -> VARIOUS_ARTISTS
+        else -> item.albumTitle
+    }
+    // Sorted by artist, albums show their artist first, in bold.
+    fun artistFirst(item: AlbumHistoryItem) = isSortByArtist && item.isAlbum() && item.artist.isNotBlank()
     val shownAlbums = remember(albumHistory, category, isSortByArtist) {
         val inCategory = category.kind?.let { kind -> albumHistory.filter { it.kind == kind } } ?: albumHistory
         inCategory.sortedWith(
@@ -287,6 +303,15 @@ fun AmbientClockScreen(
         if (height > trackCardHeight) trackCardHeight = height
     }
     var controlsTaps by remember { mutableIntStateOf(0) }
+    // What the last refresh-button tap found, shown under the controls for
+    // REFRESH_RESULT_MS.
+    var refreshResult by remember { mutableStateOf<FavoritesRefreshResult?>(null) }
+    LaunchedEffect(refreshResult) {
+        if (refreshResult != null) {
+            delay(REFRESH_RESULT_MS)
+            refreshResult = null
+        }
+    }
 
     // Search, typed on Cover Flow's own keyboard. It narrows the grid only -
     // opening it switches to the grid, and closing it clears the search and
@@ -540,6 +565,7 @@ fun AmbientClockScreen(
                 },
                 // History is sorted by artist, Favorites by title.
                 letterOf = { sortKey(it) },
+                artistFirst = { artistFirst(it) },
                 showLetterBar = !searchOpen,
                 emptyText = "No matches for \"${query.trim()}\"",
                 onPlay = { album, bounds ->
@@ -767,8 +793,9 @@ fun AmbientClockScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier.width(450.dp)
                             ) {
+                                val byArtist = artistFirst(albumItem)
                                 Text(
-                                    text = albumItem.albumTitle,
+                                    text = if (byArtist) albumItem.artist else albumItem.albumTitle,
                                     color = Color.White,
                                     fontSize = 26.sp,
                                     fontWeight = FontWeight.Bold,
@@ -777,7 +804,7 @@ fun AmbientClockScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = albumItem.artist,
+                                    text = if (byArtist) albumItem.albumTitle else albumItem.artist,
                                     color = Color.White.copy(alpha = 0.7f),
                                     fontSize = 20.sp,
                                     textAlign = TextAlign.Center,
@@ -895,8 +922,10 @@ fun AmbientClockScreen(
             }
         }
 
+        // The open controls stretch across the top right, so the time
+        // moves out of their way to the left.
         AnimatedContent(
-            targetState = clockAlignment,
+            targetState = if (controlsOpen) Alignment.TopStart else clockAlignment,
             transitionSpec = { fadeIn(tween(1500)) togetherWith fadeOut(tween(1500)) },
             modifier = Modifier.fillMaxSize().padding(top = 20.dp, start = 60.dp, end = 60.dp).alpha(fadeAlpha),
             label = "clockMove"
@@ -1012,6 +1041,26 @@ fun AmbientClockScreen(
                                 }
                             }
                         }
+                        if (isFavoritesMode) {
+                            val spin = rememberInfiniteTransition(label = "refreshSpin")
+                            val spinAngle by spin.animateFloat(
+                                initialValue = 0f,
+                                targetValue = 360f,
+                                animationSpec = infiniteRepeatable(tween(1000, easing = LinearEasing)),
+                                label = "refreshAngle"
+                            )
+                            CoverFlowControlButton(
+                                icon = Icons.Default.Refresh,
+                                contentDescription = if (isRefreshingFavorites) "Refreshing favorites" else "Refresh favorites",
+                                iconModifier = if (isRefreshingFavorites) Modifier.graphicsLayer { rotationZ = spinAngle } else Modifier
+                            ) {
+                                controlsTaps++
+                                if (!isRefreshingFavorites) {
+                                    refreshResult = null
+                                    onRefreshFavorites { refreshResult = it }
+                                }
+                            }
+                        }
                         CoverFlowControlButton(
                             icon = Icons.Default.Search,
                             contentDescription = if (searchOpen) "Close search" else "Search",
@@ -1038,10 +1087,56 @@ fun AmbientClockScreen(
                 }
                 CoverFlowControlButton(
                     icon = if (controlsOpen) Icons.Default.Close else Icons.Default.Tune,
-                    contentDescription = if (controlsOpen) "Hide controls" else "Show filter, sort, search and view"
+                    contentDescription = if (controlsOpen) "Hide controls" else "Show filter, sort, refresh, search and view"
                 ) {
                     if (controlsOpen && searchOpen) closeSearch()
                     controlsOpen = !controlsOpen
+                }
+            }
+        }
+
+        // Under the top-right controls: the refresh button's result. The
+        // last one stays around so it can fade out with its text.
+        var shownRefreshResult by remember { mutableStateOf<FavoritesRefreshResult?>(null) }
+        refreshResult?.let { shownRefreshResult = it }
+        AnimatedVisibility(
+            visible = refreshResult != null,
+            enter = fadeIn(tween(300)) + slideInVertically(tween(300)) { -it / 2 },
+            exit = fadeOut(tween(400)),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 24.dp + topEndInset + 58.dp, end = 24.dp)
+        ) {
+            val result = shownRefreshResult
+            if (result != null) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    ) {
+                        Icon(
+                            if (result.error != null) Icons.Default.ErrorOutline else Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = if (result.error != null) Color(0xFFFF8A80) else Color(0xFF81C784),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            when {
+                                result.error != null -> "Couldn't refresh: ${result.error}"
+                                result.added == 0 -> "No new favorites · ${result.total} loaded"
+                                result.added == 1 -> "1 new favorite · ${result.total} loaded"
+                                else -> "${result.added} new favorites · ${result.total} loaded"
+                            },
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
         }
@@ -1143,6 +1238,8 @@ private fun CoverGrid(
     bottomPadding: Dp,
     // The text each album is sorted by, whose first letter the A-Z bar uses.
     letterOf: (AlbumHistoryItem) -> String,
+    // Whether an album's caption leads with its artist (sorted by artist).
+    artistFirst: (AlbumHistoryItem) -> Boolean,
     showLetterBar: Boolean,
     emptyText: String,
     onPlay: (AlbumHistoryItem, Rect) -> Unit,
@@ -1282,17 +1379,19 @@ private fun CoverGrid(
                             .background(Color.Black.copy(alpha = 0.65f))
                             .padding(horizontal = 10.dp, vertical = 8.dp)
                     ) {
+                        val byArtist = artistFirst(album)
+                        val second = if (byArtist) album.albumTitle else album.artist
                         Text(
-                            album.albumTitle,
+                            if (byArtist) album.artist else album.albumTitle,
                             color = Color.White,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        if (album.artist.isNotBlank()) {
+                        if (second.isNotBlank()) {
                             Text(
-                                album.artist,
+                                second,
                                 color = Color.White.copy(alpha = 0.7f),
                                 fontSize = 12.sp,
                                 maxLines = 1,

@@ -72,16 +72,17 @@ import kotlin.math.roundToInt
 // away below); coming back to Now Playing reverses that (old screensaver
 // rises away above, Now Playing rises into place from below).
 //
-// Exception: Cover Flow reached by a sideways swipe on Now Playing slides in
-// from the side the finger came from, or from the left for the Cover Flow
-// button (and back out the same way) - `slide`
-// is how the last Now Playing -> Cover Flow switch was triggered.
+// Exception: Now Playing and Cover Flow (or its grid) always slide sideways.
+// Cover Flow comes in from the side a swipe on Now Playing came from, and
+// from the left otherwise (its button, or the idle timeout), then goes back
+// out the same way - `slide` is how the last Now Playing -> Cover Flow switch
+// was triggered.
 fun dockScreenTransitionSpec(slide: ScreenSlide): AnimatedContentTransitionScope<DockScreen>.() -> ContentTransform = {
     val spec = tween<IntOffset>(550, easing = FastOutSlowInEasing)
     val nowPlayingAndCoverFlow = setOf(initialState, targetState) == setOf(DockScreen.NOW_PLAYING, DockScreen.COVER_FLOW)
-    if (nowPlayingAndCoverFlow && slide != ScreenSlide.VERTICAL) {
+    if (nowPlayingAndCoverFlow) {
         // Which side Cover Flow sits off-screen: -1 left, +1 right.
-        val coverFlowSide = if (slide == ScreenSlide.FROM_LEFT) -1 else 1
+        val coverFlowSide = if (slide == ScreenSlide.FROM_RIGHT) 1 else -1
         if (targetState == DockScreen.COVER_FLOW) {
             slideInHorizontally(animationSpec = spec) { fullWidth -> coverFlowSide * fullWidth } togetherWith
                 slideOutHorizontally(animationSpec = spec) { fullWidth -> -coverFlowSide * fullWidth }

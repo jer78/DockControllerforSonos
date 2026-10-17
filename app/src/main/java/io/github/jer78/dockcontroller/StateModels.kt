@@ -11,6 +11,12 @@ enum class DockScreen { NOW_PLAYING, COVER_FLOW, TV_AMBIENT }
 // is VERTICAL.
 enum class ScreenSlide { VERTICAL, FROM_LEFT, FROM_RIGHT }
 
+// The Sonos queue, for Now Playing's song picker. duration is "4:12", or
+// blank when the service doesn't say.
+data class QueueTrack(val title: String, val artist: String, val duration: String)
+
+data class SonosQueue(val tracks: List<QueueTrack>, val currentIndex: Int)
+
 data class TrackState(
     val title: String = "Not Playing",
     val artist: String = "Connect Sonos",
@@ -66,6 +72,10 @@ data class GroupMemberVolume(
     val isCoordinator: Boolean,
     val model: String = ""
 )
+
+// What Cover Flow's refresh button found: how many favorites weren't there
+// before, and how many are loaded now - or why it failed.
+data class FavoritesRefreshResult(val added: Int, val total: Int, val error: String? = null)
 
 data class AlbumHistoryItem(
     val artUrl: String,

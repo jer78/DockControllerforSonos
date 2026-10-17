@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,7 +36,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import kotlin.math.abs
 
 // Taps on the TV-mode artwork closer together than this count towards the
@@ -55,10 +55,16 @@ fun DockDashboardUI(
     onToggleMute: () -> Unit,
     onToggleShuffle: () -> Unit = {},
     onCycleRepeat: () -> Unit = {},
+    // The song picker's queue, and playing a track from it by position.
+    onLoadQueue: suspend () -> SonosQueue? = { null },
+    onPlayQueueTrack: (Int) -> Unit = {},
     onSeek: (Int) -> Unit = {},
     onEnterAmbient: (ScreenSlide) -> Unit,
     albumHistory: List<AlbumHistoryItem>,
     onOpenSettings: () -> Unit,
+    // Cover Flow's saved view, so its button names the grid when that's
+    // what it opens.
+    coverFlowGridView: Boolean = false,
     speakerGroups: List<SonosSpeakerGroup>,
     onToggleJoin: (String, Boolean) -> Unit,
     onAlbumArtPositioned: (Rect) -> Unit = {},
@@ -101,6 +107,7 @@ fun DockDashboardUI(
     // Entity id of the Home Assistant widget whose pop-up is open.
     var openHaEntity by remember { mutableStateOf<String?>(null) }
     var showSoundSettings by remember { mutableStateOf(false) }
+    var showQueue by remember { mutableStateOf(false) }
     var previousTrackDetails by remember { mutableStateOf<TrackDetails?>(null) }
 
     val spectrumAnalyzer = remember { SpectrumAnalyzer() }
@@ -237,8 +244,8 @@ fun DockDashboardUI(
             }
 
             LabeledIconButton(
-                icon = Icons.Default.BurstMode,
-                label = "Cover Flow",
+                icon = if (coverFlowGridView) Icons.Default.GridView else Icons.Default.BurstMode,
+                label = if (coverFlowGridView) "Cover Grid" else "Cover Flow",
                 // Same slide as a swipe right, so the button and the
                 // sideways swipes feel like one gesture.
                 onClick = { onEnterAmbient(ScreenSlide.FROM_LEFT) }
@@ -357,7 +364,6 @@ fun DockDashboardUI(
                                 showLogo == null -> "none (yet, or none found)"
                                 else -> when (showLogo.kind) {
                                     TvShowLogo.Kind.TRANSPARENT_LOGO -> "TMDB"
-                                    TvShowLogo.Kind.WHITE_BACKGROUND_LOGO -> "TVmaze"
                                     TvShowLogo.Kind.POSTER -> "TVmaze poster"
                                 }
                             }
@@ -620,6 +626,16 @@ fun DockDashboardUI(
                                 tint = if (repeatOn) Color.Black else Color.White
                             )
                         }
+
+                        // The queue's songs, to pick one to play.
+                        IconButton(
+                            onClick = { showQueue = true },
+                            modifier = Modifier
+                                .size(56.dp)
+                                .background(Color.White.copy(alpha = 0.2f), CircleShape)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.QueueMusic, "Song list", tint = Color.White)
+                        }
                     }
                 }
 
@@ -802,6 +818,19 @@ fun DockDashboardUI(
             )
         }
 
+        if (showQueue) {
+            QueueDialog(
+                heading = trackState.album.ifBlank { "Up Next" },
+                currentTitle = trackState.title,
+                loadQueue = onLoadQueue,
+                onPlayTrack = { index ->
+                    onPlayQueueTrack(index)
+                    showQueue = false
+                },
+                onDismiss = { showQueue = false }
+            )
+        }
+
         if (showSoundSettings) {
             SoundSettingsDialog(
                 audioSettings = audioSettings,
@@ -818,19 +847,10 @@ fun DockDashboardUI(
 }
 
 // TV mode's artwork card when the show's logo is known: the logo over the
-// HA artwork, blurred and darkened so the logo reads clearly. TMDB logos are
-// already transparent; TVmaze ones have a white background, which is keyed
-// out first (see RemoveWhiteBackground). A poster (no logo anywhere) fills
-// the card, which has taken the poster's shape.
+// HA artwork, blurred and darkened so the logo reads clearly. A TVmaze
+// poster (no TMDB logo) fills the card, which has taken the poster's shape.
 @Composable
 private fun TvShowLogoArt(logo: TvShowLogo, artworkUrl: String, showName: String) {
-    val context = LocalContext.current
-    val logoRequest = remember(logo) {
-        ImageRequest.Builder(context)
-            .data(logo.url)
-            .apply { if (logo.kind == TvShowLogo.Kind.WHITE_BACKGROUND_LOGO) transformations(RemoveWhiteBackground()) }
-            .build()
-    }
     if (logo.kind == TvShowLogo.Kind.POSTER) {
         AsyncImage(
             model = logo.url,
@@ -854,7 +874,7 @@ private fun TvShowLogoArt(logo: TvShowLogo, artworkUrl: String, showName: String
         }
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
         AsyncImage(
-            model = logoRequest,
+            model = logo.url,
             contentDescription = showName.ifBlank { "Show logo" },
             contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize().padding(horizontal = 40.dp, vertical = 28.dp)

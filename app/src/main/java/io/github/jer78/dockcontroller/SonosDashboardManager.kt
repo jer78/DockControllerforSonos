@@ -388,15 +388,32 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
+    // Cover Flow's refresh button: the saved speaker, limit and filters.
+    fun refreshSavedFavorites(onResult: (FavoritesRefreshResult) -> Unit) {
+        scope.launch {
+            refreshFavorites(
+                settingsManager.filterAlbums.first(),
+                settingsManager.filterPlaylists.first(),
+                settingsManager.filterRadio.first(),
+                onResult = onResult
+            )
+        }
+    }
+
     // speakerOverride/limitOverride: Settings' unsaved picks (see
     // SettingsModal's onRefreshFavorites); null uses the saved settings.
+    // onResult, if given, hears how it went, on the main thread.
     fun refreshFavorites(
         fAlbums: Boolean,
         fPlaylists: Boolean,
         fRadio: Boolean,
         speakerOverride: String? = null,
-        limitOverride: Int? = null
+        limitOverride: Int? = null,
+        onResult: ((FavoritesRefreshResult) -> Unit)? = null
     ) {
+        fun report(result: FavoritesRefreshResult) {
+            if (onResult != null) scope.launch(Dispatchers.Main) { onResult(result) }
+        }
         scope.launch {
             _favoritesRefreshStatus.value = "Starting Instant Scan..."
             _favoritesRefreshCount.value = null
@@ -406,6 +423,7 @@ class SonosDashboardManager private constructor(context: Context) {
             
             if (speaker.isBlank()) {
                 _favoritesRefreshStatus.value = "Error: Select a speaker first"
+                report(FavoritesRefreshResult(0, 0, "Select a speaker first"))
                 return@launch
             }
 
@@ -423,6 +441,7 @@ class SonosDashboardManager private constructor(context: Context) {
 
                 if (pyFavs == null) {
                     _favoritesRefreshStatus.value = "Error: Speaker timed out"
+                    report(FavoritesRefreshResult(0, _albumHistory.value.size, "Speaker timed out"))
                     return@launch
                 }
 
@@ -448,8 +467,12 @@ class SonosDashboardManager private constructor(context: Context) {
                     }
                 }
                 
+                // New = not among the favorites shown before the refresh.
+                val before = _albumHistory.value.map { it.playUri.ifBlank { it.albumTitle } }.toSet()
+                val added = favItems.count { it.playUri.ifBlank { it.albumTitle } !in before }
                 _albumHistory.value = withResolvedArtists(favItems)
                 _favoritesRefreshCount.value = favItems.size
+                report(FavoritesRefreshResult(added, favItems.size))
                 if (favItems.isNotEmpty()) {
                     _favoritesRefreshStatus.value = "Success: Found ${favItems.size} items"
                 } else if (diagMsg.isNotBlank()) {
@@ -459,6 +482,7 @@ class SonosDashboardManager private constructor(context: Context) {
                 }
             } catch (e: Exception) {
                 _favoritesRefreshStatus.value = "Critical Error: ${e.message}"
+                report(FavoritesRefreshResult(0, _albumHistory.value.size, e.message ?: "Unknown error"))
             }
         }
     }
@@ -1155,6 +1179,42 @@ class SonosDashboardManager private constructor(context: Context) {
             val ok = Python.getInstance().getModule("sonos_bridge")
                 .callAttr("set_repeat", next, speaker).toBoolean()
             if (ok) _trackState.update { it.copy(repeatMode = next) }
+        }
+    }
+
+    // Now Playing's song picker. Null when the speaker couldn't be read.
+    suspend fun loadQueue(): SonosQueue? = withContext(Dispatchers.IO) {
+        val speaker = settingsManager.sonosSpeaker.first()
+        if (speaker.isBlank()) return@withContext null
+        try {
+            val result = Python.getInstance().getModule("sonos_bridge")
+                .callAttr("get_queue", speaker).asMap()
+            val error = result[PyObject.fromJava("error")]
+            if (error != null) {
+                Log.w("SonosDashboard", "Queue: $error")
+                return@withContext null
+            }
+            val tracks = result[PyObject.fromJava("tracks")]?.asList().orEmpty().map { item ->
+                val map = item.asMap()
+                QueueTrack(
+                    title = map[PyObject.fromJava("title")]?.toString() ?: "",
+                    artist = map[PyObject.fromJava("artist")]?.toString() ?: "",
+                    duration = map[PyObject.fromJava("duration")]?.toString() ?: ""
+                )
+            }
+            SonosQueue(tracks, result[PyObject.fromJava("current")]?.toInt() ?: -1)
+        } catch (e: Exception) {
+            Log.w("SonosDashboard", "Queue failed: ${e.message}")
+            null
+        }
+    }
+
+    fun playQueueTrack(index: Int) {
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            if (speaker.isBlank()) return@launch
+            _trackState.update { it.copy(lastCommandSent = "Action: play queue track ${index + 1}") }
+            Python.getInstance().getModule("sonos_bridge").callAttr("play_queue_track", index, speaker)
         }
     }
 

@@ -139,6 +139,7 @@ class MainActivity : ComponentActivity() {
             val coverFlowHideNowPlaying by settingsManager.coverFlowHideNowPlaying.collectAsState(initial = false)
             val coverFlowGridView by settingsManager.coverFlowGridView.collectAsState(initial = false)
             val coverFlowSortByArtist by settingsManager.coverFlowSortByArtist.collectAsState(initial = true)
+            val favoritesRefreshStatus by manager.favoritesRefreshStatus.collectAsState()
             val settingsScope = rememberCoroutineScope()
             val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
             val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
@@ -313,7 +314,9 @@ class MainActivity : ComponentActivity() {
                                 gridView = coverFlowGridView,
                                 onGridViewChange = { grid -> settingsScope.launch { settingsManager.setCoverFlowGridView(grid) } },
                                 sortByArtist = coverFlowSortByArtist,
-                                onSortChange = { byArtist -> settingsScope.launch { settingsManager.setCoverFlowSortByArtist(byArtist) } }
+                                onSortChange = { byArtist -> settingsScope.launch { settingsManager.setCoverFlowSortByArtist(byArtist) } },
+                                onRefreshFavorites = { onResult -> manager.refreshSavedFavorites(onResult) },
+                                isRefreshingFavorites = favoritesRefreshStatus.startsWith("Starting")
                             )
                         }
                         DockScreen.NOW_PLAYING -> {
@@ -328,6 +331,9 @@ class MainActivity : ComponentActivity() {
                                 onToggleMute = { manager.toggleMute() },
                                 onToggleShuffle = { manager.toggleShuffle() },
                                 onCycleRepeat = { manager.cycleRepeat() },
+                                coverFlowGridView = coverFlowGridView,
+                                onLoadQueue = { manager.loadQueue() },
+                                onPlayQueueTrack = { manager.playQueueTrack(it) },
                                 onSeek = { manager.seekTo(it) },
                                 onEnterAmbient = { slide ->
                                     screenSlide = slide

@@ -10,6 +10,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -889,6 +892,121 @@ fun TrackState.previousTrackDetails() = TrackDetails(
     album = prevAlbum,
     artUrl = prevArtUrl
 )
+
+// The Sonos queue - usually the album playing - with each song's length
+// when the service gives one. Tapping a song plays it. The playing song is
+// highlighted and scrolled to; currentTitle re-reads the queue as the album
+// moves on while the list is open, so that stays right.
+@Composable
+fun QueueDialog(
+    heading: String,
+    currentTitle: String,
+    loadQueue: suspend () -> SonosQueue?,
+    onPlayTrack: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var queue by remember { mutableStateOf<SonosQueue?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    val listState = rememberLazyListState()
+    var scrolledToCurrent by remember { mutableStateOf(false) }
+    // Read again when the song changes, so the highlight follows along.
+    LaunchedEffect(currentTitle) {
+        queue = loadQueue()
+        loading = false
+        val current = queue?.currentIndex ?: -1
+        if (!scrolledToCurrent && current > 0) listState.scrollToItem((current - 2).coerceAtLeast(0))
+        scrolledToCurrent = true
+    }
+
+    GlassDialog(onDismissRequest = onDismiss) {
+        GlassCard(modifier = Modifier.width(560.dp)) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        heading,
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+
+                val tracks = queue?.tracks.orEmpty()
+                when {
+                    loading -> Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Color.White)
+                    }
+                    tracks.isEmpty() -> Text(
+                        if (queue == null) "Couldn't read the queue from the speaker." else "The queue is empty.",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 16.sp,
+                        modifier = Modifier.padding(vertical = 24.dp)
+                    )
+                    else -> {
+                        // Show the album artist once, under the heading,
+                        // unless the songs are by different artists.
+                        val oneArtist = tracks.map { it.artist }.distinct().singleOrNull()
+                        LazyColumn(state = listState, modifier = Modifier.heightIn(max = 480.dp)) {
+                            itemsIndexed(tracks) { index, track ->
+                                val isCurrent = index == queue?.currentIndex
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(if (isCurrent) Color.White.copy(alpha = 0.18f) else Color.Transparent)
+                                        .clickable { onPlayTrack(index) }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                ) {
+                                    Box(Modifier.width(36.dp), contentAlignment = Alignment.CenterStart) {
+                                        if (isCurrent) {
+                                            Icon(Icons.Default.GraphicEq, contentDescription = "Playing", tint = Color.White, modifier = Modifier.size(20.dp))
+                                        } else {
+                                            Text("${index + 1}", color = Color.White.copy(alpha = 0.5f), fontSize = 15.sp)
+                                        }
+                                    }
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            track.title,
+                                            color = Color.White,
+                                            fontSize = 17.sp,
+                                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (oneArtist == null && track.artist.isNotBlank()) {
+                                            Text(
+                                                track.artist,
+                                                color = Color.White.copy(alpha = 0.6f),
+                                                fontSize = 13.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    if (track.duration.isNotBlank()) {
+                                        Spacer(Modifier.width(12.dp))
+                                        Text(track.duration, color = Color.White.copy(alpha = 0.6f), fontSize = 15.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 // Glass pop-up with a track's album art, song title, artist and album -
 // opened by tapping Previous on Now Playing or Cover Flow.

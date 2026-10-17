@@ -289,6 +289,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onGridViewChange = { grid -> settingsScope.launch { settingsManager.setCoverFlowGridView(grid) } },
                                         sortByArtist = coverFlowSortByArtist,
                                         onSortChange = { byArtist -> settingsScope.launch { settingsManager.setCoverFlowSortByArtist(byArtist) } },
+                                        onRefreshFavorites = { onResult -> manager.refreshSavedFavorites(onResult) },
+                                        isRefreshingFavorites = refreshStatus.startsWith("Starting"),
                                         // Clear of the Pixel Tablet's Home button and
                                         // status line, which hub mode draws over the
                                         // screensaver.
@@ -308,6 +310,9 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onToggleMute = { manager.toggleMute() },
                                         onToggleShuffle = { manager.toggleShuffle() },
                                         onCycleRepeat = { manager.cycleRepeat() },
+                                        coverFlowGridView = coverFlowGridView,
+                                        onLoadQueue = { manager.loadQueue() },
+                                        onPlayQueueTrack = { manager.playQueueTrack(it) },
                                         onSeek = { manager.seekTo(it) },
                                         onEnterAmbient = { slide -> screenSlide = slide; isAmbientMode = true; transitioningAlbum = null },
                                         albumHistory = albumHistory,
