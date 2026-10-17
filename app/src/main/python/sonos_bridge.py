@@ -94,12 +94,11 @@ def _lookup_apple_artists(album_ids):
         except Exception:
             pass
 
-def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio", limit=100):
+def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"):
     """
     HA-STYLE DISCOVERY: Captures native SoCo references for 100% reliable replay.
-    limit caps how many (alphabetically first) items of EACH kind - album,
-    playlist, radio - are returned, so Cover Flow's per-kind filter isn't
-    starved by the others; 0 = all.
+    Every favorite of the requested kinds, sorted by title - Sonos itself
+    caps favorites at about 70, so there's no need for a limit here.
     """
     try:
         device = get_speaker_instance(speaker_name)
@@ -209,15 +208,7 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
                 r['artist'] = _APPLE_ARTISTS[apple_id]
 
         results.sort(key=lambda x: x['title'].lower())
-        if limit <= 0: return results
-        per_kind = {}
-        capped = []
-        for r in results:
-            count = per_kind.get(r['kind'], 0)
-            if count < limit:
-                per_kind[r['kind']] = count + 1
-                capped.append(r)
-        return capped
+        return results
     except Exception as e:
         return [{"title": "DIAG", "artist": f"Crawl Error: {str(e)}"}]
 

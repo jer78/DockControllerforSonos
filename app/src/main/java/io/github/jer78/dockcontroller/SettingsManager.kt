@@ -31,7 +31,9 @@ class SettingsManager(private val context: Context) {
         // Optional TMDB API key (v3 key or v4 read access token) for TV show
         // logos; without one, logos come from TVmaze (see TvShowLogos).
         val TMDB_API_KEY = stringPreferencesKey("tmdb_api_key")
-        val COVER_FLOW_MODE = stringPreferencesKey("cover_flow_mode") // "history" or "favorites"
+        // No longer used (History mode and the Cover Flow limit are gone) -
+        // kept so saving Settings can clear them out.
+        val COVER_FLOW_MODE = stringPreferencesKey("cover_flow_mode")
         // Whether Cover Flow last showed the grid rather than the carousel,
         // so it opens that way again.
         val COVER_FLOW_GRID_VIEW = booleanPreferencesKey("cover_flow_grid_view")
@@ -120,9 +122,6 @@ class SettingsManager(private val context: Context) {
         const val TV_SCREENSAVER_DELAY_MAX_SECONDS = 1800
         const val TV_SCREENSAVER_DELAY_DEFAULT_SECONDS = 30
 
-        const val COVER_FLOW_LIMIT_UNLIMITED = 0
-        const val COVER_FLOW_LIMIT_DEFAULT = 100
-        val COVER_FLOW_LIMIT_OPTIONS = listOf(50, 100, 250, 500, COVER_FLOW_LIMIT_UNLIMITED)
 
         const val COVER_FLOW_REFLECTION_DEFAULT = 0.85f
         const val COVER_FLOW_GLASS_TABLE_DEFAULT = 0.85f
@@ -156,9 +155,7 @@ class SettingsManager(private val context: Context) {
     }
     val selectedHaMediaPlayer: Flow<String> = context.dataStore.data.map { it[SELECTED_HA_MEDIA_PLAYER] ?: "" }
     val tmdbApiKey: Flow<String> = context.dataStore.data.map { it[TMDB_API_KEY] ?: "" }
-    val coverFlowMode: Flow<String> = context.dataStore.data.map { it[COVER_FLOW_MODE] ?: "history" }
     
-    val coverFlowLimit: Flow<Int> = context.dataStore.data.map { it[COVER_FLOW_LIMIT] ?: COVER_FLOW_LIMIT_DEFAULT }
 
     val filterAlbums: Flow<Boolean> = context.dataStore.data.map { it[FILTER_ALBUMS] ?: true }
     val filterPlaylists: Flow<Boolean> = context.dataStore.data.map { it[FILTER_PLAYLISTS] ?: true }
@@ -307,26 +304,6 @@ class SettingsManager(private val context: Context) {
         context.dataStore.edit { it[TV_FALLBACK_IMAGE] = name }
     }
 
-    val albumHistory: Flow<List<AlbumHistoryItem>> = context.dataStore.data.map { prefs ->
-        val json = prefs[ALBUM_HISTORY_JSON] ?: "[]"
-        val list = mutableListOf<AlbumHistoryItem>()
-        try {
-            val array = JSONArray(json)
-            for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
-                list.add(AlbumHistoryItem(
-                    artUrl = obj.getString("art"),
-                    artist = obj.getString("artist"),
-                    albumTitle = obj.getString("title"),
-                    playUri = obj.optString("uri", ""),
-                    playMetadata = obj.optString("meta", ""),
-                    albumKey = obj.optString("key", "")
-                ))
-            }
-        } catch (e: Exception) { e.printStackTrace() }
-        list
-    }
-
     suspend fun saveSettings(
         speaker: String,
         url: String,
@@ -334,11 +311,9 @@ class SettingsManager(private val context: Context) {
         haWidgets: List<HaWidgetSlot?>,
         haMediaPlayer: String,
         tmdbApiKey: String,
-        mode: String,
         fAlbums: Boolean = true,
         fPlaylists: Boolean = true,
-        fRadio: Boolean = true,
-        coverFlowLimit: Int = COVER_FLOW_LIMIT_DEFAULT
+        fRadio: Boolean = true
     ) {
         context.dataStore.edit { prefs ->
             prefs[SELECTED_SONOS_SPEAKER] = speaker
@@ -347,11 +322,12 @@ class SettingsManager(private val context: Context) {
             prefs[HA_WIDGETS] = haWidgetsJson(haWidgets)
             prefs[SELECTED_HA_MEDIA_PLAYER] = haMediaPlayer
             prefs[TMDB_API_KEY] = tmdbApiKey.trim()
-            prefs[COVER_FLOW_MODE] = mode
             prefs[FILTER_ALBUMS] = fAlbums
             prefs[FILTER_PLAYLISTS] = fPlaylists
             prefs[FILTER_RADIO] = fRadio
-            prefs[COVER_FLOW_LIMIT] = coverFlowLimit
+            prefs.remove(COVER_FLOW_MODE)
+            prefs.remove(COVER_FLOW_LIMIT)
+            prefs.remove(ALBUM_HISTORY_JSON)
         }
     }
 
@@ -391,20 +367,5 @@ class SettingsManager(private val context: Context) {
         }
     }
 
-    suspend fun saveAlbumHistory(history: List<AlbumHistoryItem>) {
-        context.dataStore.edit { prefs ->
-            val array = JSONArray()
-            history.forEach { item ->
-                val obj = JSONObject()
-                    .put("art", item.artUrl)
-                    .put("artist", item.artist)
-                    .put("title", item.albumTitle)
-                    .put("uri", item.playUri)
-                    .put("meta", item.playMetadata)
-                    .put("key", item.albumKey)
-                array.put(obj)
-            }
-            prefs[ALBUM_HISTORY_JSON] = array.toString()
-        }
-    }
+
 }

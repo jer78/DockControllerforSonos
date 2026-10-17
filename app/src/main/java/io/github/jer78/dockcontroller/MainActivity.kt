@@ -124,7 +124,6 @@ class MainActivity : ComponentActivity() {
             val audioSettings by manager.audioSettings.collectAsState()
             val discoveredSpeakers by manager.discoveredSpeakers.collectAsState()
             val albumHistory by manager.albumHistory.collectAsState()
-            val coverFlowMode by manager.coverFlowMode.collectAsState()
             val speakerGroups by manager.speakerGroups.collectAsState()
             val showSpectrumAnalyzer by settingsManager.showSpectrumAnalyzer.collectAsState(initial = false)
             val spectrumColorScheme by settingsManager.spectrumColorScheme.collectAsState(initial = SpectrumColorScheme.RAINBOW)
@@ -294,7 +293,6 @@ class MainActivity : ComponentActivity() {
                                     transitioningAlbum = album
                                     manager.playAlbum(album)
                                 },
-                                onRemoveAlbum = { manager.removeAlbumFromHistory(it) },
                                 onWakeUp = {
                                     isAmbientMode = false
                                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -303,7 +301,6 @@ class MainActivity : ComponentActivity() {
                                 reflectionStrength = coverFlowReflection,
                                 glassTableStrength = coverFlowGlassTable,
                                 sideLightStrength = coverFlowSideLight,
-                                isFavoritesMode = coverFlowMode == "favorites",
                                 onDeleteFavorite = { manager.deleteSonosFavorite(it) },
                                 initialCenterAlbum = manager.coverFlowCenterAlbum,
                                 onCenterAlbumChanged = { manager.coverFlowCenterAlbum = it },
@@ -420,9 +417,7 @@ class MainActivity : ComponentActivity() {
                     settingsManager = SettingsManager(this),
                     refreshStatus = refreshStatus,
                     refreshCount = refreshCount,
-                    albumHistoryCount = albumHistory.size,
-                    onRefreshFavorites = { speaker, limit, a, p, r -> manager.refreshFavorites(a, p, r, speaker, limit) },
-                    onClearHistory = { manager.clearAlbumHistory() },
+                    onRefreshFavorites = { speaker, a, p, r -> manager.refreshFavorites(a, p, r, speaker) },
                     onSettingsSaved = { manager.refreshAfterSettingsSave() },
                     onDismiss = { showSettings = false },
                     micPermissionGranted = micPermissionGranted,

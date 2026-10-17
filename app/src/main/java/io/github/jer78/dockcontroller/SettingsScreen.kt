@@ -25,6 +25,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.DialogProperties
@@ -38,7 +42,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
+// A text field suggesting matching entity ids as you type. The suggestions
+// menu can't take focus: a focusable one (ExposedDropdownMenu's) pulled the
+// keyboard off the field after each key, so deleting took a tap per letter.
 @Composable
 fun EntityAutocompleteField(
     label: String,
@@ -48,16 +54,14 @@ fun EntityAutocompleteField(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var fieldWidth by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
     val filtered = remember(value, suggestions) {
         if (value.isBlank()) suggestions
         else suggestions.filter { it.contains(value, ignoreCase = true) }
     }
 
-    ExposedDropdownMenuBox(
-        expanded = expanded && filtered.isNotEmpty(),
-        onExpandedChange = { expanded = it },
-        modifier = modifier
-    ) {
+    Box(modifier = modifier) {
         OutlinedTextField(
             value = value,
             onValueChange = {
@@ -68,11 +72,16 @@ fun EntityAutocompleteField(
             singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
-                .menuAnchor()
+                .onSizeChanged { fieldWidth = it.width }
+                .onFocusChanged { expanded = it.isFocused }
         )
-        ExposedDropdownMenu(
+        DropdownMenu(
             expanded = expanded && filtered.isNotEmpty(),
-            onDismissRequest = { expanded = false }
+            onDismissRequest = { expanded = false },
+            properties = PopupProperties(focusable = false),
+            modifier = Modifier
+                .width(with(density) { fieldWidth.toDp() })
+                .heightIn(max = 280.dp)
         ) {
             filtered.take(50).forEach { entity ->
                 DropdownMenuItem(
@@ -162,7 +171,8 @@ private fun HaConnectionIndicator(status: HaConnectionStatus, modifier: Modifier
 }
 
 // One Settings > Home Assistant widget position: what kind of widget sits
-// there (or None), which entity it controls, and its optional label.
+// there (or None), which entity it controls, and its optional label - a
+// compact card, two to a row.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HaWidgetSlotRow(
@@ -176,22 +186,28 @@ private fun HaWidgetSlotRow(
     onEntityChange: (String) -> Unit,
     onShowLabelChange: (Boolean) -> Unit,
     onLabelChange: (String) -> Unit,
-    // -1 = up, +1 = down.
-    onMove: (Int) -> Unit
+    // -1 = earlier, +1 = later.
+    onMove: (Int) -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = modifier
+            .border(1.dp, Color.Gray.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+            .padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp)
+    ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("$position", fontWeight = FontWeight.Bold, modifier = Modifier.width(22.dp))
+            Text("$position", fontWeight = FontWeight.Bold, modifier = Modifier.width(20.dp))
 
             var expanded by remember { mutableStateOf(false) }
             ExposedDropdownMenuBox(
                 expanded = expanded,
                 onExpandedChange = { expanded = it },
-                modifier = Modifier.width(170.dp)
+                modifier = Modifier.width(150.dp)
             ) {
                 OutlinedTextField(
                     value = type?.label ?: "None",
@@ -217,7 +233,7 @@ private fun HaWidgetSlotRow(
 
             if (type != null) {
                 EntityAutocompleteField(
-                    label = "${type.label} Entity",
+                    label = "Entity",
                     value = entityId,
                     onValueChange = onEntityChange,
                     suggestions = suggestions,
@@ -226,32 +242,31 @@ private fun HaWidgetSlotRow(
             } else {
                 Spacer(Modifier.weight(1f))
             }
-
-            // The top position can only move down, the bottom one only up.
-            IconButton(onClick = { onMove(-1) }, enabled = position > 1) {
-                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move position $position up")
-            }
-            IconButton(onClick = { onMove(1) }, enabled = position < MAX_HA_WIDGETS) {
-                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move position $position down")
-            }
         }
-        // Lined up under the Type field.
-        if (type != null) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 96.dp)
-            ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 28.dp)
+        ) {
+            if (type != null) {
                 Switch(checked = showLabel, onCheckedChange = onShowLabelChange)
-                Text("Label", modifier = Modifier.width(56.dp))
                 OutlinedTextField(
                     value = label,
                     onValueChange = onLabelChange,
                     enabled = showLabel,
                     singleLine = true,
-                    placeholder = { Text("Name from Home Assistant") },
+                    placeholder = { Text("Label: name from HA", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     modifier = Modifier.weight(1f)
                 )
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            // The first position can only move later, the last only earlier.
+            IconButton(onClick = { onMove(-1) }, enabled = position > 1) {
+                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move position $position earlier")
+            }
+            IconButton(onClick = { onMove(1) }, enabled = position < MAX_HA_WIDGETS) {
+                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move position $position later")
             }
         }
     }
@@ -277,11 +292,9 @@ fun SettingsModal(
     settingsManager: SettingsManager,
     refreshStatus: String,
     refreshCount: Int? = null,
-    albumHistoryCount: Int,
     // Speaker and Cover Flow limit as currently picked in this dialog, even if
     // not saved yet - so first-time setup can refresh before Save & Apply.
-    onRefreshFavorites: (speaker: String, limit: Int, albums: Boolean, playlists: Boolean, radio: Boolean) -> Unit,
-    onClearHistory: () -> Unit,
+    onRefreshFavorites: (speaker: String, albums: Boolean, playlists: Boolean, radio: Boolean) -> Unit,
     onSettingsSaved: () -> Unit,
     onDismiss: () -> Unit,
     micPermissionGranted: Boolean = false,
@@ -300,8 +313,6 @@ fun SettingsModal(
     val widgetLabels = remember { mutableStateListOf<String>().apply { repeat(MAX_HA_WIDGETS) { add("") } } }
     var selectedHaMediaPlayer by remember { mutableStateOf("") }
     var tmdbApiKey by remember { mutableStateOf("") }
-    var coverFlowMode by remember { mutableStateOf("history") }
-    var coverFlowLimit by remember { mutableIntStateOf(SettingsManager.COVER_FLOW_LIMIT_DEFAULT) }
     var use24HourClock by remember { mutableStateOf(true) }
     var coverFlowReflection by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_REFLECTION_DEFAULT) }
     var coverFlowGlassTable by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT) }
@@ -329,18 +340,14 @@ fun SettingsModal(
     var fPlaylists by remember { mutableStateOf(true) }
     var fRadio by remember { mutableStateOf(true) }
 
-    var showClearHistoryConfirm by remember { mutableStateOf(false) }
-    // Every saved History album, including any hidden by the Cover Flow
-    // limit - Clear History removes all of them.
-    val savedHistoryCount by remember { settingsManager.albumHistory.map { it.size } }
-        .collectAsState(initial = albumHistoryCount)
-
     val haManager = remember { HomeAssistantManager() }
     // Entity ids on the connected server, by widget type.
     var widgetEntityOptions by remember { mutableStateOf<Map<HaWidgetType, List<String>>>(emptyMap()) }
     var mediaPlayerEntities by remember { mutableStateOf<List<String>>(emptyList()) }
 
     var haConnection by remember { mutableStateOf<HaConnectionStatus>(HaConnectionStatus.NotTested) }
+    // Once the token has connected, it's hidden behind a Change button.
+    var tokenHidden by remember { mutableStateOf(false) }
 
     // Tests the URL + token, and on success (re)loads the entity lists so
     // the fields below autocomplete against whatever server just connected.
@@ -353,6 +360,7 @@ fun SettingsModal(
             if (url != haUrl || token != haToken) return@testConnection
             haConnection = status
             if (status is HaConnectionStatus.Connected) {
+                tokenHidden = true
                 haManager.fetchEntities(url, token) { all ->
                     widgetEntityOptions = HaWidgetType.entries.associateWith { type ->
                         all.filter { it.startsWith("${type.domain}.") }.sorted()
@@ -375,8 +383,6 @@ fun SettingsModal(
         }
         selectedHaMediaPlayer = settingsManager.selectedHaMediaPlayer.first()
         tmdbApiKey = settingsManager.tmdbApiKey.first()
-        coverFlowMode = settingsManager.coverFlowMode.first()
-        coverFlowLimit = settingsManager.coverFlowLimit.first()
         use24HourClock = settingsManager.use24HourClock.first()
         coverFlowReflection = settingsManager.coverFlowReflection.first()
         coverFlowGlassTable = settingsManager.coverFlowGlassTable.first()
@@ -407,11 +413,6 @@ fun SettingsModal(
             connectToHa()
         }
     }
-
-    val modes = listOf(
-        "history" to "Mode A: History of Favorited Albums",
-        "favorites" to "Mode B: Albums, Playlists & Radio"
-    )
 
     val tabs = listOf("General", "Cover Flow", "Now Playing", "Home Assistant")
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -560,51 +561,13 @@ fun SettingsModal(
                                     modifier = Modifier.weight(1f),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Text("Cover Flow Mode:", fontWeight = FontWeight.SemiBold)
-                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        modes.forEach { (mode, label) ->
-                                            FilterChip(
-                                                selected = (coverFlowMode == mode),
-                                                onClick = { coverFlowMode = mode },
-                                                label = { Text(label) }
-                                            )
-                                        }
-                                    }
-
-                                    Text("Cover Flow Limit:", fontWeight = FontWeight.SemiBold)
-                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        SettingsManager.COVER_FLOW_LIMIT_OPTIONS.forEach { limit ->
-                                            FilterChip(
-                                                selected = (coverFlowLimit == limit),
-                                                onClick = { coverFlowLimit = limit },
-                                                label = { Text(if (limit == SettingsManager.COVER_FLOW_LIMIT_UNLIMITED) "Unlimited" else "$limit") }
-                                            )
-                                        }
-                                    }
+                                    Text("Sonos Favorites:", fontWeight = FontWeight.SemiBold)
                                     Text(
-                                        if (coverFlowMode == "history") "Shows the most recently captured albums. Older ones are kept, just hidden, until the limit is raised."
-                                        else "Shows the first favorites alphabetically - up to this many albums, this many playlists and this many radio stations.",
+                                        "Cover Flow shows your Sonos Favorites. Add or remove them in the Sonos app; " +
+                                            "Sonos keeps up to about 70.",
                                         fontSize = 12.sp,
                                         color = Color.Gray
                                     )
-
-                                    if (coverFlowMode == "history") {
-                                        Text(
-                                            "Albums need to be favorited in the Sonos app. This mode just captures the history of when your favorited albums are played.",
-                                            fontSize = 12.sp,
-                                            color = Color.Gray
-                                        )
-                                        OutlinedButton(
-                                            onClick = { showClearHistoryConfirm = true },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            enabled = savedHistoryCount > 0,
-                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red)
-                                        ) {
-                                            Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
-                                            Spacer(Modifier.width(8.dp))
-                                            Text("Clear History ($savedHistoryCount)")
-                                        }
-                                    } else {
                                         Text("Sync Categories:", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
@@ -628,7 +591,7 @@ fun SettingsModal(
                                         Button(
                                             onClick = {
                                                 refreshPressed = true
-                                                onRefreshFavorites(selectedSpeaker, coverFlowLimit, fAlbums, fPlaylists, fRadio)
+                                                onRefreshFavorites(selectedSpeaker, fAlbums, fPlaylists, fRadio)
                                             },
                                             enabled = !isRefreshing,
                                             modifier = Modifier.fillMaxWidth(),
@@ -652,7 +615,6 @@ fun SettingsModal(
                                             color = if (refreshStatus.contains("Error")) Color.Red else Color.Black,
                                             fontWeight = FontWeight.Bold
                                         )
-                                    }
                                 }
 
                                 Column(
@@ -902,32 +864,53 @@ fun SettingsModal(
                             }
                         }
 
-                        // HOME ASSISTANT: connection and entities
+                        // HOME ASSISTANT: connection and entities, in two
+                        // columns to make the most of the dialog's width.
                         3 -> {
                             Text("Home Assistant Integration:", fontWeight = FontWeight.SemiBold)
 
-                            OutlinedTextField(
-                                value = haUrl,
-                                onValueChange = {
-                                    haUrl = it
-                                    haConnection = HaConnectionStatus.NotTested
-                                },
-                                label = { Text("Server URL") },
-                                placeholder = { Text("http://homeassistant.local:8123") },
-                                singleLine = true,
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.fillMaxWidth()
-                            )
-
-                            OutlinedTextField(
-                                value = haToken,
-                                onValueChange = {
-                                    haToken = it
-                                    haConnection = HaConnectionStatus.NotTested
-                                },
-                                label = { Text("Long-Lived Access Token") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            ) {
+                                OutlinedTextField(
+                                    value = haUrl,
+                                    onValueChange = {
+                                        haUrl = it
+                                        haConnection = HaConnectionStatus.NotTested
+                                    },
+                                    label = { Text("Server URL") },
+                                    placeholder = { Text("http://homeassistant.local:8123") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (tokenHidden) {
+                                    OutlinedTextField(
+                                        value = "Saved and hidden",
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("Long-Lived Access Token") },
+                                        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                                        trailingIcon = {
+                                            TextButton(onClick = { tokenHidden = false }) { Text("Change") }
+                                        },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                } else {
+                                    OutlinedTextField(
+                                        value = haToken,
+                                        onValueChange = {
+                                            haToken = it
+                                            haConnection = HaConnectionStatus.NotTested
+                                        },
+                                        label = { Text("Long-Lived Access Token") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
 
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -948,88 +931,118 @@ fun SettingsModal(
                             HorizontalDivider()
                             Text("Now Playing Widgets:", fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Up to $MAX_HA_WIDGETS, shown left to right across the top of Now Playing in this order. " +
+                                "Up to $MAX_HA_WIDGETS, shown left to right across the top of Now Playing in this order " +
+                                    "(1 to 5 down the left, then 6 to 10). " +
                                     "You can also hold a widget on Now Playing for a second, then drag it to move it.",
                                 fontSize = 12.sp,
                                 color = Color.Gray
                             )
-                            for (i in 0 until MAX_HA_WIDGETS) {
-                                HaWidgetSlotRow(
-                                    position = i + 1,
-                                    type = widgetTypes[i],
-                                    entityId = widgetEntities[i],
-                                    suggestions = widgetTypes[i]?.let { widgetEntityOptions[it] } ?: emptyList(),
-                                    showLabel = widgetShowLabels[i],
-                                    label = widgetLabels[i],
-                                    onShowLabelChange = { widgetShowLabels[i] = it },
-                                    onLabelChange = { widgetLabels[i] = it },
-                                    onTypeChange = { type ->
-                                        // Keep the entity only if it still fits the new type.
-                                        if (type == null || !widgetEntities[i].startsWith("${type.domain}.")) widgetEntities[i] = ""
-                                        widgetTypes[i] = type
-                                    },
-                                    onEntityChange = { widgetEntities[i] = it },
-                                    // Swaps with the neighboring position, so
-                                    // empty positions move around too.
-                                    onMove = { offset ->
-                                        val j = i + offset
-                                        widgetTypes[i] = widgetTypes[j].also { widgetTypes[j] = widgetTypes[i] }
-                                        widgetEntities[i] = widgetEntities[j].also { widgetEntities[j] = widgetEntities[i] }
-                                        widgetShowLabels[i] = widgetShowLabels[j].also { widgetShowLabels[j] = widgetShowLabels[i] }
-                                        widgetLabels[i] = widgetLabels[j].also { widgetLabels[j] = widgetLabels[i] }
-                                    }
-                                )
-                            }
-                            HorizontalDivider()
-
-                            EntityAutocompleteField(
-                                label = "Fallback Media Player",
-                                value = selectedHaMediaPlayer,
-                                onValueChange = { selectedHaMediaPlayer = it },
-                                suggestions = mediaPlayerEntities,
+                            val perColumn = (MAX_HA_WIDGETS + 1) / 2
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 modifier = Modifier.fillMaxWidth()
-                            )
-
-                            SettingsToggleRow("Replace TV Show Images", tvShowImages) {
-                                tvShowImages = it
-                                scope.launch { settingsManager.setTvShowImages(it) }
-                            }
-                            Text(
-                                if (tvShowImages) {
-                                    "When a TV show is playing, its title logo (or its poster, if it has no logo) " +
-                                        "replaces the artwork. With a free TMDB key from themoviedb.org (Settings > API) " +
-                                        "images come from TMDB, falling back to TVmaze; without a key, from TVmaze."
-                                } else {
-                                    "Off: TV mode shows the images Home Assistant sends."
-                                },
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                            if (tvShowImages) {
-                                OutlinedTextField(
-                                    value = tmdbApiKey,
-                                    onValueChange = { tmdbApiKey = it },
-                                    label = { Text("TMDB API Key (optional)") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                Text(
-                                    "This product uses the TMDB API but is not endorsed or certified by TMDB.",
-                                    fontSize = 12.sp,
-                                    color = Color.Gray
-                                )
+                            ) {
+                                for (column in 0 until 2) {
+                                    Column(
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        for (i in column * perColumn until minOf((column + 1) * perColumn, MAX_HA_WIDGETS)) {
+                                            HaWidgetSlotRow(
+                                                position = i + 1,
+                                                type = widgetTypes[i],
+                                                entityId = widgetEntities[i],
+                                                suggestions = widgetTypes[i]?.let { widgetEntityOptions[it] } ?: emptyList(),
+                                                showLabel = widgetShowLabels[i],
+                                                label = widgetLabels[i],
+                                                onShowLabelChange = { widgetShowLabels[i] = it },
+                                                onLabelChange = { widgetLabels[i] = it },
+                                                onTypeChange = { type ->
+                                                    // Keep the entity only if it still fits the new type.
+                                                    if (type == null || !widgetEntities[i].startsWith("${type.domain}.")) widgetEntities[i] = ""
+                                                    widgetTypes[i] = type
+                                                },
+                                                onEntityChange = { widgetEntities[i] = it },
+                                                // Swaps with the neighboring position, so
+                                                // empty positions move around too.
+                                                onMove = { offset ->
+                                                    val j = i + offset
+                                                    widgetTypes[i] = widgetTypes[j].also { widgetTypes[j] = widgetTypes[i] }
+                                                    widgetEntities[i] = widgetEntities[j].also { widgetEntities[j] = widgetEntities[i] }
+                                                    widgetShowLabels[i] = widgetShowLabels[j].also { widgetShowLabels[j] = widgetShowLabels[i] }
+                                                    widgetLabels[i] = widgetLabels[j].also { widgetLabels[j] = widgetLabels[i] }
+                                                },
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                    }
+                                }
                             }
                             HorizontalDivider()
 
-                            Text("Experimental:", fontWeight = FontWeight.SemiBold)
-                            Text(
-                                "In TV mode, unmutes the speaker when the media player's time remaining jumps up - usually a sign a commercial break just ended.",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                            SettingsToggleRow("Auto-Unmute After Commercials", autoUnmuteAfterAds) {
-                                autoUnmuteAfterAds = it
-                                scope.launch { settingsManager.setAutoUnmuteAfterAds(it) }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                // Left: TV mode.
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("TV Mode:", fontWeight = FontWeight.SemiBold)
+                                    EntityAutocompleteField(
+                                        label = "Fallback Media Player",
+                                        value = selectedHaMediaPlayer,
+                                        onValueChange = { selectedHaMediaPlayer = it },
+                                        suggestions = mediaPlayerEntities,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    SettingsToggleRow("Replace TV Show Images", tvShowImages) {
+                                        tvShowImages = it
+                                        scope.launch { settingsManager.setTvShowImages(it) }
+                                    }
+                                    Text(
+                                        if (tvShowImages) {
+                                            "When a TV show is playing, its title logo from TMDB replaces the artwork " +
+                                                "(with a free key from themoviedb.org), or else its poster from TVmaze."
+                                        } else {
+                                            "Off: TV mode shows the images Home Assistant sends."
+                                        },
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    if (tvShowImages) {
+                                        OutlinedTextField(
+                                            value = tmdbApiKey,
+                                            onValueChange = { tmdbApiKey = it },
+                                            label = { Text("TMDB API Key (optional)") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Text(
+                                            "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+                                            fontSize = 12.sp,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                }
+
+                                // Right: experimental.
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Experimental:", fontWeight = FontWeight.SemiBold)
+                                    SettingsToggleRow("Auto-Unmute After Commercials", autoUnmuteAfterAds) {
+                                        autoUnmuteAfterAds = it
+                                        scope.launch { settingsManager.setAutoUnmuteAfterAds(it) }
+                                    }
+                                    Text(
+                                        "In TV mode, unmutes the speaker when the media player's time remaining jumps up - usually a sign a commercial break just ended.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                }
                             }
                         }
                     }
@@ -1048,11 +1061,9 @@ fun SettingsModal(
                         },
                         selectedHaMediaPlayer,
                         tmdbApiKey,
-                        coverFlowMode,
                         fAlbums,
                         fPlaylists,
-                        fRadio,
-                        coverFlowLimit
+                        fRadio
                     )
                     onSettingsSaved()
                     onDismiss()
@@ -1065,26 +1076,4 @@ fun SettingsModal(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
-
-    if (showClearHistoryConfirm) {
-        DockAlertDialog(
-            onDismissRequest = { showClearHistoryConfirm = false },
-            title = { Text("Clear History?") },
-            text = { Text("This permanently removes all $savedHistoryCount saved history entries. This can't be undone.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onClearHistory()
-                        showClearHistoryConfirm = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
-                ) {
-                    Text("Clear")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearHistoryConfirm = false }) { Text("Cancel") }
-            }
-        )
-    }
 }

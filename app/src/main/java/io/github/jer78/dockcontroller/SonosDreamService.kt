@@ -106,7 +106,6 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     val currentVolume by manager.currentVolume.collectAsState()
                     val audioSettings by manager.audioSettings.collectAsState()
                     val albumHistory by manager.albumHistory.collectAsState()
-                    val coverFlowMode by manager.coverFlowMode.collectAsState()
                     val speakerGroups by manager.speakerGroups.collectAsState()
                     val discoveredSpeakers by manager.discoveredSpeakers.collectAsState()
                     val refreshStatus by manager.favoritesRefreshStatus.collectAsState()
@@ -271,13 +270,11 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                             transitioningAlbum = album
                                             manager.playAlbum(album)
                                         },
-                                        onRemoveAlbum = { manager.removeAlbumFromHistory(it) },
                                         onWakeUp = { isAmbientMode = false },
                                         use24HourClock = use24HourClock,
                                         reflectionStrength = coverFlowReflection,
                                         glassTableStrength = coverFlowGlassTable,
                                         sideLightStrength = coverFlowSideLight,
-                                        isFavoritesMode = coverFlowMode == "favorites",
                                         onDeleteFavorite = { manager.deleteSonosFavorite(it) },
                                         initialCenterAlbum = manager.coverFlowCenterAlbum,
                                         onCenterAlbumChanged = { manager.coverFlowCenterAlbum = it },
@@ -390,9 +387,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                             settingsManager = settingsManager,
                             refreshStatus = refreshStatus,
                             refreshCount = refreshCount,
-                            albumHistoryCount = albumHistory.size,
-                            onRefreshFavorites = { speaker, limit, a, p, r -> manager.refreshFavorites(a, p, r, speaker, limit) },
-                            onClearHistory = { manager.clearAlbumHistory() },
+                            onRefreshFavorites = { speaker, a, p, r -> manager.refreshFavorites(a, p, r, speaker) },
                             onSettingsSaved = { manager.refreshAfterSettingsSave() },
                             onDismiss = { showSettings = false },
                             micPermissionGranted = micPermissionGranted,

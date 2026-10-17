@@ -33,6 +33,8 @@ sits on its dock.
 - Volume and mute; when rooms are grouped, they control the whole group
 - Previous (the song that actually played last, even across album changes)
   and Next Up (from the Sonos queue); tap Previous for details
+- Song list: see every song in the album or playlist playing, with its
+  length, and tap one to play it
 - Speaker Groups: join and unjoin rooms; each grouped room also gets its own
   volume slider
 - Sound Settings: bass, treble, loudness, Night Sound, Speech Enhancement and
@@ -45,26 +47,29 @@ sits on its dock.
 **Cover Flow**
 - A 3D carousel of albums standing on a glass table, shown when music is
   paused; the reflection, glass surface and side light are adjustable
-- **History** mode: albums you've played that are in your Sonos Favorites
-- **Favorites** mode: your Sonos Favorites (albums, playlists and radio)
-- **Category filter**: a button in the top right cycles between all
-  favorites, albums, playlists and radio stations, with a count of each
+- Shows all your Sonos Favorites: albums, playlists and radio
+- **Controls** fold away behind one button in the top right; tap it to show
+  the filter, sort, refresh, search and view buttons
+- **Category filter**: cycles between all favorites, albums, playlists and
+  radio stations, with a count of each
+- **Sort** albums by artist or by album title, remembered for next time.
+  Sorted by artist, each album shows its artist first, and playlists are
+  grouped under V (Various Artists)
+- **Refresh** your Sonos Favorites right from Cover Flow, and see how many
+  are new
 - **Grid view**: the button beside it swaps the 3D carousel for a grid of
   album covers, several rows deep, that scrolls left and right - much
-  quicker for finding one album among hundreds of favorites. Tap a cover to
+  quicker for finding one album among all your favorites. Tap a cover to
   play it, or long-press it to delete it from your Sonos Favorites (after a
-  confirmation). Works in History mode too
+  confirmation)
 - **A-Z bar** above the grid: tap a letter, or drag along the bar, to jump
   straight to it
 - **Search**: the magnifier button opens an on-screen keyboard; type any
   part of a title or artist (case and accents don't matter) and the grid
   narrows as you type
 - Cover Flow always opens on all favorites in the carousel
-- Choose how many albums it holds: 50, 100, 250, 500 or unlimited (in
-  Favorites mode, that many albums, that many playlists and that many radio
-  stations)
-- Tap an album to play it; tap its X to hide it from History, or (after a
-  confirmation) delete it from your Sonos Favorites
+- Tap an album to play it, or tap its X to delete it from your Sonos
+  Favorites (after a confirmation)
 - Previous, Now Playing and Next Up cards along the bottom, each of which
   can be hidden
 - Ambient clock, in 12- or 24-hour time, with the current weather under the
@@ -78,22 +83,24 @@ sits on its dock.
 - The artwork letterboxes to 16:9, with a seek bar and time remaining
 - Recognises TV episodes (from the show name Home Assistant reports, an
   "S2 E3"-style title, or a "Season 28, Ep. 41" line beside it) and shows the
-  show's title logo in place of the artwork, from TMDB with a free API key or
-  TVmaze without one
-- Shows with no logo get their TVmaze poster instead, with the artwork
-  reshaped to fit it, and the show's TVmaze background (when it has one)
-  behind the screen
+  show's title logo in place of the artwork, from TMDB with a free API key
+- Without a TMDB key, or for shows TMDB has no logo for, the show's TVmaze
+  poster is shown instead, with the artwork reshaped to fit it, and the
+  show's TVmaze background (when it has one) behind the screen
 - Turn off **Replace TV Show Images** to keep the images Home Assistant sends
 - Pick one fallback image for when there's no artwork, or rotate through them
 - Drops into a TV screensaver after a configurable delay
-- Experimental: unmutes automatically when a commercial break ends
+- Experimental: Auto-Unmute After Commercials (see below)
 
 **Home Assistant**
 - Connect button in Settings that checks your URL and token and says what's
   wrong if it can't connect
-- Up to 5 widgets across the top of Now Playing, each a light, climate,
+- Up to 10 widgets across the top of Now Playing, each a light, climate,
   cover, lock, weather, script, scene, input boolean, sensor, binary sensor,
   fan or alarm panel, in whatever order you choose
+- Rearrange them right on Now Playing: hold a widget until they all wiggle,
+  then drag it to its new place
+- Optional label under each widget: Home Assistant's name, or your own
 - Widgets show the icon set for the entity in Home Assistant, if it has one
 - Light: on/off, brightness, colour or colour temperature
 - Climate: target temperature, mode, fan and preset; the widget shows a red
@@ -126,6 +133,27 @@ sits on its dock.
   available from it
 - Dims automatically in a dark room using the light sensor
 
+## Experimental features
+
+These work, but may not suit every TV or service. Turn them on in Settings.
+
+### Auto-Unmute After Commercials
+
+Mute the TV during an ad break and the dock unmutes it for you when the
+show comes back on. Turn it on in **Settings → Home Assistant →
+Experimental**.
+
+- **How it works**: while a show plays, its time remaining only counts down.
+  When an ad break ends, the TV reports the show's time remaining again,
+  which jumps up by more than 10 seconds compared with the ad's. That jump
+  is the cue to unmute the Sonos speaker.
+- **What it needs**: TV mode set up with a Home Assistant media player that
+  reports the playing time (position and duration).
+- **Limits**: it only unmutes, never mutes, so mute the ads yourself. If
+  your TV or streaming app doesn't report the time, or reports it
+  differently, it won't trigger; it can also unmute when you skip back
+  in a show while muted.
+
 ## What you need
 
 - An Android tablet or phone running Android 8 or newer. **It has only been
@@ -147,7 +175,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.26.apk`). It's about 55 MB.
+   `DockController-v1.0.27.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -178,7 +206,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.26.apk
+adb install -r DockController-v1.0.27.apk
 ```
 
 Every release is signed with the same key. If Android says **App not
@@ -193,13 +221,15 @@ settings.
 
 1. Open the app. Settings opens automatically on first launch.
 2. **General**: pick your Sonos speaker (the app scans your Wi-Fi for them).
-3. **Cover Flow**: choose History or Favorites mode. In Favorites mode, tap
-   **Refresh Favorites**. Then, on the Cover Flow screen itself, use the
+3. **Cover Flow**: choose which kinds of favorites to show (albums,
+   playlists, radio) and tap **Refresh Favorites**. Then, on the Cover Flow
+   screen itself, use the
    buttons in the top right to filter by albums, playlists or radio, and to
    switch to the grid view.
 4. **Home Assistant** (optional): enter your server URL and a long-lived access
    token (Home Assistant → your profile → Security → Long-lived access tokens)
-   and tap **Connect**. Then choose a type (light, climate, cover, lock,
+   and tap **Connect**. Once connected, the token is hidden; tap **Change**
+   to replace it. Then choose a type (light, climate, cover, lock,
    weather, script, scene, input boolean, sensor, binary sensor, fan or
    alarm panel) and
    an entity for each widget position you want, using the arrows to reorder
@@ -229,8 +259,16 @@ own music library, AirPlay and Spotify Connect.
   queue.
 - Shuffle and repeat only appear when Sonos is playing from its queue (not
   radio, TV, line-in or AirPlay).
-- History mode only records albums that are saved as Sonos Favorites, since
-  those are the only albums Sonos can reliably play again later.
+
+## Known limitations
+
+- **About 70 Sonos Favorites at most (a Sonos limit).** Sonos itself caps
+  how many favorites a system can hold, at around 70 across albums,
+  playlists and radio. Cover Flow shows every favorite you have, so it can't
+  show more than Sonos allows; to make room for new ones, remove some in the
+  Sonos app (or with Cover Flow's X button).
+- Albums only appear in Cover Flow once they're saved as Sonos Favorites,
+  since those are the only albums Sonos can reliably play again later.
 
 ## Building from source
 

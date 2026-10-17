@@ -140,9 +140,9 @@ private fun CoverFlowTrackCard(
     }
 }
 
-// Matched by identity rather than index, since History mode reorders the
-// list (a played album moves to the front). playUri is the stable ID when
-// present; history items without one are identified by their art URL.
+// Matched by identity rather than index, since a refresh or a new sort
+// reorders the list. playUri is the stable ID when present; items without
+// one are identified by their art URL.
 private fun coverFlowInitialPage(
     albums: List<AlbumHistoryItem>,
     pageCount: Int,
@@ -164,7 +164,7 @@ private const val VARIOUS_ARTISTS = "Various Artists"
 
 private const val REFRESH_RESULT_MS = 5_000L
 
-// History entries have no kind - they're always albums.
+// Items with no kind are albums.
 private fun AlbumHistoryItem.isAlbum() = kind == "album" || kind.isEmpty()
 
 // One of the round buttons in Cover Flow's top-right controls.
@@ -213,16 +213,14 @@ fun AmbientClockScreen(
     albumHistory: List<AlbumHistoryItem>,
     trackState: TrackState,
     onPlayAlbum: (AlbumHistoryItem, Rect) -> Unit,
-    onRemoveAlbum: (String) -> Unit,
     onWakeUp: () -> Unit,
     use24HourClock: Boolean = true,
     // 0..1 each, from Settings - see SettingsManager.COVER_FLOW_REFLECTION.
     reflectionStrength: Float = SettingsManager.COVER_FLOW_REFLECTION_DEFAULT,
     glassTableStrength: Float = SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT,
     sideLightStrength: Float = SettingsManager.COVER_FLOW_SIDE_LIGHT_DEFAULT,
-    // In Favorites mode the X permanently deletes the Sonos Favorite (after
-    // a confirmation prompt) instead of just hiding the card.
-    isFavoritesMode: Boolean = false,
+    // The X (and the grid's long press) permanently deletes the Sonos
+    // Favorite, after a confirmation prompt.
     onDeleteFavorite: (AlbumHistoryItem) -> Unit = {},
     // Album to start centered on, and a callback whenever a new one settles
     // in the center - lets the caller resume the rotation where it left off.
@@ -265,9 +263,8 @@ fun AmbientClockScreen(
     var category by remember { mutableStateOf(FavoriteCategory.ALL) }
     var isGridView by remember(gridView) { mutableStateOf(gridView) }
     // Only kinds that actually have favorites are offered.
-    val categories = remember(albumHistory, isFavoritesMode) {
-        if (!isFavoritesMode) listOf(FavoriteCategory.ALL)
-        else listOf(FavoriteCategory.ALL) + FavoriteCategory.entries.filter { c -> c.kind != null && albumHistory.any { it.kind == c.kind } }
+    val categories = remember(albumHistory) {
+        listOf(FavoriteCategory.ALL) + FavoriteCategory.entries.filter { c -> c.kind != null && albumHistory.any { it.kind == c.kind } }
     }
     if (category !in categories) category = FavoriteCategory.ALL
     var isSortByArtist by remember(sortByArtist) { mutableStateOf(sortByArtist) }
@@ -563,7 +560,6 @@ fun AmbientClockScreen(
                         trackCardHeight + TrackCardBottomPadding + TrackCardGridGap
                     else -> 32.dp
                 },
-                // History is sorted by artist, Favorites by title.
                 letterOf = { sortKey(it) },
                 artistFirst = { artistFirst(it) },
                 showLetterBar = !searchOpen,
@@ -572,7 +568,7 @@ fun AmbientClockScreen(
                     isFadingOut = true
                     onPlayAlbum(album, bounds)
                 },
-                onLongPress = if (isFavoritesMode) ({ pendingFavoriteDelete = it }) else null,
+                onLongPress = { pendingFavoriteDelete = it },
                 // The same rules as Cover Flow's own auto-advance.
                 autoScroll = !searchOpen && pendingFavoriteDelete == null,
                 modifier = Modifier.fillMaxSize().alpha(fadeAlpha)
@@ -615,11 +611,9 @@ fun AmbientClockScreen(
                                 targetValue = 2000f,
                                 animationSpec = tween(400, easing = LinearEasing)
                             )
-                            if (isFavoritesMode && confirmedFavoriteDelete == albumItem) {
+                            if (confirmedFavoriteDelete == albumItem) {
                                 confirmedFavoriteDelete = null
                                 onDeleteFavorite(albumItem)
-                            } else {
-                                onRemoveAlbum(albumItem.artUrl)
                             }
                             isBeingRemoved.value = false
                             dropAnim.snapTo(0f)
@@ -763,8 +757,7 @@ fun AmbientClockScreen(
 
                                         IconButton(
                                             onClick = {
-                                                if (isFavoritesMode) pendingFavoriteDelete = albumItem
-                                                else isBeingRemoved.value = true
+                                                pendingFavoriteDelete = albumItem
                                             },
                                             modifier = Modifier
                                                 .align(Alignment.TopEnd)
@@ -1041,7 +1034,7 @@ fun AmbientClockScreen(
                                 }
                             }
                         }
-                        if (isFavoritesMode) {
+                        run {
                             val spin = rememberInfiniteTransition(label = "refreshSpin")
                             val spinAngle by spin.animateFloat(
                                 initialValue = 0f,

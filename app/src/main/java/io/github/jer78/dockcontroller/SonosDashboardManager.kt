@@ -44,19 +44,16 @@ class SonosDashboardManager private constructor(context: Context) {
     // Flow is first composed, so it doesn't need to be observable.
     var coverFlowCenterAlbum: AlbumHistoryItem? = null
 
-    // Reference list of favorited ALBUMS, used only for matching what's
-    // currently playing against - not shown directly in the UI. Mode A
-    // (History) only tracks plays of albums that are already Sonos
-    // Favorites, since that's the only reliable, resolvable way to replay
-    // them later (a captured/replayed raw URI gets rejected by Sonos for
-    // cloud-service content, even with correct metadata).
+    // Every favorited ALBUM, whatever Cover Flow's category filters - used
+    // for matching what's playing (to learn album artists) and for
+    // Continue With a Random Album, not shown directly in the UI.
     private val _favoriteAlbumsRef = MutableStateFlow<List<AlbumHistoryItem>>(emptyList())
 
     // Artist names learned by observing a favorited album actually play
     // (Sonos never reports a real artist for album favorites, and only Apple
     // Music ones get looked up during the sync), keyed by "id:<albumKey>" -
     // or, for entries learned by older versions, the normalized album title.
-    // Backfilled into the Favorites (Mode B) display.
+    // Backfilled into Cover Flow's favorites.
     private val _favoriteArtistCache = MutableStateFlow<Map<String, String>>(emptyMap())
 
     // The favorite this app last started, and when - tells apart favorites
@@ -68,9 +65,6 @@ class SonosDashboardManager private constructor(context: Context) {
 
     private val _speakerGroups = MutableStateFlow<List<SonosSpeakerGroup>>(emptyList())
     val speakerGroups: StateFlow<List<SonosSpeakerGroup>> = _speakerGroups.asStateFlow()
-
-    private val _coverFlowMode = MutableStateFlow("history")
-    val coverFlowMode: StateFlow<String> = _coverFlowMode.asStateFlow()
 
     private val _favoritesRefreshStatus = MutableStateFlow("Idle")
     val favoritesRefreshStatus: StateFlow<String> = _favoritesRefreshStatus.asStateFlow()
@@ -137,45 +131,23 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
-    // Shared by startPolling, pollSonos's mode-switch detection, and the
-    // immediate post-Save refresh - reloads whichever data source (History
-    // or Favorites) is correct for the given mode.
-    private suspend fun reloadAlbumSourceForMode(mode: String) {
-        if (mode == "history") {
-            showHistory(settingsManager.albumHistory.first())
-        } else {
-            val fAlbums = settingsManager.filterAlbums.first()
-            val fPlaylists = settingsManager.filterPlaylists.first()
-            val fRadio = settingsManager.filterRadio.first()
-            refreshFavorites(fAlbums, fPlaylists, fRadio)
-        }
+    // Reloads Cover Flow's favorites with the saved category filters.
+    private suspend fun reloadFavorites() {
+        refreshFavorites(
+            settingsManager.filterAlbums.first(),
+            settingsManager.filterPlaylists.first(),
+            settingsManager.filterRadio.first()
+        )
     }
 
-    // History is stored in the order albums were first played, oldest
-    // first, and never trimmed by the Cover Flow limit - so lowering the
-    // limit only hides the oldest albums, and raising it brings them back.
-    // Cover Flow shows the newest `limit` of them, sorted by artist/album.
-    private suspend fun showHistory(stored: List<AlbumHistoryItem>) {
-        val limit = settingsManager.coverFlowLimit.first()
-        val newest = if (limit == SettingsManager.COVER_FLOW_LIMIT_UNLIMITED) stored else stored.takeLast(limit)
-        _albumHistory.value = newest
-            .sortedWith(compareBy({ it.artist.lowercase() }, { it.albumTitle.lowercase() }))
-    }
-
-    // Called right after Settings saves, so a reopened Settings dialog shows
-    // the correct "Clear History (N)" count immediately - without this,
-    // stale data lingers until pollSonos's next 2s cycle catches the mode
-    // change on its own.
+    // Called right after Settings saves, so a new speaker or new category
+    // filters show in Cover Flow straight away.
     fun refreshAfterSettingsSave() {
         // The speaker may have just been picked (first-time setup) or
-        // changed - History matching and "Continue With a Random Album" both
+        // changed - artist learning and "Continue With a Random Album" both
         // need this list, which otherwise only loads at startup and hourly.
         refreshFavoriteAlbumsRef()
-        scope.launch {
-            val mode = settingsManager.coverFlowMode.first()
-            _coverFlowMode.value = mode
-            reloadAlbumSourceForMode(mode)
-        }
+        scope.launch { reloadFavorites() }
     }
 
     // This manager is a singleton shared by MainActivity and SonosDreamService
@@ -192,13 +164,11 @@ class SonosDashboardManager private constructor(context: Context) {
         activeHostCount++
         if (pollingJob != null) return
         scope.launch {
-            _coverFlowMode.value = settingsManager.coverFlowMode.first()
             _favoriteArtistCache.value = settingsManager.favoriteArtistCache.first()
-            // Needed regardless of mode: History matches plays against it,
-            // and Favorites' own artist-learning (see pollSonos) needs it too.
+            // Artist learning (see pollSonos) matches plays against it.
             refreshFavoriteAlbumsRef()
 
-            reloadAlbumSourceForMode(_coverFlowMode.value)
+            reloadFavorites()
         }
         pollingJob = scope.launch {
             launch { pollSonos() }
@@ -388,7 +358,7 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
-    // Cover Flow's refresh button: the saved speaker, limit and filters.
+    // Cover Flow's refresh button: the saved speaker and filters.
     fun refreshSavedFavorites(onResult: (FavoritesRefreshResult) -> Unit) {
         scope.launch {
             refreshFavorites(
@@ -400,15 +370,15 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
-    // speakerOverride/limitOverride: Settings' unsaved picks (see
-    // SettingsModal's onRefreshFavorites); null uses the saved settings.
+    // speakerOverride: Settings' unsaved pick (see SettingsModal's
+    // onRefreshFavorites); null uses the saved speaker. Always every
+    // favorite - Sonos caps them at about 70 anyway.
     // onResult, if given, hears how it went, on the main thread.
     fun refreshFavorites(
         fAlbums: Boolean,
         fPlaylists: Boolean,
         fRadio: Boolean,
         speakerOverride: String? = null,
-        limitOverride: Int? = null,
         onResult: ((FavoritesRefreshResult) -> Unit)? = null
     ) {
         fun report(result: FavoritesRefreshResult) {
@@ -434,9 +404,8 @@ class SonosDashboardManager private constructor(context: Context) {
             val filterString = if (filters.isEmpty()) "none" else filters.joinToString(",")
 
             try {
-                val limit = limitOverride ?: settingsManager.coverFlowLimit.first()
                 val pyFavs = withTimeoutOrNull(FAVORITES_FETCH_TIMEOUT_MS) {
-                    pyModule.callAttr("get_sonos_favorites", speaker, filterString, limit).asList()
+                    pyModule.callAttr("get_sonos_favorites", speaker, filterString).asList()
                 }
 
                 if (pyFavs == null) {
@@ -495,10 +464,9 @@ class SonosDashboardManager private constructor(context: Context) {
             if (speaker.isBlank()) return@launch
 
             try {
-                // Always the complete list, whatever the Cover Flow limit -
-                // History can only capture albums found in here.
+                // Always every album, whatever Cover Flow's filters.
                 val pyFavs = withTimeoutOrNull(FAVORITES_FETCH_TIMEOUT_MS) {
-                    pyModule.callAttr("get_sonos_favorites", speaker, "albums", SettingsManager.COVER_FLOW_LIMIT_UNLIMITED).asList()
+                    pyModule.callAttr("get_sonos_favorites", speaker, "albums").asList()
                 } ?: return@launch
 
                 val items = mutableListOf<AlbumHistoryItem>()
@@ -602,41 +570,18 @@ class SonosDashboardManager private constructor(context: Context) {
 
         var lastFavoritesRefreshMs = System.currentTimeMillis()
         var lastGroupsRefreshMs = 0L
-        var lastKnownMode: String? = null
 
         while (currentCoroutineContext().isActive) {
             try {
                 val speaker = settingsManager.sonosSpeaker.first()
                 if (speaker.isNotBlank()) {
-                    val currentMode = settingsManager.coverFlowMode.first()
-                    _coverFlowMode.value = currentMode
-
-                    if (lastKnownMode != null && currentMode != lastKnownMode) {
-                        // Mode was switched via Settings while already running.
-                        // _albumHistory otherwise keeps showing whatever the
-                        // PREVIOUS mode last populated it with (e.g. every
-                        // Favorite, if coming from Mode B) - reload the right
-                        // data for the new mode instead. This matters a lot
-                        // for History: without this, a later match would
-                        // append to - and persist - that contaminated list,
-                        // polluting real history with never-played favorites.
-                        reloadAlbumSourceForMode(currentMode)
-                    }
-                    lastKnownMode = currentMode
-
                     val now = System.currentTimeMillis()
                     if (now - lastFavoritesRefreshMs >= FAVORITES_REFRESH_INTERVAL_MS) {
-                        // Hourly - needed regardless of mode: History matches
-                        // plays against it, and Favorites' artist-learning
-                        // below needs it too. Timed, not counted in loops,
-                        // since the loop runs as often as events arrive.
+                        // Hourly - artist learning below needs the album
+                        // list too. Timed, not counted in loops, since the
+                        // loop runs as often as events arrive.
                         refreshFavoriteAlbumsRef()
-                        if (currentMode == "favorites") {
-                            val fAlbums = settingsManager.filterAlbums.first()
-                            val fPlaylists = settingsManager.filterPlaylists.first()
-                            val fRadio = settingsManager.filterRadio.first()
-                            refreshFavorites(fAlbums, fPlaylists, fRadio)
-                        }
+                        reloadFavorites()
                         lastFavoritesRefreshMs = now
                     }
 
@@ -815,10 +760,8 @@ class SonosDashboardManager private constructor(context: Context) {
                                     val cacheKey = if (match.albumKey.isNotBlank()) artistCacheKey(match.albumKey)
                                         else normalizeAlbumTitle(match.albumTitle)
 
-                                    // Learned regardless of mode, so Favorites
-                                    // (Mode B) can backfill its own display
-                                    // with the real name instead of the
-                                    // generic placeholder.
+                                    // So Cover Flow can show the real name
+                                    // instead of the generic placeholder.
                                     if (_favoriteArtistCache.value[cacheKey] != artist) {
                                         val updatedCache = _favoriteArtistCache.value + (cacheKey to artist)
                                         _favoriteArtistCache.value = updatedCache
@@ -831,31 +774,9 @@ class SonosDashboardManager private constructor(context: Context) {
                                     // Show it in Favorites straight away rather
                                     // than waiting for the next favorites refresh
                                     // to pick it up from the cache.
-                                    if (currentMode == "favorites" && _albumHistory.value.any { sameFavorite(it, match) && it.artist != artist }) {
+                                    if (_albumHistory.value.any { sameFavorite(it, match) && it.artist != artist }) {
                                         _albumHistory.value = _albumHistory.value.map {
                                             if (sameFavorite(it, match)) it.copy(artist = artist) else it
-                                        }
-                                    }
-
-                                    // Dedupe by album ID (or, for entries
-                                    // saved before those existed, title +
-                                    // artist), not playUri, for the same
-                                    // reason - otherwise the same album can
-                                    // end up added 2-3x under different
-                                    // (sometimes now-stale) IDs, showing as
-                                    // duplicate cards in Cover Flow where only
-                                    // the most recently captured one actually
-                                    // still resolves to a playable favorite.
-                                    if (currentMode == "history") {
-                                        val stored = settingsManager.albumHistory.first()
-                                        val alreadyStored = stored.any {
-                                            if (it.albumKey.isNotBlank() && match.albumKey.isNotBlank()) it.albumKey == match.albumKey
-                                            else it.albumTitle.equals(match.albumTitle, ignoreCase = true) && it.artist.equals(artist, ignoreCase = true)
-                                        }
-                                        if (!alreadyStored) {
-                                            val updated = stored + match.copy(artist = artist)
-                                            settingsManager.saveAlbumHistory(updated)
-                                            showHistory(updated)
                                         }
                                     }
                                 }
@@ -1309,33 +1230,9 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
-    fun clearAlbumHistory() {
-        scope.launch {
-            _albumHistory.value = emptyList()
-            settingsManager.saveAlbumHistory(emptyList())
-        }
-    }
-
-    fun removeAlbumFromHistory(artUrl: String) {
-        scope.launch {
-            if (_coverFlowMode.value == "history") {
-                val stored = settingsManager.albumHistory.first()
-                val updated = stored.filterNot { it.artUrl == artUrl }
-                if (updated.size != stored.size) {
-                    settingsManager.saveAlbumHistory(updated)
-                    // Lets the next-oldest album, if any was over the
-                    // limit, take the removed one's place.
-                    showHistory(updated)
-                }
-            } else {
-                _albumHistory.value = _albumHistory.value.filterNot { it.artUrl == artUrl }
-            }
-        }
-    }
-
-    // Favorites mode's X button. Unlike removeAlbumFromHistory (which only
-    // hides a card locally), this PERMANENTLY deletes the favorite from the
-    // user's Sonos system - the UI must confirm before calling it. The card
+    // Cover Flow's X button and the grid's long press. This PERMANENTLY
+    // deletes the favorite from the user's Sonos system - the UI must
+    // confirm before calling it. The card
     // is removed optimistically; on failure the list is reloaded from the
     // speaker so it reappears, and the reason is shown as a Toast.
     fun deleteSonosFavorite(item: AlbumHistoryItem) {
@@ -1356,7 +1253,7 @@ class SonosDashboardManager private constructor(context: Context) {
                 _favoriteAlbumsRef.value = _favoriteAlbumsRef.value.filterNot { it.playUri == item.playUri }
                 "Deleted \"${item.albumTitle}\" from Sonos Favorites"
             } else {
-                reloadAlbumSourceForMode(_coverFlowMode.value)
+                reloadFavorites()
                 "Couldn't delete: ${result.removePrefix("FAIL: ")}".also { reportError("$it: '${item.albumTitle}'") }
             }
             withContext(Dispatchers.Main) {
