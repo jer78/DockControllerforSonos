@@ -19,6 +19,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
@@ -285,6 +287,8 @@ fun DockDashboardUI(
                 // show's title instead (below), clear of the widget labels -
                 // but keeps its room here, invisible, so the artwork stays
                 // the same size and clear of the widgets.
+                // The artwork card's width, for TV mode's seek bar.
+                var artWidthPx by remember { mutableIntStateOf(0) }
                 if (clockMode.showsClock(isTvMode)) {
                     val currentTime = rememberMinuteClock()
                     Text(
@@ -308,6 +312,7 @@ fun DockDashboardUI(
                         // the full width, or narrows to fit that height.
                         .weight(1f, fill = false)
                         .aspectRatio(artAspectRatio)
+                        .onSizeChanged { artWidthPx = it.width }
                         .onGloballyPositioned { onAlbumArtPositioned(it.boundsInWindow()) }
                 ) {
                     // Wrapped in a Box (rather than leaving Card's default Column
@@ -416,21 +421,30 @@ fun DockDashboardUI(
                     val displayedSeconds = rememberInterpolatedPosition(trackState)
                     var scrubSeconds by remember { mutableStateOf<Int?>(null) }
                     val remainingSeconds = (trackState.durationSeconds - (scrubSeconds ?: displayedSeconds)).coerceAtLeast(0)
-                    Spacer(modifier = Modifier.height(7.dp))
-                    SeekBar(
-                        positionSeconds = displayedSeconds,
-                        durationSeconds = trackState.durationSeconds,
-                        onSeek = onSeek,
-                        onScrub = { scrubSeconds = it }
-                    )
-                    Text(
-                        text = "${formatTrackTime(remainingSeconds)} remaining",
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color.White.copy(alpha = 0.85f),
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    // Only as wide as the artwork (a poster is narrower than
+                    // the column), centred under it.
+                    val artWidth = with(LocalDensity.current) { artWidthPx.toDp() }
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .then(if (artWidthPx > 0) Modifier.width(artWidth) else Modifier.fillMaxWidth())
+                    ) {
+                        Spacer(modifier = Modifier.height(7.dp))
+                        SeekBar(
+                            positionSeconds = displayedSeconds,
+                            durationSeconds = trackState.durationSeconds,
+                            onSeek = onSeek,
+                            onScrub = { scrubSeconds = it }
+                        )
+                        Text(
+                            text = "${formatTrackTime(remainingSeconds)} remaining",
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White.copy(alpha = 0.85f),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
 

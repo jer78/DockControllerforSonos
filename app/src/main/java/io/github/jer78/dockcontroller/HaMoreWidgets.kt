@@ -81,8 +81,8 @@ private fun sensorValueText(sensor: HaSensorState): String {
 // no pop-up.
 @Composable
 fun SensorWidget(sensor: HaSensorState) {
-    Surface(
-        color = Color.Black.copy(alpha = 0.4f),
+    GlassSurface(
+        fill = Color.Transparent,
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier.semantics { contentDescription = "${sensor.name}: ${sensorValueText(sensor)}" }
     ) {
@@ -169,10 +169,10 @@ private fun binarySensorOnColor(deviceClass: String): Color = when (deviceClass)
 
 @Composable
 fun BinarySensorWidget(sensor: HaBinarySensorState) {
-    val background = if (sensor.isOn) binarySensorOnColor(sensor.deviceClass).copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.4f)
+    val background = if (sensor.isOn) binarySensorOnColor(sensor.deviceClass).copy(alpha = 0.85f) else Color.Transparent
     val tint = if (sensor.isOn) Color.Black else Color.White.copy(alpha = if (sensor.state == "unavailable") 0.4f else 1f)
-    Surface(
-        color = background,
+    GlassSurface(
+        fill = background,
         shape = CircleShape,
         modifier = Modifier.semantics { contentDescription = "${sensor.name}: ${binarySensorStateText(sensor)}" }
     ) {
@@ -215,8 +215,8 @@ private fun SpinningFanIcon(fan: HaFanState, tint: Color, size: androidx.compose
 
 @Composable
 fun FanWidget(fan: HaFanState, onClick: () -> Unit) {
-    Surface(
-        color = if (fan.isOn) FanOnColor.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.4f),
+    GlassSurface(
+        fill = if (fan.isOn) FanOnColor.copy(alpha = 0.85f) else Color.Transparent,
         shape = CircleShape,
         modifier = Modifier
             .clip(CircleShape)
@@ -443,8 +443,8 @@ fun AlarmWidget(alarm: HaAlarmState, onClick: () -> Unit) {
         )
         value
     } else 1f
-    Surface(
-        color = color?.copy(alpha = 0.85f * pulse) ?: Color.Black.copy(alpha = 0.4f),
+    GlassSurface(
+        fill = color?.copy(alpha = 0.85f * pulse) ?: Color.Transparent,
         shape = CircleShape,
         modifier = Modifier
             .clip(CircleShape)

@@ -33,6 +33,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -333,7 +334,8 @@ fun LargeVolumeSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
     isMuted: Boolean = false,
-    fillColor: Color = Color.White.copy(alpha = 0.6f),
+    // Brighter than the glass track behind it, so the filled part stands out.
+    fillColor: Color = Color.White.copy(alpha = 0.8f),
     // Shown before the percentage, e.g. "Group · " when the slider drives
     // a whole group of rooms.
     labelPrefix: String = "",
@@ -383,8 +385,16 @@ fun LargeVolumeSlider(
         modifier = modifier
             .height(height)
             .fillMaxWidth()
+            // The same frosted glass as GlassIconButton; its rim is drawn
+            // over the fill too.
+            .shadow(elevation = 6.dp, shape = RoundedCornerShape(height / 2))
             .clip(RoundedCornerShape(height / 2))
-            .background(Color.White.copy(alpha = 0.15f))
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(Color.White.copy(alpha = 0.26f), Color.White.copy(alpha = 0.10f))
+                )
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(height / 2))
             .onSizeChanged { width = it.width }
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
@@ -923,6 +933,35 @@ fun GlassIconButton(
             tint = if (active) Color.Black else Color.White,
             modifier = Modifier.size(iconSize)
         )
+    }
+}
+
+// The same glass as GlassIconButton, for the Home Assistant widgets, with
+// fill laid over it for a widget that's lit (a light on, a door open, ...).
+// The content colour defaults to white, as most widgets sit on the glass.
+@Composable
+fun GlassSurface(
+    shape: Shape,
+    modifier: Modifier = Modifier,
+    fill: Color = Color.Transparent,
+    content: @Composable () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .shadow(elevation = 6.dp, shape = shape)
+            .then(modifier)
+            .clip(shape)
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(Color.White.copy(alpha = 0.26f), Color.White.copy(alpha = 0.10f))
+                )
+            )
+            .background(fill)
+            .border(1.dp, Color.White.copy(alpha = 0.25f), shape)
+    ) {
+        CompositionLocalProvider(LocalContentColor provides Color.White) {
+            content()
+        }
     }
 }
 

@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import android.os.Build
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.onSizeChanged
@@ -153,11 +154,11 @@ private fun HaConnectionIndicator(status: HaConnectionStatus, modifier: Modifier
     val (color, text) = when (status) {
         HaConnectionStatus.NotTested -> Color.Gray to "Not connected - tap Connect to check"
         HaConnectionStatus.Testing -> Color.Gray to "Connecting..."
-        is HaConnectionStatus.Connected -> Color(0xFF2E7D32) to buildString {
+        is HaConnectionStatus.Connected -> Color(0xFF81C784) to buildString {
             append("Connected to ${status.serverName}")
             if (status.version.isNotBlank()) append(" (v${status.version})")
         }
-        is HaConnectionStatus.Failed -> Color(0xFFC62828) to status.reason
+        is HaConnectionStatus.Failed -> Color(0xFFFF8A80) to status.reason
     }
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         if (status == HaConnectionStatus.Testing) {
@@ -267,6 +268,47 @@ private fun HaWidgetSlotRow(
             }
             IconButton(onClick = { onMove(1) }, enabled = position < MAX_HA_WIDGETS) {
                 Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move position $position later")
+            }
+        }
+    }
+}
+
+// Settings in the same dark, see-through glass as the other pop-ups
+// (GlassDialog + GlassCard), laid out like an AlertDialog. Its controls use
+// the dark colour scheme whatever the system's light/dark setting, so text
+// fields, chips and switches read on the dark glass.
+@Composable
+private fun SettingsGlassDialog(
+    onDismissRequest: () -> Unit,
+    confirmButton: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    dismissButton: (@Composable () -> Unit)? = null,
+    title: @Composable () -> Unit,
+    text: @Composable () -> Unit,
+    properties: DialogProperties = DialogProperties()
+) {
+    val context = LocalContext.current
+    val darkScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) dynamicDarkColorScheme(context) else darkColorScheme()
+    MaterialTheme(colorScheme = darkScheme, typography = MaterialTheme.typography) {
+        GlassDialog(onDismissRequest = onDismissRequest, properties = properties) {
+            GlassCard(modifier = modifier) {
+                CompositionLocalProvider(LocalContentColor provides Color.White) {
+                    Column(Modifier.padding(24.dp)) {
+                        ProvideTextStyle(MaterialTheme.typography.headlineSmall) {
+                            Box(Modifier.padding(bottom = 16.dp)) { title() }
+                        }
+                        ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
+                            Box(Modifier.weight(1f, fill = false).padding(bottom = 24.dp)) { text() }
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            dismissButton?.invoke()
+                            confirmButton()
+                        }
+                    }
+                }
             }
         }
     }
@@ -432,7 +474,7 @@ fun SettingsModal(
     // anything taller than this scrolls within the tab.
     val tabContentHeight = (LocalConfiguration.current.screenHeightDp * 0.55f).dp
 
-    DockAlertDialog(
+    SettingsGlassDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.fillMaxWidth(0.94f).widthIn(max = 960.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -444,7 +486,7 @@ fun SettingsModal(
         },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
-                TabRow(selectedTabIndex = selectedTab) {
+                TabRow(selectedTabIndex = selectedTab, containerColor = Color.Transparent) {
                     tabs.forEachIndexed { index, title ->
                         Tab(
                             selected = selectedTab == index,
@@ -600,7 +642,7 @@ fun SettingsModal(
                                             },
                                             enabled = !isRefreshing,
                                             modifier = Modifier.fillMaxWidth(),
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color.Gray)
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f), contentColor = Color.White)
                                         ) {
                                             Icon(Icons.Default.Refresh, contentDescription = null)
                                             Spacer(Modifier.width(8.dp))
@@ -617,7 +659,7 @@ fun SettingsModal(
                                         Text(
                                             text = "Status: $refreshStatus",
                                             fontSize = 12.sp,
-                                            color = if (refreshStatus.contains("Error")) Color.Red else Color.Black,
+                                            color = if (refreshStatus.contains("Error")) Color(0xFFFF8A80) else Color.White,
                                             fontWeight = FontWeight.Bold
                                         )
                                 }

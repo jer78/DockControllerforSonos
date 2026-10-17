@@ -142,8 +142,8 @@ private val RainColor = Color(0xFF4FC3F7)
 fun WeatherWidget(weather: HaWeatherState, onClick: () -> Unit) {
     val night = weather.isNightNow()
     val hasForecast = !weather.forecasts.isEmpty
-    Surface(
-        color = Color.Black.copy(alpha = 0.4f),
+    GlassSurface(
+        fill = Color.Transparent,
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier.clip(RoundedCornerShape(16.dp)).clickable(enabled = hasForecast, onClick = onClick)
     ) {

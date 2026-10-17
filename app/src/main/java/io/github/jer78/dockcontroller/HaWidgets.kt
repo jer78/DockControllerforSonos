@@ -380,8 +380,8 @@ private fun ClimateWidget(climate: HaClimateState, onClick: () -> Unit) {
         value
     } else 0f
 
-    Surface(
-        color = lerp(Color.Black.copy(alpha = 0.4f), tint.copy(alpha = 0.35f), breath),
+    GlassSurface(
+        fill = tint.copy(alpha = 0.35f * breath),
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier.clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick)
     ) {
@@ -408,8 +408,8 @@ private fun ClimateWidget(climate: HaClimateState, onClick: () -> Unit) {
 
 @Composable
 private fun LightWidget(light: HaLightState, onClick: () -> Unit) {
-    Surface(
-        color = if (light.isOn) Color.Yellow.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.4f),
+    GlassSurface(
+        fill = if (light.isOn) Color.Yellow.copy(alpha = 0.8f) else Color.Transparent,
         shape = CircleShape,
         modifier = Modifier
             .clip(CircleShape)
@@ -435,8 +435,8 @@ private fun CoverWidget(cover: HaCoverState, onClick: () -> Unit) {
         )
         alpha
     } else 1f
-    Surface(
-        color = if (cover.isOpen) CoverOpenColor.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.4f),
+    GlassSurface(
+        fill = if (cover.isOpen) CoverOpenColor.copy(alpha = 0.85f) else Color.Transparent,
         shape = CircleShape,
         modifier = Modifier
             .clip(CircleShape)
@@ -478,8 +478,8 @@ private fun ButtonWidget(button: HaButtonState, onClick: () -> Unit) {
     }
     val lit = if (button.isOn) 1f else flash.value
     val unavailable = button.state == "unavailable"
-    Surface(
-        color = lerp(Color.Black.copy(alpha = 0.4f), ButtonOnColor.copy(alpha = 0.85f), lit),
+    GlassSurface(
+        fill = ButtonOnColor.copy(alpha = 0.85f * lit),
         shape = CircleShape,
         modifier = Modifier
             .clip(CircleShape)
@@ -537,10 +537,10 @@ private fun LockWidget(lock: HaLockState, onClick: () -> Unit) {
     val (background, tint) = when {
         lock.isJammed -> LockJammedColor.copy(alpha = 0.85f) to Color.White
         unlocked -> LockUnlockedColor.copy(alpha = 0.85f) to Color.Black
-        else -> Color.Black.copy(alpha = 0.4f) to Color.White
+        else -> Color.Transparent to Color.White
     }
-    Surface(
-        color = background,
+    GlassSurface(
+        fill = background,
         shape = CircleShape,
         modifier = Modifier
             .clip(CircleShape)
