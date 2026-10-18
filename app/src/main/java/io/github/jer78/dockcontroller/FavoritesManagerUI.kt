@@ -111,7 +111,7 @@ fun FavoritesManagerTab(
 
         if (list.isEmpty()) {
             Text(
-                if (favorites.isEmpty()) "No favorites yet. Refresh favorites on the Cover Flow tab."
+                if (favorites.isEmpty()) "No favorites yet. Refresh favorites on the Setup tab."
                 else "Nothing to show here.",
                 fontSize = 14.sp,
                 color = Color.Gray,

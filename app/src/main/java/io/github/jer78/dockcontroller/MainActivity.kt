@@ -145,6 +145,7 @@ class MainActivity : ComponentActivity() {
             val nowPlayingHidePrevious by settingsManager.nowPlayingHidePrevious.collectAsState(initial = false)
             val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
             val nowPlayingClockMode by settingsManager.nowPlayingClockMode.collectAsState(initial = NowPlayingClockMode.OFF)
+            val showEndsAt by settingsManager.showEndsAt.collectAsState(initial = true)
             val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
                 initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
             )
@@ -369,7 +370,8 @@ class MainActivity : ComponentActivity() {
                                 hidePrevious = nowPlayingHidePrevious,
                                 hideNextUp = nowPlayingHideNextUp,
                                 clockMode = nowPlayingClockMode,
-                                use24HourClock = use24HourClock
+                                use24HourClock = use24HourClock,
+                                showEndsAt = showEndsAt
                             )
                         }
                     }

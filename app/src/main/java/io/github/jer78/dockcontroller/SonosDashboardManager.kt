@@ -869,7 +869,8 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
-    private val tvShowLogos = TvShowLogos()
+    private val tvArtwork = TvArtworkStore.getInstance(appContext)
+    private val tvShowLogos = TvShowLogos(tvArtwork)
 
     // The logo for the TV show in this HA track, if one's recognised and
     // already looked up. Otherwise starts the lookup and fills it in once
@@ -888,7 +889,7 @@ class SonosDashboardManager private constructor(context: Context) {
         return null
     }
 
-    private val youTubeThumbnails = YouTubeThumbnails { result, query ->
+    private val youTubeThumbnails = YouTubeThumbnails(tvArtwork) { result, query ->
         scope.launch { settingsManager.recordYouTubeSearch(result, query) }
     }
 

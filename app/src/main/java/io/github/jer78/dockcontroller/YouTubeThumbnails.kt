@@ -24,16 +24,25 @@ data class YouTubeUsage(
 // so the thumbnail comes straight from that; others (Apple TV, ...) only send
 // the title and channel, so the video is searched for with the user's YouTube
 // Data API key. No ID and no key - nothing, and the fallback art shows.
-// Each video is only looked up once; misses are retried after a while.
+// Each thumbnail found is saved, image and all, in TvArtworkStore, so a
+// video is only looked up once, even across restarts. Misses are retried
+// after a while - within a minute when the search failed to get an answer.
 // onSearch hears how each search went, for Settings' usage line - the API
 // itself never says how much quota is left.
-class YouTubeThumbnails(private val onSearch: (SearchResult, String) -> Unit = { _, _ -> }) {
+class YouTubeThumbnails(
+    private val store: TvArtworkStore,
+    private val onSearch: (SearchResult, String) -> Unit = { _, _ -> }
+) {
     enum class SearchResult { FOUND, NO_MATCH, QUOTA_EXCEEDED, KEY_REJECTED, FAILED }
 
     private val client = OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
 
-    private data class Entry(val url: String?, val atMs: Long)
-    private val cache = ConcurrentHashMap<String, Entry>()
+    // A search that didn't get a real answer (timeout, no network, server
+    // error), as opposed to no match or a rejected key.
+    private class SearchFailed : Exception()
+
+    private data class Miss(val atMs: Long, val retryMs: Long)
+    private val misses = ConcurrentHashMap<String, Miss>()
     private val inFlight = ConcurrentHashMap.newKeySet<String>()
 
     // What identifies the video: its ID when the player reports one,
@@ -45,23 +54,40 @@ class YouTubeThumbnails(private val onSearch: (SearchResult, String) -> Unit = {
         return "search:${track.title.lowercase()}|${track.artist.lowercase()}"
     }
 
-    fun cached(track: TrackState, apiKey: String): String? = cacheKey(track, apiKey)?.let { cache[it]?.url }
+    fun cached(track: TrackState, apiKey: String): String? =
+        cacheKey(track, apiKey)?.let { store.get("youtube:$it") }?.let { store.imageUrl(it.url) }
 
     // True when a lookup should start now; callers then call lookUp().
     fun claimLookup(track: TrackState, apiKey: String): Boolean {
         val key = cacheKey(track, apiKey) ?: return false
-        val entry = cache[key]
-        if (entry != null && (entry.url != null || System.currentTimeMillis() - entry.atMs < RETRY_MISS_MS)) return false
+        if (store.get("youtube:$key") != null) return false
+        val miss = misses[key]
+        if (miss != null && System.currentTimeMillis() - miss.atMs < miss.retryMs) return false
         return inFlight.add(key)
     }
 
     suspend fun lookUp(track: TrackState, apiKey: String): String? = withContext(Dispatchers.IO) {
         val key = cacheKey(track, apiKey) ?: return@withContext null
         try {
-            val videoId = videoIdFrom(track.contentId) ?: search(track.title, track.artist, apiKey.trim())
-            val url = videoId?.let { bestThumbnail(it) }
-            cache[key] = Entry(url, System.currentTimeMillis())
-            url
+            val videoId = try {
+                videoIdFrom(track.contentId) ?: search(track.title, track.artist, apiKey.trim())
+            } catch (e: SearchFailed) {
+                misses[key] = Miss(System.currentTimeMillis(), RETRY_FAILED_MS)
+                return@withContext null
+            }
+            if (videoId == null) {
+                misses[key] = Miss(System.currentTimeMillis(), RETRY_MISS_MS)
+                return@withContext null
+            }
+            misses.remove(key)
+            val entry = SavedTvArtwork(
+                key = "youtube:$key",
+                name = track.title.ifBlank { videoId },
+                source = SavedTvArtwork.Source.YOUTUBE,
+                url = bestThumbnail(videoId)
+            )
+            store.save(entry)
+            store.imageUrl(entry.url)
         } finally {
             inFlight.remove(key)
         }
@@ -82,17 +108,21 @@ class YouTubeThumbnails(private val onSearch: (SearchResult, String) -> Unit = {
                 val text = response.body?.string()
                 if (response.isSuccessful) text else {
                     Log.w("YouTubeThumbnails", "Search HTTP ${response.code}")
-                    onSearch(errorResult(response.code, text), title)
+                    val result = errorResult(response.code, text)
+                    onSearch(result, title)
+                    if (result == SearchResult.FAILED) throw SearchFailed()
                     return null
                 }
             }
+        } catch (e: SearchFailed) {
+            throw e
         } catch (e: Exception) {
             Log.w("YouTubeThumbnails", "Search failed: ${e.message}")
             null
         }
         if (body == null) {
             onSearch(SearchResult.FAILED, title)
-            return null
+            throw SearchFailed()
         }
         val items = JSONObject(body).optJSONArray("items")
         val results = items?.let { (0 until it.length()).mapNotNull { i -> it.optJSONObject(i) } }.orEmpty()
@@ -136,6 +166,7 @@ class YouTubeThumbnails(private val onSearch: (SearchResult, String) -> Unit = {
 
     companion object {
         private const val RETRY_MISS_MS = 30 * 60 * 1000L
+        private const val RETRY_FAILED_MS = 60 * 1000L
 
         // A search costs 100 of the free 10,000 daily units.
         const val FREE_SEARCHES_PER_DAY = 100

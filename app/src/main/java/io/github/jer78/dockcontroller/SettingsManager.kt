@@ -95,6 +95,8 @@ class SettingsManager(private val context: Context) {
         val NOW_PLAYING_SHOW_CLOCK = booleanPreferencesKey("now_playing_show_clock")
         // Stores a NowPlayingClockMode's name (see DashboardUI.kt)
         val NOW_PLAYING_CLOCK_MODE = stringPreferencesKey("now_playing_clock_mode")
+        // TV mode's clock takes turns with when the show ends (on by default).
+        val SHOW_ENDS_AT = booleanPreferencesKey("show_ends_at")
 
         // Experimental: in TV mode, unmute the speaker when the HA media
         // player's time remaining jumps up - a sign a commercial break just
@@ -301,6 +303,12 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setNowPlayingClockMode(mode: NowPlayingClockMode) {
         context.dataStore.edit { it[NOW_PLAYING_CLOCK_MODE] = mode.name }
+    }
+
+    val showEndsAt: Flow<Boolean> = context.dataStore.data.map { it[SHOW_ENDS_AT] ?: true }
+
+    suspend fun setShowEndsAt(enabled: Boolean) {
+        context.dataStore.edit { it[SHOW_ENDS_AT] = enabled }
     }
 
     val autoUnmuteAfterAds: Flow<Boolean> = context.dataStore.data.map { it[AUTO_UNMUTE_AFTER_ADS] ?: false }

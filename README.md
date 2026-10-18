@@ -99,6 +99,9 @@ sits on its dock.
 - Detects when a Sonos soundbar is playing TV audio and shows what's on, using
   a Home Assistant media player for the title, art and transport controls
 - The artwork letterboxes to 16:9, with a seek bar and time remaining
+- The clock takes turns with the time the show ends, marked by a gold
+  **ENDS AT** badge; turn off **Show Ends At Time** in Settings > Now Playing
+  to keep just the clock
 - Recognises TV episodes (from the show name Home Assistant reports, an
   "S2 E3"-style title, or a "Season 28, Ep. 41" line beside it) and shows the
   show's title logo in place of the artwork, from TMDB with a free API key
@@ -106,6 +109,10 @@ sits on its dock.
   poster is shown instead, with the artwork reshaped to fit it, and the
   show's TVmaze background (when it has one) behind the screen
 - Turn off **Replace TV Show Images** to keep the images Home Assistant sends
+- Logos, posters and YouTube thumbnails are saved on the device once found,
+  so each show is only looked up once. **Saved TV Artwork** (Settings > Home
+  Assistant) lists them; delete one to have it looked up again (say, if it
+  matched the wrong show), or delete them all
 - Pick one fallback image for when there's no artwork, or rotate through them
 - Drops into a TV screensaver after a configurable delay
 - Experimental: Auto-Unmute After Commercials and YouTube Thumbnails (see
@@ -222,7 +229,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.32.apk`). It's about 55 MB.
+   `DockController-v1.0.33.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -253,7 +260,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.32.apk
+adb install -r DockController-v1.0.33.apk
 ```
 
 Every release is signed with the same key. If Android says **App not

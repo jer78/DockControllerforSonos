@@ -348,7 +348,7 @@ private fun HaWidgetSlotRow(
 // the dark colour scheme whatever the system's light/dark setting, so text
 // fields, chips and switches read on the dark glass.
 @Composable
-private fun SettingsGlassDialog(
+internal fun SettingsGlassDialog(
     onDismissRequest: () -> Unit,
     confirmButton: @Composable () -> Unit,
     modifier: Modifier = Modifier,
@@ -435,6 +435,8 @@ fun SettingsModal(
     var youTubeApiKey by remember { mutableStateOf("") }
     // Live, so a search made while Settings is open shows straight away.
     val youTubeUsage by remember { settingsManager.youTubeUsage }.collectAsState(initial = null)
+    val savedTvArtwork by TvArtworkStore.getInstance(LocalContext.current).entries.collectAsState()
+    var showSavedTvArtwork by remember { mutableStateOf(false) }
     var use24HourClock by remember { mutableStateOf(true) }
     var coverFlowReflection by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_REFLECTION_DEFAULT) }
     var coverFlowGlassTable by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT) }
@@ -447,6 +449,7 @@ fun SettingsModal(
     var hideNowPlaying by remember { mutableStateOf(false) }
     var nowPlayingHidePrevious by remember { mutableStateOf(false) }
     var nowPlayingClockMode by remember { mutableStateOf(NowPlayingClockMode.OFF) }
+    var showEndsAt by remember { mutableStateOf(true) }
     var autoUnmuteAfterAds by remember { mutableStateOf(false) }
     var tvShowImages by remember { mutableStateOf(true) }
     var continueWithRandomAlbum by remember { mutableStateOf(false) }
@@ -530,6 +533,7 @@ fun SettingsModal(
         nowPlayingHidePrevious = settingsManager.nowPlayingHidePrevious.first()
         nowPlayingHideNextUp = settingsManager.nowPlayingHideNextUp.first()
         nowPlayingClockMode = settingsManager.nowPlayingClockMode.first()
+        showEndsAt = settingsManager.showEndsAt.first()
         autoUnmuteAfterAds = settingsManager.autoUnmuteAfterAds.first()
         tvShowImages = settingsManager.tvShowImages.first()
         continueWithRandomAlbum = settingsManager.continueWithRandomAlbum.first()
@@ -870,6 +874,15 @@ fun SettingsModal(
                                             )
                                         }
                                     }
+                                    SettingsToggleRow("Show Ends At Time", showEndsAt) {
+                                        showEndsAt = it
+                                        scope.launch { settingsManager.setShowEndsAt(it) }
+                                    }
+                                    Text(
+                                        "In TV mode, the clock takes turns with the time the show ends, when the TV reports its length.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
                                     HorizontalDivider()
 
                                     // Saved a moment after the slider stops, like
@@ -1147,6 +1160,13 @@ fun SettingsModal(
                                             color = Color.Gray
                                         )
                                     }
+                                    Button(
+                                        onClick = { showSavedTvArtwork = true },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f), contentColor = Color.White)
+                                    ) {
+                                        Text("Saved TV Artwork (${savedTvArtwork.size})")
+                                    }
 
                                     HorizontalDivider()
                                     Text("Experimental:", fontWeight = FontWeight.SemiBold)
@@ -1265,4 +1285,8 @@ fun SettingsModal(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+
+    if (showSavedTvArtwork) {
+        SavedTvArtworkDialog(onDismiss = { showSavedTvArtwork = false })
+    }
 }

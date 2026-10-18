@@ -99,6 +99,9 @@ fun DockDashboardUI(
     // Settings > Now Playing > Clock.
     clockMode: NowPlayingClockMode = NowPlayingClockMode.OFF,
     use24HourClock: Boolean = true,
+    // Settings > Now Playing > Show Ends At Time: TV mode's clock taking
+    // turns with when the show finishes.
+    showEndsAt: Boolean = true,
     onToggleNightMode: () -> Unit = {},
     onToggleDialogMode: () -> Unit = {},
     onSetBass: (Int) -> Unit = {},
@@ -460,7 +463,7 @@ fun DockDashboardUI(
             ) {
                 // TV mode's clock, above the title and beside the artwork.
                 if (isTvMode && clockMode.showsClock(isTvMode)) {
-                    TvClock(trackState, use24HourClock, modifier = Modifier.padding(bottom = 4.dp))
+                    TvClock(trackState, use24HourClock, showEndsAt, modifier = Modifier.padding(bottom = 4.dp))
                 }
                 if (!isTvMode) {
                     if (trackState.prevTrack != "None" && !hidePrevious) {
@@ -835,11 +838,12 @@ fun DockDashboardUI(
 }
 
 // TV mode's clock: the time, taking turns every TV_CLOCK_SWAP_MS with when
-// what's on will finish (now + time remaining) while that's known.
+// what's on will finish (now + time remaining) while that's known - unless
+// showEndsAt is off, when it's just the time.
 @Composable
-private fun TvClock(trackState: TrackState, use24HourClock: Boolean, modifier: Modifier = Modifier) {
+private fun TvClock(trackState: TrackState, use24HourClock: Boolean, showEndsAt: Boolean, modifier: Modifier = Modifier) {
     val currentTime = rememberMinuteClock()
-    val knowsEnd = trackState.durationSeconds > 0
+    val knowsEnd = showEndsAt && trackState.durationSeconds > 0
     val remainingSeconds = if (knowsEnd) {
         (trackState.durationSeconds - rememberInterpolatedPosition(trackState)).coerceAtLeast(0)
     } else 0

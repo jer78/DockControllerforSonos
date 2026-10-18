@@ -73,53 +73,97 @@ private fun cleanShowName(name: String): String? =
         .takeIf { it.length >= 2 }
 
 // Looks up show logos - TMDB (with the user's free API key, which has
-// transparent logos) first, then TVmaze (no key needed) - and remembers the
-// answer per show, so each show is only looked up once. Shows with no logo
-// anywhere are retried after a while, in case it was a network blip.
-class TvShowLogos {
+// transparent logos) first, then TVmaze (no key needed). Each logo found is
+// saved, images and all, in TvArtworkStore, so a show is only looked up
+// once, even across restarts. Shows with no logo anywhere are retried after
+// a while; a lookup that failed (timeout, no network, server error) is
+// retried within a minute instead, so one slow request doesn't hide the
+// show's logo for half an hour.
+class TvShowLogos(private val store: TvArtworkStore) {
     private val client = OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
 
-    private data class Entry(val logo: TvShowLogo?, val atMs: Long)
-    private val cache = ConcurrentHashMap<String, Entry>()
+    // A request that didn't get a real answer, as opposed to "no such show".
+    private class LookupFailed : Exception()
+
+    private data class Miss(val atMs: Long, val retryMs: Long)
+    private val misses = ConcurrentHashMap<String, Miss>()
     private val inFlight = ConcurrentHashMap.newKeySet<String>()
 
-    // Adding or changing the TMDB key looks every show up again.
-    private fun cacheKey(show: String, tmdbKey: String) = "${show.lowercase()}|${tmdbKey.isNotBlank()}"
+    // Adding or changing the TMDB key looks missed shows up again.
+    private fun missKey(show: String, tmdbKey: String) = "${show.lowercase()}|${tmdbKey.isNotBlank()}"
 
-    fun cached(show: String, tmdbKey: String): TvShowLogo? = cache[cacheKey(show, tmdbKey)]?.logo
+    private fun storeKey(show: String) = "show:${show.lowercase()}"
+
+    // A saved TVmaze poster from before a TMDB key was added doesn't count,
+    // so the show gets a look at TMDB's logos.
+    fun cached(show: String, tmdbKey: String): TvShowLogo? =
+        store.get(storeKey(show))
+            ?.takeUnless { tmdbKey.isNotBlank() && !it.withTmdbKey && it.source == SavedTvArtwork.Source.TVMAZE_POSTER }
+            ?.let { store.logoFor(it) }
 
     // True when a lookup should start now; callers then call lookUp().
     fun claimLookup(show: String, tmdbKey: String): Boolean {
-        val key = cacheKey(show, tmdbKey)
-        val entry = cache[key]
-        if (entry != null && (entry.logo != null || System.currentTimeMillis() - entry.atMs < RETRY_MISS_MS)) return false
+        if (cached(show, tmdbKey) != null) return false
+        val key = missKey(show, tmdbKey)
+        val miss = misses[key]
+        if (miss != null && System.currentTimeMillis() - miss.atMs < miss.retryMs) return false
         return inFlight.add(key)
     }
 
     suspend fun lookUp(show: String, tmdbKey: String): TvShowLogo? = withContext(Dispatchers.IO) {
-        val key = cacheKey(show, tmdbKey)
+        val key = missKey(show, tmdbKey)
+        var failed = false
+        fun attempt(source: () -> TvShowLogo?): TvShowLogo? = try {
+            source()
+        } catch (e: LookupFailed) {
+            failed = true
+            null
+        }
         try {
-            val logo = (if (tmdbKey.isNotBlank()) fromTmdb(show, tmdbKey.trim()) else null) ?: fromTvMaze(show)
-            cache[key] = Entry(logo, System.currentTimeMillis())
-            logo
+            val logo = (if (tmdbKey.isNotBlank()) attempt { fromTmdb(show, tmdbKey.trim()) } else null)
+                ?: attempt { fromTvMaze(show) }
+            if (logo == null) {
+                misses[key] = Miss(System.currentTimeMillis(), if (failed) RETRY_FAILED_MS else RETRY_MISS_MS)
+                return@withContext null
+            }
+            misses.remove(key)
+            val entry = SavedTvArtwork(
+                key = storeKey(show),
+                name = show,
+                source = if (logo.kind == TvShowLogo.Kind.TRANSPARENT_LOGO) SavedTvArtwork.Source.TMDB_LOGO
+                else SavedTvArtwork.Source.TVMAZE_POSTER,
+                url = logo.url,
+                backgroundUrl = logo.backgroundUrl,
+                aspectRatio = logo.aspectRatio,
+                withTmdbKey = tmdbKey.isNotBlank()
+            )
+            store.save(entry)
+            store.logoFor(entry)
         } finally {
             inFlight.remove(key)
         }
     }
 
-    private fun getJson(url: String, bearer: String? = null): String? = try {
+    // Null for a real "not found" (e.g. TVmaze's 404 for no matching show);
+    // throws LookupFailed when there was no real answer - a timeout, no
+    // network, a server error or being rate limited.
+    private fun getJson(url: String, bearer: String? = null): String? {
         val request = Request.Builder().url(url).apply {
             if (bearer != null) addHeader("Authorization", "Bearer $bearer")
         }.build()
-        client.newCall(request).execute().use { response ->
-            if (response.isSuccessful) response.body?.string() else {
+        try {
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) return response.body?.string()
                 Log.w("TvShowLogos", "HTTP ${response.code} for ${url.substringBefore('?')}")
-                null
+                if (response.code == 429 || response.code >= 500) throw LookupFailed()
+                return null
             }
+        } catch (e: LookupFailed) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("TvShowLogos", "Lookup failed: ${e.message}")
+            throw LookupFailed()
         }
-    } catch (e: Exception) {
-        Log.w("TvShowLogos", "Lookup failed: ${e.message}")
-        null
     }
 
     // TMDB takes either a v3 API key (as ?api_key=) or a v4 read access
@@ -184,6 +228,7 @@ class TvShowLogos {
 
     companion object {
         private const val RETRY_MISS_MS = 30 * 60 * 1000L
+        private const val RETRY_FAILED_MS = 60 * 1000L
         // TVmaze's posters are 680 x 1000, for when it doesn't say.
         private const val POSTER_ASPECT = 0.68f
     }
