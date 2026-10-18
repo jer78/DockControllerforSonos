@@ -33,6 +33,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
@@ -350,6 +351,9 @@ fun LargeVolumeSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
     isMuted: Boolean = false,
+    // Fill and label color while muted - Now Playing passes one picked
+    // from the album art (see pickMuteColor).
+    muteColor: Color = SonosMuteGreen,
     // Brighter than the glass track behind it, so the filled part stands out.
     fillColor: Color = Color.White.copy(alpha = 0.8f),
     // Shown before the percentage, e.g. "Group · " when the slider drives
@@ -392,10 +396,12 @@ fun LargeVolumeSlider(
         )
         alpha
     } else 1f
-    val effectiveFillColor = if (isMuted) SonosMuteGreen.copy(alpha = muteFlashAlpha) else fillColor
-    val labelColorOnFill = if (isMuted) Color.White else Color.Black
+    val effectiveFillColor = if (isMuted) muteColor.copy(alpha = muteFlashAlpha) else fillColor
+    // A light album-art color needs a dark label on top of it.
+    val labelColorOnFill = if (isMuted && muteColor.luminance() < 0.5f) Color.White else Color.Black
     // Fill may be semi-transparent (the default) - keep the label solid.
-    val labelColorOnTrack = if (isMuted) SonosMuteGreen.copy(alpha = muteFlashAlpha) else fillColor.copy(alpha = 1f)
+    val labelColorOnTrack = if (isMuted) muteColor.copy(alpha = muteFlashAlpha) else fillColor.copy(alpha = 1f)
+    val label = if (isMuted) "${labelPrefix}Muted" else "$labelPrefix${localValue.roundToInt()}%"
 
     Box(
         modifier = modifier
@@ -456,7 +462,7 @@ fun LargeVolumeSlider(
                 .drawWithContent { clipRect(right = fillWidthPx) { this@drawWithContent.drawContent() } }
         ) {
             Text(
-                text = "$labelPrefix${localValue.roundToInt()}%",
+                text = label,
                 color = labelColorOnFill,
                 fontWeight = FontWeight.Black,
                 fontSize = fontSize,
@@ -469,7 +475,7 @@ fun LargeVolumeSlider(
                 .drawWithContent { clipRect(left = fillWidthPx) { this@drawWithContent.drawContent() } }
         ) {
             Text(
-                text = "$labelPrefix${localValue.roundToInt()}%",
+                text = label,
                 color = labelColorOnTrack,
                 fontWeight = FontWeight.Black,
                 fontSize = fontSize,
@@ -608,6 +614,14 @@ private fun spectrumBarColor(
         SpectrumColorScheme.ALBUM_ART -> albumPaletteColorAt(t, albumPalette)
     }
 }
+
+/**
+ * A random swatch from the album art for the muted volume slider, skipping
+ * near-black ones that would vanish against the dark glass track. Falls
+ * back to Sonos's mute green when the art gave no usable color.
+ */
+internal fun pickMuteColor(albumPalette: List<Color>): Color =
+    albumPalette.filter { it.luminance() > 0.15f }.randomOrNull() ?: SonosMuteGreen
 
 private fun albumPaletteColorAt(t: Float, palette: List<Color>): Color {
     if (palette.isEmpty()) return SonosMuteGreen

@@ -81,6 +81,10 @@ private fun cleanShowName(name: String): String? =
 // show's logo for half an hour.
 class TvShowLogos(private val store: TvArtworkStore) {
     private val client = OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
+    // TVmaze's search can take 15-30 seconds when it hasn't been asked for
+    // that show lately (e.g. "The Traitors"), then answers instantly once
+    // warm - 10 seconds gave up on it every time.
+    private val tvMazeClient = client.newBuilder().callTimeout(45, TimeUnit.SECONDS).build()
 
     // A request that didn't get a real answer, as opposed to "no such show".
     private class LookupFailed : Exception()
@@ -147,12 +151,12 @@ class TvShowLogos(private val store: TvArtworkStore) {
     // Null for a real "not found" (e.g. TVmaze's 404 for no matching show);
     // throws LookupFailed when there was no real answer - a timeout, no
     // network, a server error or being rate limited.
-    private fun getJson(url: String, bearer: String? = null): String? {
+    private fun getJson(url: String, bearer: String? = null, httpClient: OkHttpClient = client): String? {
         val request = Request.Builder().url(url).apply {
             if (bearer != null) addHeader("Authorization", "Bearer $bearer")
         }.build()
         try {
-            client.newCall(request).execute().use { response ->
+            httpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) return response.body?.string()
                 Log.w("TvShowLogos", "HTTP ${response.code} for ${url.substringBefore('?')}")
                 if (response.code == 429 || response.code >= 500) throw LookupFailed()
@@ -203,7 +207,7 @@ class TvShowLogos(private val store: TvArtworkStore) {
             .addQueryParameter("q", show)
             .addQueryParameter("embed", "images")
             .build().toString()
-        val json = getJson(url)?.let { JSONObject(it) } ?: return null
+        val json = getJson(url, httpClient = tvMazeClient)?.let { JSONObject(it) } ?: return null
         val images = json.optJSONObject("_embedded")?.optJSONArray("images")?.objects().orEmpty()
         fun original(type: String) = images.filter { it.optString("type") == type }
             .sortedByDescending { it.optBoolean("main") }

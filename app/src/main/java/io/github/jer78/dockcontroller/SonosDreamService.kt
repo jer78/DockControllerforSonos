@@ -107,9 +107,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     val audioSettings by manager.audioSettings.collectAsState()
                     val albumHistory by manager.albumHistory.collectAsState()
                     val speakerGroups by manager.speakerGroups.collectAsState()
-                    val discoveredSpeakers by manager.discoveredSpeakers.collectAsState()
                     val refreshStatus by manager.favoritesRefreshStatus.collectAsState()
-                    val refreshCount by manager.favoritesRefreshCount.collectAsState()
                     val showSpectrumAnalyzer by settingsManager.showSpectrumAnalyzer.collectAsState(initial = false)
                     val spectrumColorScheme by settingsManager.spectrumColorScheme.collectAsState(initial = SpectrumColorScheme.RAINBOW)
                     val spectrumHeightPercent by settingsManager.spectrumHeightPercent.collectAsState(initial = 1f)
@@ -143,7 +141,6 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
 
                     var isAmbientMode by remember { mutableStateOf(false) }
                     var isTvAmbientMode by remember { mutableStateOf(false) }
-                    var showSettings by remember { mutableStateOf(false) }
 
                     // Errors are logged (with timestamps) in the manager; CommandErrorFlash
                     // shows only fresh ones, so re-entering this screen doesn't re-flash an old error.
@@ -316,10 +313,9 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onSeek = { manager.seekTo(it) },
                                         onEnterAmbient = { slide -> screenSlide = slide; isAmbientMode = true; transitioningAlbum = null },
                                         albumHistory = albumHistory,
-                                        onOpenSettings = {
-                                            manager.triggerDiscovery()
-                                            showSettings = true
-                                        },
+                                        // Settings can't be scrolled inside a dream,
+                                        // so it opens in the app instead.
+                                        onOpenSettings = { openSettingsViaApp() },
                                         speakerGroups = speakerGroups,
                                         onToggleJoin = { name, join -> manager.toggleSpeakerJoin(name, join) },
                                         onAlbumArtPositioned = { nowPlayingArtRect = it },
@@ -387,26 +383,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                         }
                     }
 
-                    val savedFavorites by manager.savedFavorites.collectAsState()
                     val unplayableFavorite by manager.unplayableFavorite.collectAsState()
-
-                    if (showSettings) {
-                        SettingsModal(
-                            discoveredSpeakers = discoveredSpeakers,
-                            settingsManager = settingsManager,
-                            refreshStatus = refreshStatus,
-                            refreshCount = refreshCount,
-                            onRefreshFavorites = { speaker, a, p, r -> manager.refreshFavorites(a, p, r, speaker) },
-                            onSettingsSaved = { manager.refreshAfterSettingsSave() },
-                            onDismiss = { showSettings = false },
-                            micPermissionGranted = micPermissionGranted,
-                            onRequestMicPermission = { requestMicPermissionViaApp() },
-                            savedFavorites = savedFavorites,
-                            onRemoveFromSonos = { manager.deleteSonosFavorite(it, keepInApp = true) },
-                            onDeleteEverywhere = { manager.deleteSonosFavorite(it, keepInApp = false) },
-                            onDeleteSaved = { manager.deleteSavedFavorite(it) }
-                        )
-                    }
 
                     unplayableFavorite?.let { item ->
                         UnplayableFavoriteDialog(
@@ -448,6 +425,17 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
             Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 .putExtra(MainActivity.EXTRA_REQUEST_MIC, true)
+        )
+        finish()
+    }
+
+    // Same hand-off as requestMicPermissionViaApp: a dream's window doesn't
+    // scroll reliably, so Settings opens in the app instead.
+    private fun openSettingsViaApp() {
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(MainActivity.EXTRA_OPEN_SETTINGS, true)
         )
         finish()
     }

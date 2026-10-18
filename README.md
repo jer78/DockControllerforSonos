@@ -31,7 +31,9 @@ sits on its dock.
   (how blurred is adjustable, separately for TV mode if you like)
 - Play/pause, next/previous, shuffle and repeat (off, all, one)
 - Progress bar you can tap or drag to seek
-- Volume and mute; when rooms are grouped, they control the whole group
+- Volume and mute; when rooms are grouped, they control the whole group.
+  While muted, the volume bar says "Muted" and flashes in a color from the
+  album art
 - Previous (the song that actually played last, even across album changes)
   and Next Up (from the Sonos queue); tap Previous for details
 - **Browse the queue**: open the album's or playlist's track list, see every
@@ -155,8 +157,8 @@ sits on its dock.
 **Everywhere**
 - Instant updates: changes on your speakers and in Home Assistant show up
   straight away, without waiting for the next refresh
-- Works as an Android screensaver (Daydream), with Settings and every pop-up
-  available from it
+- Works as an Android screensaver (Daydream), with every pop-up available
+  from it; Settings opens in the app, where it scrolls properly
 - Dims automatically in a dark room using the light sensor
 
 ## Experimental features
@@ -229,7 +231,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.33.apk`). It's about 55 MB.
+   `DockController-v1.0.34.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -260,7 +262,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.33.apk
+adb install -r DockController-v1.0.34.apk
 ```
 
 Every release is signed with the same key. If Android says **App not

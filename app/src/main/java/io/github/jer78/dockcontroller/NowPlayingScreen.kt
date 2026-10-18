@@ -141,13 +141,15 @@ fun DockDashboardUI(
     val context = LocalContext.current
     val artworkUrl = TvFallbackArt.rememberArtworkUrl(isTvMode, trackState.albumArtUrl)
     var albumPalette by remember { mutableStateOf<List<Color>>(emptyList()) }
-    LaunchedEffect(artworkUrl, spectrumColorScheme, showSpectrumAnalyzer) {
-        albumPalette = if (showSpectrumAnalyzer && spectrumColorScheme == SpectrumColorScheme.ALBUM_ART) {
-            extractAlbumPalette(context, artworkUrl)
-        } else {
-            emptyList()
-        }
+    // Read as soon as the art changes, not just when the spectrum wants it,
+    // so the mute color below is ready the moment mute is pressed - reading
+    // it then flashed the fallback green first. Only the "Album Art"
+    // spectrum scheme uses it, so other schemes are unaffected.
+    LaunchedEffect(artworkUrl) {
+        albumPalette = extractAlbumPalette(context, artworkUrl)
     }
+    // A fresh pick each time it's muted, or the art changes while muted.
+    val muteColor = remember(trackState.isMuted, albumPalette) { pickMuteColor(albumPalette) }
 
     Box(
         modifier = Modifier
@@ -694,11 +696,11 @@ fun DockDashboardUI(
                         Icon(
                             imageVector = if (trackState.isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeDown,
                             contentDescription = "Mute Toggle",
-                            tint = if (trackState.isMuted) SonosMuteGreen.copy(alpha = muteIconAlpha) else Color.White,
+                            tint = if (trackState.isMuted) muteColor.copy(alpha = muteIconAlpha) else Color.White,
                             modifier = Modifier
                                 .size(32.dp)
                                 .background(
-                                    if (trackState.isMuted) SonosMuteGreen.copy(alpha = 0.2f * muteIconAlpha) else Color.Transparent,
+                                    if (trackState.isMuted) muteColor.copy(alpha = 0.2f * muteIconAlpha) else Color.Transparent,
                                     CircleShape
                                 )
                                 .clickable { onToggleMute() }
@@ -711,6 +713,7 @@ fun DockDashboardUI(
                             value = currentVolume,
                             onValueChange = { onVolumeChange(it) },
                             isMuted = trackState.isMuted,
+                            muteColor = muteColor,
                             // Grouped: volume and mute are the whole group's
                             // (per-room levels live in Speaker Groups).
                             labelPrefix = if (trackState.isGrouped) "Group · " else "",

@@ -47,6 +47,8 @@ class MainActivity : ComponentActivity() {
 
     // Only requested when the Spectrum Analyzer setting is turned on (see SpectrumAnalyzer.kt).
     private var micPermissionGranted by mutableStateOf(false)
+    // Set from EXTRA_OPEN_SETTINGS; the composition opens Settings and clears it.
+    private var openSettingsRequested by mutableStateOf(false)
     private val micPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> micPermissionGranted = granted }
@@ -74,6 +76,10 @@ class MainActivity : ComponentActivity() {
             intent.removeExtra(EXTRA_REQUEST_MIC)
             requestMicPermission()
         }
+        if (intent?.getBooleanExtra(EXTRA_OPEN_SETTINGS, false) == true) {
+            intent.removeExtra(EXTRA_OPEN_SETTINGS)
+            openSettingsRequested = true
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -92,6 +98,9 @@ class MainActivity : ComponentActivity() {
         // Set by SonosDreamService, which can't show a permission prompt
         // itself, to have the app ask for the mic as soon as it opens.
         const val EXTRA_REQUEST_MIC = "request_mic"
+        // Set by SonosDreamService, whose Settings can't be scrolled inside
+        // the screensaver, to have the app open Settings as soon as it opens.
+        const val EXTRA_OPEN_SETTINGS = "open_settings"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -255,6 +264,14 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(Unit) {
                 val currentSpeaker = settingsManager.sonosSpeaker.first()
                 if (currentSpeaker.isEmpty()) {
+                    manager.triggerDiscovery()
+                    showSettings = true
+                }
+            }
+
+            LaunchedEffect(openSettingsRequested) {
+                if (openSettingsRequested) {
+                    openSettingsRequested = false
                     manager.triggerDiscovery()
                     showSettings = true
                 }
