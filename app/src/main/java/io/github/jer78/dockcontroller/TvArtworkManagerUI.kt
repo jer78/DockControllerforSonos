@@ -85,7 +85,7 @@ fun SavedTvArtworkDialog(onDismiss: () -> Unit) {
                 Text(
                     "Show logos, posters and YouTube thumbnails TV mode has found, saved on this device so each " +
                         "one is only looked up once. Delete one to have it looked up again the next time it plays - " +
-                        "handy if it found the wrong show.",
+                        "handy if it found the wrong show. Artwork not shown for 14 days is deleted by itself.",
                     fontSize = 12.sp,
                     color = Color.Gray
                 )
@@ -171,7 +171,7 @@ private fun SavedTvArtworkRow(entry: SavedTvArtwork, imageUrl: String, onDelete:
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                "${entry.source.label} · Saved ${DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(entry.savedAtMs))}",
+                "${entry.source.label} · Last shown ${DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(entry.lastUsedMs))}",
                 fontSize = 12.sp,
                 color = Color.Gray,
                 maxLines = 1,

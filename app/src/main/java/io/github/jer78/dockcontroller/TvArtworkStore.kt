@@ -18,7 +18,8 @@ import java.util.concurrent.TimeUnit
 // or a YouTube video's thumbnail - kept across restarts with its images
 // downloaded, so each show or video is only looked up once. Settings > Home
 // Assistant > Saved TV Artwork lists them; deleting one has it looked up
-// again the next time it plays.
+// again the next time it plays. Artwork not shown for UNUSED_DELETE_MS is
+// deleted by itself, to save space.
 data class SavedTvArtwork(
     // "show:<name>" or "youtube:<video>" - see TvShowLogos/YouTubeThumbnails.
     val key: String,
@@ -34,7 +35,9 @@ data class SavedTvArtwork(
     // Whether TMDB was asked too (a key was set), so adding a key later
     // looks shows TVmaze answered up again.
     val withTmdbKey: Boolean = false,
-    val savedAtMs: Long = System.currentTimeMillis()
+    val savedAtMs: Long = System.currentTimeMillis(),
+    // When it was last shown (to the nearest USE_STAMP_INTERVAL_MS).
+    val lastUsedMs: Long = savedAtMs
 ) {
     enum class Source(val label: String) {
         TMDB_LOGO("TMDB logo"),
@@ -52,7 +55,25 @@ class TvArtworkStore private constructor(context: Context) {
     // Newest first.
     val entries: StateFlow<List<SavedTvArtwork>> = _entries.asStateFlow()
 
-    fun get(key: String): SavedTvArtwork? = _entries.value.firstOrNull { it.key == key }
+    @Volatile private var lastCleanUpMs = 0L
+
+    init {
+        cleanUp()
+    }
+
+    // Looking one up means it's being shown, so it's kept for another
+    // UNUSED_DELETE_MS - noted at most once per USE_STAMP_INTERVAL_MS, so
+    // TV mode's frequent lookups don't rewrite the list every time.
+    fun get(key: String): SavedTvArtwork? {
+        val entry = _entries.value.firstOrNull { it.key == key } ?: return null
+        val now = System.currentTimeMillis()
+        if (now - entry.lastUsedMs > USE_STAMP_INTERVAL_MS) {
+            _entries.update { list -> list.map { if (it.key == key) it.copy(lastUsedMs = now) else it } }
+            persist()
+        }
+        if (now - lastCleanUpMs > CLEAN_UP_INTERVAL_MS) cleanUp()
+        return entry
+    }
 
     // Downloads its images (a failed download just means it's shown from
     // the web instead) and saves it, replacing any older entry for the key.
@@ -68,6 +89,27 @@ class TvArtworkStore private constructor(context: Context) {
         _entries.update { list -> list.filter { it.key != key } }
         persist()
         deleteImages(removed)
+    }
+
+    // Deletes artwork not shown for UNUSED_DELETE_MS, and any downloaded
+    // file nothing uses any more (e.g. left by an interrupted download).
+    @Synchronized
+    fun cleanUp() {
+        lastCleanUpMs = System.currentTimeMillis()
+        val cutoff = lastCleanUpMs - UNUSED_DELETE_MS
+        val stale = _entries.value.filter { it.lastUsedMs < cutoff }
+        if (stale.isNotEmpty()) {
+            val staleKeys = stale.map { it.key }.toSet()
+            _entries.update { list -> list.filter { it.key !in staleKeys } }
+            persist()
+            Log.i("TvArtworkStore", "Deleted ${stale.size} TV artwork not shown in 14 days")
+        }
+        val inUse = _entries.value.flatMap { listOfNotNull(it.url, it.backgroundUrl) }.map { imageFile(it).name }.toSet()
+        // Not ones written in the last hour, which may be downloading for
+        // artwork about to be saved.
+        dir.listFiles()
+            ?.filter { it.name !in inUse && lastCleanUpMs - it.lastModified() > USE_STAMP_INTERVAL_MS }
+            ?.forEach { it.delete() }
     }
 
     fun deleteAll() {
@@ -135,7 +177,8 @@ class TvArtworkStore private constructor(context: Context) {
                     backgroundUrl = o.optString("background").ifBlank { null },
                     aspectRatio = o.optDouble("aspect", 16.0 / 9.0).toFloat(),
                     withTmdbKey = o.optBoolean("with_tmdb_key"),
-                    savedAtMs = o.optLong("saved_at")
+                    savedAtMs = o.optLong("saved_at"),
+                    lastUsedMs = o.optLong("last_used", o.optLong("saved_at"))
                 )
             }
         }
@@ -159,6 +202,7 @@ class TvArtworkStore private constructor(context: Context) {
                         .put("aspect", it.aspectRatio.toDouble())
                         .put("with_tmdb_key", it.withTmdbKey)
                         .put("saved_at", it.savedAtMs)
+                        .put("last_used", it.lastUsedMs)
                 )
             }
             // Written to a temp file first, so a crash mid-write can't
@@ -175,6 +219,10 @@ class TvArtworkStore private constructor(context: Context) {
     }
 
     companion object {
+        private const val UNUSED_DELETE_MS = 14L * 24 * 60 * 60 * 1000
+        private const val USE_STAMP_INTERVAL_MS = 60L * 60 * 1000
+        private const val CLEAN_UP_INTERVAL_MS = 24L * 60 * 60 * 1000
+
         @Volatile
         private var instance: TvArtworkStore? = null
 

@@ -141,6 +141,11 @@ class SettingsManager(private val context: Context) {
         // observing a favorited album actually play, keyed by the
         // favorite's playUri - backfilled into the Favorites display.
         val FAVORITE_ARTIST_CACHE_JSON = stringPreferencesKey("favorite_artist_cache_json")
+        // The grid's recently played favorites taking a turn at the front
+        // (on by default), and the last few favorites played: a JSON array
+        // of {"key": <favoriteKey>, "at": <epoch ms>}, newest first.
+        val GRID_RECENTLY_PLAYED = booleanPreferencesKey("grid_recently_played")
+        val RECENTLY_PLAYED_FAVORITES = stringPreferencesKey("recently_played_favorites")
 
         const val TV_SCREENSAVER_DELAY_MIN_SECONDS = 30
         const val TV_SCREENSAVER_DELAY_MAX_SECONDS = 1800
@@ -256,6 +261,31 @@ class SettingsManager(private val context: Context) {
     }
 
     val coverFlowGridView: Flow<Boolean> = context.dataStore.data.map { it[COVER_FLOW_GRID_VIEW] ?: false }
+
+    val gridRecentlyPlayed: Flow<Boolean> = context.dataStore.data.map { it[GRID_RECENTLY_PLAYED] ?: true }
+
+    suspend fun setGridRecentlyPlayed(enabled: Boolean) {
+        context.dataStore.edit { it[GRID_RECENTLY_PLAYED] = enabled }
+    }
+
+    val recentlyPlayedFavorites: Flow<List<Pair<String, Long>>> = context.dataStore.data.map { prefs ->
+        try {
+            val array = JSONArray(prefs[RECENTLY_PLAYED_FAVORITES] ?: "[]")
+            (0 until array.length()).map { i ->
+                val entry = array.getJSONObject(i)
+                entry.getString("key") to entry.getLong("at")
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList()
+        }
+    }
+
+    suspend fun saveRecentlyPlayedFavorites(played: List<Pair<String, Long>>) {
+        val array = JSONArray()
+        played.forEach { (key, at) -> array.put(JSONObject().put("key", key).put("at", at)) }
+        context.dataStore.edit { it[RECENTLY_PLAYED_FAVORITES] = array.toString() }
+    }
 
     val coverFlowSortByArtist: Flow<Boolean> = context.dataStore.data.map { it[COVER_FLOW_SORT_BY_ARTIST] ?: true }
 

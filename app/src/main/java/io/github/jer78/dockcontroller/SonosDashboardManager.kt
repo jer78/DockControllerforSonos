@@ -44,6 +44,8 @@ class SonosDashboardManager private constructor(context: Context) {
     // there instead of restarting from the first album. Only read when Cover
     // Flow is first composed, so it doesn't need to be observable.
     var coverFlowCenterAlbum: AlbumHistoryItem? = null
+    // Likewise where the grid was scrolled (or drifted) to.
+    var coverFlowGridPosition: GridScrollPosition? = null
 
     // Every favorited ALBUM, whatever Cover Flow's category filters - used
     // for matching what's playing (to learn album artists) and for
@@ -79,6 +81,22 @@ class SonosDashboardManager private constructor(context: Context) {
     // that share a title when it starts playing (see pickPlayingFavorite).
     @Volatile private var lastStartedFavorite: Pair<AlbumHistoryItem, Long>? = null
 
+    // The last RECENTLY_PLAYED_COUNT favorites played, from here or seen
+    // playing (e.g. started in the Sonos app): favoriteKey -> when it
+    // started, newest first. For the grid's recently played (see CoverGrid).
+    private val _recentlyPlayed = MutableStateFlow<List<Pair<String, Long>>>(emptyList())
+    val recentlyPlayed: StateFlow<List<Pair<String, Long>>> = _recentlyPlayed.asStateFlow()
+
+    // Playing the same favorite on and on keeps the time it started.
+    private fun markFavoritePlayed(item: AlbumHistoryItem) {
+        val key = favoriteKey(item)
+        val played = _recentlyPlayed.value
+        if (played.firstOrNull()?.first == key) return
+        val updated = (listOf(key to System.currentTimeMillis()) + played.filterNot { it.first == key }).take(RECENTLY_PLAYED_COUNT)
+        _recentlyPlayed.value = updated
+        scope.launch { settingsManager.saveRecentlyPlayedFavorites(updated) }
+    }
+
     private val _discoveredSpeakers = MutableStateFlow<List<String>>(emptyList())
     val discoveredSpeakers: StateFlow<List<String>> = _discoveredSpeakers.asStateFlow()
 
@@ -113,6 +131,7 @@ class SonosDashboardManager private constructor(context: Context) {
 
     companion object {
         private const val ACTIVE_POLL_INTERVAL_MS = 2000L
+        private const val RECENTLY_PLAYED_COUNT = 5
         private const val IDLE_POLL_INTERVAL_MS = 6000L
         private const val ACTIVE_HA_POLL_INTERVAL_MS = 5000L
         private const val IDLE_HA_POLL_INTERVAL_MS = 15000L
@@ -180,6 +199,7 @@ class SonosDashboardManager private constructor(context: Context) {
         if (pollingJob != null) return
         scope.launch {
             _favoriteArtistCache.value = settingsManager.favoriteArtistCache.first()
+            _recentlyPlayed.value = settingsManager.recentlyPlayedFavorites.first()
             // The saved favorites show straight away, even with the
             // speaker offline, until the refresh below brings them up to date.
             shownKinds = Triple(
@@ -799,6 +819,7 @@ class SonosDashboardManager private constructor(context: Context) {
                                     artist
                                 )
                                 if (match != null) {
+                                    if (state == "PLAYING") markFavoritePlayed(match)
                                     // Keyed by the album's service ID, not
                                     // playUri: Sonos favorite IDs ("FV:2/<n>")
                                     // aren't guaranteed stable across
@@ -1320,7 +1341,7 @@ class SonosDashboardManager private constructor(context: Context) {
             val status = "$result: '${album.albumTitle}'"
             _trackState.update { it.copy(lastCommandSent = status) }
             val failed = result.contains("FAIL") || result.contains("ERR")
-            if (failed) reportError(status)
+            if (failed) reportError(status) else markFavoritePlayed(album)
             // An offline speaker says nothing about whether the favorite
             // itself still works.
             if (failed && fromSavedData && askIfUnplayable && result != "ERR: Speaker Offline") {

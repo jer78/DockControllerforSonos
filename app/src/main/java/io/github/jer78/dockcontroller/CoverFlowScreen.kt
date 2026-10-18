@@ -68,6 +68,8 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import android.text.format.DateUtils
+import androidx.compose.ui.unit.IntSize
 import java.text.Normalizer
 import java.util.Calendar
 import java.util.Locale
@@ -235,6 +237,10 @@ fun AmbientClockScreen(
     // in the center - lets the caller resume the rotation where it left off.
     initialCenterAlbum: AlbumHistoryItem? = null,
     onCenterAlbumChanged: (AlbumHistoryItem) -> Unit = {},
+    // The same for the grid: where it was scrolled to, and a callback as
+    // it moves.
+    initialGridPosition: GridScrollPosition? = null,
+    onGridPositionChanged: (GridScrollPosition) -> Unit = {},
     // Settings > Display > Cover Flow Track Cards.
     hidePrevious: Boolean = false,
     hideNextUp: Boolean = false,
@@ -264,7 +270,11 @@ fun AmbientClockScreen(
     widgetsMode: CoverFlowWidgetsMode = CoverFlowWidgetsMode.OFF,
     onHaCommand: (HaCommand) -> Unit = {},
     onHaCommandWithResult: (HaCommand, (HaServiceResult) -> Unit) -> Unit = { _, _ -> },
-    onReorderHaWidgets: (List<HaWidgetSlot>) -> Unit = {}
+    onReorderHaWidgets: (List<HaWidgetSlot>) -> Unit = {},
+    // The last few favorites played (favoriteKey -> when), which the
+    // drifting grid brings to the front in turn when showRecentlyPlayed.
+    recentlyPlayed: List<Pair<String, Long>> = emptyList(),
+    showRecentlyPlayed: Boolean = false
 ) {
     var isFadingOut by remember { mutableStateOf(false) }
     // Favorite awaiting the user's confirm/cancel, and then the one they
@@ -647,6 +657,9 @@ fun AmbientClockScreen(
                     else -> 32.dp
                 },
                 letterOf = { sortKey(it) },
+                // Search results are a list of their own, not resumed.
+                initialPosition = initialGridPosition.takeUnless { searchOpen },
+                onPositionChanged = { if (!searchOpen) onGridPositionChanged(it) },
                 artistFirst = { artistFirst(it) },
                 showLetterBar = !searchOpen,
                 emptyText = "No matches for \"${query.trim()}\"",
@@ -658,6 +671,9 @@ fun AmbientClockScreen(
                 // The same rules as Cover Flow's own auto-advance.
                 autoScroll = !searchOpen && pendingFavoriteDelete == null,
                 onDriftStart = { autoScrolls++ },
+                recentlyPlayed = remember(recentlyPlayed, showRecentlyPlayed) {
+                    if (showRecentlyPlayed) recentlyPlayed.toMap() else emptyMap()
+                },
                 modifier = Modifier.fillMaxSize().alpha(fadeAlpha)
             )
         } else if (shownAlbums.isNotEmpty()) {
@@ -1492,14 +1508,35 @@ private fun CoverGrid(
     // still long enough to burn in.
     autoScroll: Boolean = false,
     onDriftStart: () -> Unit = {},
+    // Where to start, if it was left there for a list this size, and a
+    // callback as it scrolls.
+    initialPosition: GridScrollPosition? = null,
+    onPositionChanged: (GridScrollPosition) -> Unit = {},
+    // Recently played favorites (favoriteKey -> when): while drifting, each
+    // one passing the middle flips out to the front for FEATURE_HOLD_MS,
+    // saying when it was last played, then flips back into its place.
+    recentlyPlayed: Map<String, Long> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     val animatedBottom by animateDpAsState(bottomPadding, tween(400), label = "gridBottom")
-    val gridState = rememberLazyGridState()
+    val resumeAt = initialPosition?.takeIf { it.listSize == albums.size }
+    val gridState = rememberLazyGridState(resumeAt?.index ?: 0, resumeAt?.offset ?: 0)
+    val currentOnPositionChanged by rememberUpdatedState(onPositionChanged)
+    LaunchedEffect(gridState, albums) {
+        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+            .collect { (index, offset) -> currentOnPositionChanged(GridScrollPosition(index, offset, albums.size)) }
+    }
     val scope = rememberCoroutineScope()
     val letters = remember(albums) { albums.map { indexLetter(letterOf(it)) } }
-    // A new search or category starts from the beginning.
-    LaunchedEffect(albums) { gridState.scrollToItem(0) }
+    // A new search or category starts from the beginning - but not the list
+    // it opened on, which resumes where it was left.
+    var shownList by remember { mutableStateOf(albums) }
+    LaunchedEffect(albums) {
+        if (albums != shownList) {
+            shownList = albums
+            gridState.scrollToItem(0)
+        }
+    }
 
     // The letter just picked on the A-Z bar: its albums get a gold border
     // until the grid starts drifting by itself.
@@ -1560,13 +1597,54 @@ private fun CoverGrid(
         label = "gridCaptions"
     )
 
-    Box(
-        modifier = modifier.pointerInput(Unit) {
-            awaitEachGesture {
-                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                lastTouch = System.currentTimeMillis()
-            }
+    // The recently played favorite out at the front (its index in the
+    // grid, whose place is left empty meanwhile), where that place is now,
+    // and how far out it is (0 = in its place, 1 = at the front). Each
+    // copy of the list in an endless grid gets its own turn.
+    var featuredIndex by remember { mutableStateOf<Int?>(null) }
+    var featuredBounds by remember { mutableStateOf(Rect.Zero) }
+    val featureProgress = remember { Animatable(0f) }
+    val featuredAlready = remember(albums) { mutableSetOf<Int>() }
+    val isRecent = remember(albums, recentlyPlayed) { albums.map { favoriteKey(it) in recentlyPlayed } }
+    LaunchedEffect(drifting, isRecent) {
+        // Whatever's out goes back first - straight away after a touch.
+        if (featuredIndex != null) {
+            featureProgress.animateTo(0f, tween(if (drifting) FEATURE_FLIP_MS else 400, easing = FastOutSlowInEasing))
         }
+        featuredIndex = null
+        if (!drifting || isRecent.none { it }) return@LaunchedEffect
+        while (true) {
+            delay(500)
+            val info = gridState.layoutInfo
+            val middle = info.viewportSize.width * 0.25f..info.viewportSize.width * 0.75f
+            val next = info.visibleItemsInfo.firstOrNull { item ->
+                item.index !in featuredAlready && isRecent[item.index % albums.size] &&
+                    (item.offset.x + item.size.width / 2f) in middle
+            } ?: continue
+            featuredAlready += next.index
+            featuredIndex = next.index
+            featureProgress.snapTo(0f)
+            featureProgress.animateTo(1f, tween(FEATURE_FLIP_MS, easing = FastOutSlowInEasing))
+            delay(FEATURE_HOLD_MS)
+            featureProgress.animateTo(0f, tween(FEATURE_FLIP_MS, easing = FastOutSlowInEasing))
+            featuredIndex = null
+        }
+    }
+    var gridOrigin by remember { mutableStateOf(Offset.Zero) }
+    var gridSize by remember { mutableStateOf(IntSize.Zero) }
+
+    Box(
+        modifier = modifier
+            .onGloballyPositioned {
+                gridOrigin = it.boundsInWindow().topLeft
+                gridSize = it.size
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    lastTouch = System.currentTimeMillis()
+                }
+            }
     ) {
         if (albums.isEmpty()) {
             Text(
@@ -1594,11 +1672,16 @@ private fun CoverGrid(
                     animationSpec = tween(400),
                     label = "letterHighlight"
                 )
+                // Out at the front: its place is left empty, just the frame.
+                val featuredOut = index == featuredIndex
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
                         .aspectRatio(1f)
-                        .onGloballyPositioned { bounds = it.boundsInWindow() }
+                        .onGloballyPositioned {
+                            bounds = it.boundsInWindow()
+                            if (index == featuredIndex) featuredBounds = bounds
+                        }
                         .border(1.dp, Color.White.copy(alpha = 0.1f), RectangleShape)
                         .border(3.dp, GridHighlightGold.copy(alpha = highlightAlpha), RectangleShape)
                         .combinedClickable(
@@ -1610,7 +1693,10 @@ private fun CoverGrid(
                         model = album.artUrl,
                         contentDescription = album.albumTitle,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.05f))
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .alpha(if (featuredOut) 0f else 1f)
+                            .background(Color.White.copy(alpha = 0.05f))
                     )
                     // Title and artist on a dark band along the bottom of the
                     // art, so they stay readable over artwork with writing
@@ -1620,7 +1706,7 @@ private fun CoverGrid(
                         modifier = Modifier
                             .align(Alignment.BottomStart)
                             .fillMaxWidth()
-                            .graphicsLayer { alpha = captionAlpha }
+                            .graphicsLayer { alpha = if (featuredOut) 0f else captionAlpha }
                             .background(Color.Black.copy(alpha = 0.65f))
                             .padding(horizontal = 10.dp, vertical = 8.dp)
                     ) {
@@ -1646,6 +1732,21 @@ private fun CoverGrid(
                     }
                 }
             }
+        }
+
+        featuredIndex?.let { index ->
+            FeaturedRecentAlbum(
+                album = albums[index % albums.size],
+                playedAt = recentlyPlayed[favoriteKey(albums[index % albums.size])],
+                // Where its place in the grid is now, and the front: the
+                // middle of the space the grid's rows take up.
+                from = featuredBounds.translate(-gridOrigin),
+                areaTop = with(LocalDensity.current) { GridTop.toPx() },
+                areaBottom = gridSize.height - with(LocalDensity.current) { animatedBottom.toPx() },
+                areaWidth = gridSize.width.toFloat(),
+                progress = featureProgress.value,
+                onPlay = { onPlay(it, featuredBounds) }
+            )
         }
 
         // After the grid, so it sits on top: the grid fills the whole screen
@@ -1695,6 +1796,84 @@ private fun CoverGrid(
 }
 
 private val GridLetterBarTop = 150.dp
+
+// A recently played favorite's flip out to the front and back, and how long
+// it stays there.
+private const val FEATURE_FLIP_MS = 900
+private const val FEATURE_HOLD_MS = 3_000L
+
+// The drifting grid's recently played favorite on its way to or from the
+// front (progress 0 = in its place at from, 1 = at the front): growing and
+// turning over once as it goes, over a dimmed grid, with when it was last
+// played underneath once it's there. A tap plays it.
+@Composable
+private fun FeaturedRecentAlbum(
+    album: AlbumHistoryItem,
+    playedAt: Long?,
+    from: Rect,
+    areaTop: Float,
+    areaBottom: Float,
+    areaWidth: Float,
+    progress: Float,
+    onPlay: (AlbumHistoryItem) -> Unit
+) {
+    val density = LocalDensity.current
+    val captionRoom = with(density) { 84.dp.toPx() }
+    val frontSize = minOf(from.width * 2.2f, areaBottom - areaTop - captionRoom).coerceAtLeast(from.width)
+    val frontLeft = (areaWidth - frontSize) / 2f
+    val frontTop = areaTop + (areaBottom - areaTop - frontSize - captionRoom) / 2f
+    val size = lerp(from.width, frontSize, progress)
+    val left = lerp(from.left, frontLeft, progress)
+    val top = lerp(from.top, frontTop, progress)
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer { alpha = progress }
+            .background(Color.Black.copy(alpha = 0.45f))
+    )
+    AsyncImage(
+        model = album.artUrl,
+        contentDescription = album.albumTitle,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier
+            .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
+            .size(with(density) { size.toDp() })
+            .graphicsLayer {
+                rotationY = 360f * progress
+                cameraDistance = 16f * density.density
+                shadowElevation = 24.dp.toPx() * progress
+            }
+            .clickable { onPlay(album) }
+    )
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .offset { IntOffset(frontLeft.roundToInt(), (frontTop + frontSize).roundToInt()) }
+            .width(with(density) { frontSize.toDp() })
+            .padding(top = 14.dp)
+            // Only once it's (nearly) at the front.
+            .graphicsLayer { alpha = ((progress - 0.7f) / 0.3f).coerceIn(0f, 1f) }
+    ) {
+        Text(
+            album.albumTitle,
+            color = Color.White,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (playedAt != null) {
+            val ago = DateUtils.getRelativeTimeSpanString(playedAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
+            Text(
+                "Last played ${if (ago == "Yesterday") "yesterday" else ago}",
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 15.sp,
+                maxLines = 1
+            )
+        }
+    }
+}
 private val GridTop = 196.dp
 
 // How many times an endless grid repeats its list, how long it sits

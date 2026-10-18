@@ -156,6 +156,8 @@ class MainActivity : ComponentActivity() {
             val nowPlayingClockMode by settingsManager.nowPlayingClockMode.collectAsState(initial = NowPlayingClockMode.OFF)
             val showEndsAt by settingsManager.showEndsAt.collectAsState(initial = true)
             val coverFlowWidgetsMode by settingsManager.coverFlowWidgetsMode.collectAsState(initial = CoverFlowWidgetsMode.NEAR)
+            val gridRecentlyPlayed by settingsManager.gridRecentlyPlayed.collectAsState(initial = true)
+            val recentlyPlayed by manager.recentlyPlayed.collectAsState()
             val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
                 initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
             )
@@ -311,6 +313,8 @@ class MainActivity : ComponentActivity() {
                                 onDeleteFavorite = { manager.deleteFavoriteEverywhere(it) },
                                 initialCenterAlbum = manager.coverFlowCenterAlbum,
                                 onCenterAlbumChanged = { manager.coverFlowCenterAlbum = it },
+                                initialGridPosition = manager.coverFlowGridPosition,
+                                onGridPositionChanged = { manager.coverFlowGridPosition = it },
                                 hidePrevious = coverFlowHidePrevious,
                                 hideNextUp = coverFlowHideNextUp,
                                 hideNowPlaying = coverFlowHideNowPlaying,
@@ -325,7 +329,9 @@ class MainActivity : ComponentActivity() {
                                 widgetsMode = coverFlowWidgetsMode,
                                 onHaCommand = { manager.sendHaCommand(it) },
                                 onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
-                                onReorderHaWidgets = { manager.reorderHaWidgets(it) }
+                                onReorderHaWidgets = { manager.reorderHaWidgets(it) },
+                                recentlyPlayed = recentlyPlayed,
+                                showRecentlyPlayed = gridRecentlyPlayed
                             )
                         }
                         DockScreen.NOW_PLAYING -> {

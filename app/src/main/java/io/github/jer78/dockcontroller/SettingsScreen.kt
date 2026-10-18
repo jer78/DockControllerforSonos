@@ -451,6 +451,7 @@ fun SettingsModal(
     var nowPlayingClockMode by remember { mutableStateOf(NowPlayingClockMode.OFF) }
     var showEndsAt by remember { mutableStateOf(true) }
     var coverFlowWidgetsMode by remember { mutableStateOf(CoverFlowWidgetsMode.NEAR) }
+    var gridRecentlyPlayed by remember { mutableStateOf(true) }
     var coverFlowMotionSensor by remember { mutableStateOf("") }
     var autoUnmuteAfterAds by remember { mutableStateOf(false) }
     var tvShowImages by remember { mutableStateOf(true) }
@@ -537,6 +538,7 @@ fun SettingsModal(
         nowPlayingClockMode = settingsManager.nowPlayingClockMode.first()
         showEndsAt = settingsManager.showEndsAt.first()
         coverFlowWidgetsMode = settingsManager.coverFlowWidgetsMode.first()
+        gridRecentlyPlayed = settingsManager.gridRecentlyPlayed.first()
         coverFlowMotionSensor = settingsManager.coverFlowMotionSensor.first()
         autoUnmuteAfterAds = settingsManager.autoUnmuteAfterAds.first()
         tvShowImages = settingsManager.tvShowImages.first()
@@ -746,6 +748,19 @@ fun SettingsModal(
                                         hideNextUp = it
                                         scope.launch { settingsManager.setCoverFlowHideNextUp(it) }
                                     }
+                                    HorizontalDivider()
+
+                                    Text("Grid:", fontWeight = FontWeight.SemiBold)
+                                    SettingsToggleRow("Show Recently Played", gridRecentlyPlayed) {
+                                        gridRecentlyPlayed = it
+                                        scope.launch { settingsManager.setGridRecentlyPlayed(it) }
+                                    }
+                                    Text(
+                                        "While the grid drifts by itself, each of the last 5 favorites played flips out to the " +
+                                            "front for a few seconds as it passes, saying when it was last played.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
                                     HorizontalDivider()
 
                                     Text("Home Assistant Widgets:", fontWeight = FontWeight.SemiBold)

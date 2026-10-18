@@ -110,6 +110,11 @@ data class AlbumHistoryItem(
     val replay: String = ""
 )
 
+// Where the grid was scrolled to: the first visible item (counting the
+// endless grid's repeats) and how far into it, for a list of listSize
+// favorites - only resumed for a list that size.
+data class GridScrollPosition(val index: Int, val offset: Int, val listSize: Int)
+
 data class SonosSpeakerGroup(
     val name: String,
     val isJoined: Boolean,
