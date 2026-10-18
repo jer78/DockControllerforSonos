@@ -43,11 +43,17 @@ sits on its dock.
   volume slider
 - Sound Settings: bass, treble, loudness, Night Sound, Speech Enhancement and
   subwoofer, where the speaker supports them
+- **Crossfade** between songs, switched on or off right from Settings →
+  Setup
 - Optional clock, in music mode, TV mode or both. In TV mode it sits above
   the show's title and takes turns with the time the show will end
 - Optional spectrum analyzer behind the screen (or just over the artwork),
   driven by the microphone
 - Swipe left, right or down to go to Cover Flow
+- **Cover Flow between songs**: while an album plays, Now Playing hands over
+  to Cover Flow or the grid (already scrolling) after 20 seconds, and comes
+  back each time a new song starts. It waits while you're using the screen.
+  On by default; Settings → Now Playing → Show Cover Flow Between Songs
 
 **Cover Flow**
 - A 3D carousel of albums standing on a glass table, shown when music is
@@ -99,7 +105,17 @@ sits on its dock.
 - Ambient clock, in 12- or 24-hour time, with the current weather under the
   date when you have a Home Assistant weather widget
 - Optional: when an album finishes, carry on with a random album from your
-  Sonos Favorites
+  Sonos Favorites, skipping any played in the last 24 hours. **Prefer Same
+  Genre** (on by default) picks one in the same genre as the album that just
+  ended when there is one
+- **Artist suggestions** (optional, with a free [Last.fm API
+  key](https://www.last.fm/api)): after a minute of music on Cover Flow or
+  the grid, three albums by artists like the one playing - ones not already
+  in your favorites - fade up on screen. Tap one to see how to add it in the
+  Sonos app; **Open Sonos App** copies it, ready to paste into Sonos's
+  search. Afterwards they take a turn among the track cards as **You Might
+  Like**, and a tap brings them back. They show at most every 10 minutes,
+  or sooner for a new artist (Settings → Now Playing → Artist Suggestions)
 
 **Managing favorites** (Settings > Favorites)
 - Lists every favorite together, each with a badge: **Sonos** (still in your
@@ -247,7 +263,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.36.apk`). It's about 55 MB.
+   `DockController-v1.0.37.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -278,7 +294,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.36.apk
+adb install -r DockController-v1.0.37.apk
 ```
 
 Every release is signed with the same key. If Android says **App not
@@ -308,7 +324,10 @@ settings.
    them, and pick the media player for TV mode. Optionally add a free
    [TMDB](https://www.themoviedb.org/settings/api) API key for better TV show
    logos.
-4. Tap **Save & Apply**.
+4. **Now Playing** (optional): for artist suggestions, enter a free
+   [Last.fm](https://www.last.fm/api) API key. It's checked with Last.fm
+   straight away, then saved and hidden.
+5. Tap **Save & Apply**.
 
 **To have it come on whenever the tablet is docked**, make it the screen saver:
 
@@ -371,8 +390,11 @@ own music library, AirPlay and Spotify Connect.
   plus its WebSocket API for instant updates.
 - **UI**: Kotlin and Jetpack Compose.
 
-Your Home Assistant URL and token, and your TMDB and YouTube keys, are stored
-only on the device.
+Your Home Assistant URL and token, and your TMDB, YouTube and Last.fm keys,
+are stored only on the device.
+
+Artist suggestions come from [Last.fm](https://www.last.fm), using your own
+API key. This app is not affiliated with or endorsed by Last.fm.
 
 TV show logos come from [TMDB](https://www.themoviedb.org) (when you add an
 API key) or [TVmaze](https://www.tvmaze.com). This product uses the TMDB API

@@ -142,8 +142,39 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                         ) == PackageManager.PERMISSION_GRANTED
                     }
 
+                    val swapWhilePlaying by settingsManager.swapWhilePlaying.collectAsState(initial = true)
+
                     var isAmbientMode by remember { mutableStateOf(false) }
                     var isTvAmbientMode by remember { mutableStateOf(false) }
+                    // On Cover Flow because of Show Cover Flow Between Songs,
+                    // rather than idle - see MainActivity.
+                    var swappedWhilePlaying by remember { mutableStateOf(false) }
+                    LaunchedEffect(isAmbientMode, trackState.isPlaying) {
+                        if (!isAmbientMode) swappedWhilePlaying = false
+                        else if (!trackState.isPlaying) {
+                            delay(10_000)
+                            swappedWhilePlaying = false
+                        }
+                    }
+                    // Artist suggestions - see MainActivity.
+                    val lastFmApiKey by settingsManager.lastFmApiKey.collectAsState(initial = "")
+                    val artistSuggestions by settingsManager.artistSuggestions.collectAsState(initial = true)
+                    var suggestions by remember { mutableStateOf<List<SuggestedAlbum>?>(null) }
+                    var returnAfterSuggestions by remember { mutableStateOf(false) }
+                    LaunchedEffect(isAmbientMode) {
+                        if (!isAmbientMode) {
+                            suggestions = null
+                            returnAfterSuggestions = false
+                        }
+                    }
+                    fun closeSuggestions() {
+                        suggestions = null
+                        if (returnAfterSuggestions) isAmbientMode = false
+                        returnAfterSuggestions = false
+                    }
+                    ReturnForNextSongEffect(trackState, swappedWhilePlaying) {
+                        if (suggestions != null) returnAfterSuggestions = true else isAmbientMode = false
+                    }
 
                     // Errors are logged (with timestamps) in the manager; CommandErrorFlash
                     // shows only fresh ones, so re-entering this screen doesn't re-flash an old error.
@@ -216,8 +247,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     // Cover Flow / TV Ambient run most of the time here - back
                     // off polling while idle there instead of polling Sonos/HA
                     // every couple seconds around the clock.
-                    LaunchedEffect(isAmbientMode, isTvAmbientMode) {
-                        manager.setIdleScreen(isAmbientMode || isTvAmbientMode)
+                    LaunchedEffect(isAmbientMode, isTvAmbientMode, swappedWhilePlaying) {
+                        manager.setIdleScreen((isAmbientMode && !swappedWhilePlaying) || isTvAmbientMode)
                     }
 
                     Box(
@@ -227,9 +258,18 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     ) {
                         val currentScreen = when {
                             isTvAmbientMode -> DockScreen.TV_AMBIENT
+                            isAmbientMode && suggestions != null -> DockScreen.SUGGESTIONS
                             isAmbientMode -> DockScreen.COVER_FLOW
                             else -> DockScreen.NOW_PLAYING
                         }
+                        SuggestionsEffect(
+                            active = artistSuggestions && currentScreen == DockScreen.COVER_FLOW && trackState.isPlaying &&
+                                !isTvMode && !dialogHost.isShowingDialog && transitioningAlbum == null,
+                            artist = trackState.artist,
+                            apiKey = lastFmApiKey,
+                            favorites = albumHistory,
+                            onShow = { suggestions = it }
+                        )
                         // The swipe direction only shapes the trip to Cover Flow and back -
                         // once Now Playing is reached again, later switches are vertical.
                         LaunchedEffect(currentScreen) {
@@ -242,6 +282,17 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                             label = "screenTransition"
                         ) { screen ->
                             when (screen) {
+                                DockScreen.SUGGESTIONS -> {
+                                    // Kept while it animates away, after suggestions is cleared.
+                                    val shown = remember { suggestions.orEmpty() }
+                                    val sonosApp = remember { sonosAppLaunchIntent(this@SonosDreamService) }
+                                    SuggestionsScreen(
+                                        suggestions = shown,
+                                        playingArtist = trackState.artist,
+                                        onDone = { closeSuggestions() },
+                                        onOpenSonosApp = sonosApp?.let { intent -> { openSonosApp(intent) } }
+                                    )
+                                }
                                 DockScreen.TV_AMBIENT -> {
                                     TvAmbientScreen(
                                         trackState = trackState,
@@ -288,7 +339,14 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
                                         onReorderHaWidgets = { manager.reorderHaWidgets(it) },
                                         recentlyPlayed = recentlyPlayed,
-                                        showRecentlyPlayed = gridRecentlyPlayed
+                                        showRecentlyPlayed = gridRecentlyPlayed,
+                                        startScrolling = swappedWhilePlaying,
+                                        suggestions = if (artistSuggestions && lastFmApiKey.isNotBlank()) {
+                                            ArtistSuggestions.latestFor(trackState.artist)
+                                        } else emptyList(),
+                                        onShowSuggestions = {
+                                            suggestions = ArtistSuggestions.latestFor(trackState.artist).ifEmpty { null }
+                                        }
                                     )
                                 }
                                 DockScreen.NOW_PLAYING -> {
@@ -337,7 +395,13 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         hideNextUp = nowPlayingHideNextUp,
                                         clockMode = nowPlayingClockMode,
                                         use24HourClock = use24HourClock,
-                                        showEndsAt = showEndsAt
+                                        showEndsAt = showEndsAt,
+                                        swapWhilePlaying = swapWhilePlaying && !dialogHost.isShowingDialog,
+                                        onSwapWhilePlaying = {
+                                            screenSlide = ScreenSlide.VERTICAL
+                                            swappedWhilePlaying = true
+                                            isAmbientMode = true
+                                        }
                                     )
                                 }
                             }
@@ -439,6 +503,12 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 .putExtra(MainActivity.EXTRA_OPEN_SETTINGS, true)
         )
+        finish()
+    }
+
+    // From artist suggestions - the dream steps aside for it, like Settings.
+    private fun openSonosApp(intent: Intent) {
+        startActivity(Intent(intent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         finish()
     }
 

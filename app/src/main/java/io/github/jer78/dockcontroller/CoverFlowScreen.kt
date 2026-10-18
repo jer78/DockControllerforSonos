@@ -151,6 +151,56 @@ private fun CoverFlowTrackCard(
     }
 }
 
+// Whose turn it is on the bottom-right track card.
+private enum class TrackCardTurn { NOW_PLAYING, NEXT_UP, SUGGESTIONS }
+
+// The track card for the last artist suggestions: their three covers, and a
+// tap shows them again (see SuggestionsScreen).
+@Composable
+private fun CoverFlowSuggestionsCard(
+    suggestions: List<SuggestedAlbum>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = Color.Black.copy(alpha = 0.6f),
+        shape = RoundedCornerShape(20.dp),
+        modifier = modifier
+            .width(360.dp)
+            .clickable { onClick() }
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "YOU MIGHT LIKE",
+                color = Color.White,
+                fontWeight = FontWeight.Black,
+                fontSize = 18.sp,
+                letterSpacing = 1.sp,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                suggestions.take(3).forEach { suggestion ->
+                    AsyncImage(
+                        model = suggestion.artUrl,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = suggestions.joinToString(", ") { it.artist },
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 13.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
 // Matched by identity rather than index, since a refresh or a new sort
 // reorders the list. playUri is the stable ID when present; items without
 // one are identified by their art URL.
@@ -274,9 +324,18 @@ fun AmbientClockScreen(
     // The last few favorites played (favoriteKey -> when), which the
     // drifting grid brings to the front in turn when showRecentlyPlayed.
     recentlyPlayed: List<Pair<String, Long>> = emptyList(),
-    showRecentlyPlayed: Boolean = false
+    showRecentlyPlayed: Boolean = false,
+    // Start cycling (Cover Flow) or drifting (the grid) straight away,
+    // rather than after being left alone for a while - for Settings > Now
+    // Playing > Show Cover Flow Between Songs. A touch first cancels it.
+    startScrolling: Boolean = false,
+    // The artist suggestions last shown for the playing artist, offered
+    // again among the track cards, and showing them.
+    suggestions: List<SuggestedAlbum> = emptyList(),
+    onShowSuggestions: () -> Unit = {}
 ) {
     var isFadingOut by remember { mutableStateOf(false) }
+    var scrollAtOnce by remember { mutableStateOf(startScrolling) }
     // Favorite awaiting the user's confirm/cancel, and then the one they
     // confirmed (which drives that card's drop animation before deleting).
     var pendingFavoriteDelete by remember { mutableStateOf<AlbumHistoryItem?>(null) }
@@ -501,9 +560,12 @@ fun AmbientClockScreen(
     }
 
     LaunchedEffect(shownAlbums, isUserInteracting, isDragged, pendingFavoriteDelete, isGridView, letterPicks) {
+        if (isUserInteracting || isDragged || letterPicks > 0) scrollAtOnce = false
         if (shownAlbums.isNotEmpty() && pendingFavoriteDelete == null && !isGridView) {
             while (true) {
-                delay(8000)
+                // Just long enough to slide in first.
+                delay(if (scrollAtOnce) START_SCROLLING_DELAY_MS else 8000)
+                scrollAtOnce = false
                 if (pagerState.pageCount > 0 && !isUserInteracting && !isDragged && !pagerState.isScrollInProgress) {
                     autoScrolls++
                     pagerState.animateScrollToPage(
@@ -652,7 +714,7 @@ fun AmbientClockScreen(
                 // while they're showing.
                 bottomPadding = when {
                     searchOpen -> SearchPanelHeight + 16.dp
-                    trackState.isPlaying && !(hidePrevious && hideNowPlaying && hideNextUp) ->
+                    trackState.isPlaying && (!(hidePrevious && hideNowPlaying && hideNextUp) || suggestions.isNotEmpty()) ->
                         trackCardHeight + TrackCardBottomPadding + TrackCardGridGap
                     else -> 32.dp
                 },
@@ -670,7 +732,11 @@ fun AmbientClockScreen(
                 onLongPress = { pendingFavoriteDelete = it },
                 // The same rules as Cover Flow's own auto-advance.
                 autoScroll = !searchOpen && pendingFavoriteDelete == null,
-                onDriftStart = { autoScrolls++ },
+                driftAtOnce = scrollAtOnce,
+                onDriftStart = {
+                    autoScrolls++
+                    scrollAtOnce = false
+                },
                 recentlyPlayed = remember(recentlyPlayed, showRecentlyPlayed) {
                     if (showRecentlyPlayed) recentlyPlayed.toMap() else emptyMap()
                 },
@@ -980,25 +1046,30 @@ fun AmbientClockScreen(
             )
         }
 
-        if (showNowPlayingCard || showNextUpCard) {
-            var nextUpTurn by remember { mutableStateOf(false) }
+        // The last artist suggestions take a turn after Next Up.
+        val showSuggestionsCard = trackState.isPlaying && suggestions.isNotEmpty() && !searchOpen
+        if (showNowPlayingCard || showNextUpCard || showSuggestionsCard) {
+            val turns = listOfNotNull(
+                TrackCardTurn.NOW_PLAYING.takeIf { showNowPlayingCard },
+                TrackCardTurn.NEXT_UP.takeIf { showNextUpCard },
+                TrackCardTurn.SUGGESTIONS.takeIf { showSuggestionsCard }
+            )
+            var turn by remember { mutableStateOf(turns.first()) }
             // Restarts on every track change, so a new song always opens on
             // its own Now Playing card first.
-            LaunchedEffect(showNowPlayingCard, showNextUpCard, trackState.title) {
-                nextUpTurn = false
-                if (showNowPlayingCard && showNextUpCard) {
+            LaunchedEffect(turns, trackState.title) {
+                turn = turns.first()
+                if (turns.size > 1) {
+                    var i = 0
                     while (true) {
-                        delay(12_000)
-                        nextUpTurn = true
-                        delay(6_000)
-                        nextUpTurn = false
+                        delay(if (turns[i] == TrackCardTurn.NOW_PLAYING) 12_000 else 6_000)
+                        i = (i + 1) % turns.size
+                        turn = turns[i]
                     }
                 }
             }
-            val showingNextUp = showNextUpCard && (nextUpTurn || !showNowPlayingCard)
-
             AnimatedContent(
-                targetState = showingNextUp,
+                targetState = if (turn in turns) turn else turns.first(),
                 transitionSpec = {
                     (slideInHorizontally(tween(700, easing = FastOutSlowInEasing)) { it } + fadeIn(tween(700))) togetherWith
                         (slideOutHorizontally(tween(700, easing = FastOutSlowInEasing)) { it } + fadeOut(tween(500)))
@@ -1010,22 +1081,25 @@ fun AmbientClockScreen(
                     .alpha(fadeAlpha)
                     .then(cardsAwayModifier),
                 label = "nowPlayingNextUp"
-            ) { nextUp ->
-                if (nextUp) {
-                    CoverFlowTrackCard(
+            ) { shown ->
+                when (shown) {
+                    TrackCardTurn.NEXT_UP -> CoverFlowTrackCard(
                         label = "NEXT UP",
                         title = trackState.nextTrack,
                         subtitle = trackState.nextArtist,
                         artUrl = trackState.nextArtUrl,
                         onClick = onWakeUp
                     )
-                } else {
-                    CoverFlowTrackCard(
+                    TrackCardTurn.NOW_PLAYING -> CoverFlowTrackCard(
                         label = "NOW PLAYING",
                         title = trackState.title,
                         subtitle = if (trackState.album.isNotBlank()) "${trackState.artist} • ${trackState.album}" else trackState.artist,
                         artUrl = trackState.albumArtUrl,
                         onClick = onWakeUp
+                    )
+                    TrackCardTurn.SUGGESTIONS -> CoverFlowSuggestionsCard(
+                        suggestions = suggestions,
+                        onClick = onShowSuggestions
                     )
                 }
             }
@@ -1507,6 +1581,8 @@ private fun CoverGrid(
     // while, drift slowly sideways with the A-Z bar hidden, so nothing sits
     // still long enough to burn in.
     autoScroll: Boolean = false,
+    // Drift straight away instead, unless it's touched first.
+    driftAtOnce: Boolean = false,
     onDriftStart: () -> Unit = {},
     // Where to start, if it was left there for a list this size, and a
     // callback as it scrolls.
@@ -1568,7 +1644,7 @@ private fun CoverGrid(
     LaunchedEffect(autoScroll, endless, albums, lastTouch) {
         drifting = false
         if (!autoScroll || !endless) return@LaunchedEffect
-        delay(GRID_DRIFT_DELAY_MS)
+        delay(if (driftAtOnce && lastTouch == 0L) START_SCROLLING_DELAY_MS else GRID_DRIFT_DELAY_MS)
         drifting = true
         onDriftStart()
         pickedLetter = null
@@ -1881,6 +1957,8 @@ private val GridTop = 196.dp
 // how fast it drifts.
 private const val GRID_LOOP_COPIES = 50
 private const val GRID_DRIFT_DELAY_MS = 8_000L
+// ...or, with startScrolling, just long enough for the screen to slide in.
+private const val START_SCROLLING_DELAY_MS = 1_000L
 private val GridDriftSpeed = 24.dp
 
 // The A-Z bar's gold border round the picked letter's albums.

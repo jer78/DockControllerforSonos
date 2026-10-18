@@ -26,7 +26,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.addOutline
+import androidx.compose.ui.graphics.asAndroidPath
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.geometry.Offset
@@ -82,7 +89,11 @@ import kotlin.math.roundToInt
 fun dockScreenTransitionSpec(slide: ScreenSlide): AnimatedContentTransitionScope<DockScreen>.() -> ContentTransform = {
     val spec = tween<IntOffset>(550, easing = FastOutSlowInEasing)
     val nowPlayingAndCoverFlow = setOf(initialState, targetState) == setOf(DockScreen.NOW_PLAYING, DockScreen.COVER_FLOW)
-    if (nowPlayingAndCoverFlow) {
+    if (initialState == DockScreen.SUGGESTIONS || targetState == DockScreen.SUGGESTIONS) {
+        // Suggestions fade up out of Cover Flow, and fade back into it.
+        (fadeIn(tween(700)) + scaleIn(tween(700, easing = FastOutSlowInEasing), initialScale = 0.94f)) togetherWith
+            (fadeOut(tween(500)) + scaleOut(tween(500), targetScale = 1.04f))
+    } else if (nowPlayingAndCoverFlow) {
         // Which side Cover Flow sits off-screen: -1 left, +1 right.
         val coverFlowSide = if (slide == ScreenSlide.FROM_RIGHT) 1 else -1
         if (targetState == DockScreen.COVER_FLOW) {
@@ -98,6 +109,26 @@ fun dockScreenTransitionSpec(slide: ScreenSlide): AnimatedContentTransitionScope
     } else {
         slideInVertically(animationSpec = spec) { fullHeight -> -fullHeight } togetherWith
             slideOutVertically(animationSpec = spec) { fullHeight -> fullHeight }
+    }
+}
+
+// Settings > Now Playing > Show Cover Flow Between Songs: how long an album
+// plays on Now Playing before it hands over to Cover Flow / the grid (see
+// DockDashboardUI).
+const val SWAP_WHILE_PLAYING_DELAY_MS = 20_000L
+
+// ...and back to Now Playing as soon as the next song starts. Only after
+// such a swap (swapped), so a trip to Cover Flow by hand isn't cut short.
+// Sonos briefly reports a blank title between songs, which doesn't count.
+@Composable
+fun ReturnForNextSongEffect(trackState: TrackState, swapped: Boolean, onReturn: () -> Unit) {
+    val song = listOf(trackState.title, trackState.artist, trackState.album)
+    var lastSong by remember { mutableStateOf(song) }
+    val currentOnReturn by rememberUpdatedState(onReturn)
+    LaunchedEffect(song) {
+        if (trackState.title.isBlank() || song == lastSong) return@LaunchedEffect
+        lastSong = song
+        if (swapped) currentOnReturn()
     }
 }
 
@@ -409,7 +440,7 @@ fun LargeVolumeSlider(
             .fillMaxWidth()
             // The same frosted glass as GlassIconButton; its rim is drawn
             // over the fill too.
-            .shadow(elevation = 6.dp, shape = RoundedCornerShape(height / 2))
+            .glassShadow(RoundedCornerShape(height / 2))
             .clip(RoundedCornerShape(height / 2))
             .background(
                 Brush.verticalGradient(
@@ -928,6 +959,24 @@ fun LabeledIconButton(
     }
 }
 
+// The glass's soft drop shadow, drawn only outside the shape. An elevation
+// shadow (Modifier.shadow) is drawn under the whole shape from flat facets,
+// which showed through the translucent glass as a many-sided polygon. Before
+// Android 9 the shadow isn't drawn at all, rather than drawn wrong.
+fun Modifier.glassShadow(shape: Shape, radius: Dp = 6.dp): Modifier = drawBehind {
+    val path = Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawBehind)) }
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.BLACK
+        setShadowLayer(radius.toPx(), 0f, radius.toPx() / 3f, Color.Black.copy(alpha = 0.35f).toArgb())
+    }
+    drawIntoCanvas { canvas ->
+        canvas.save()
+        canvas.clipPath(path, ClipOp.Difference)
+        canvas.nativeCanvas.drawPath(path.asAndroidPath(), paint)
+        canvas.restore()
+    }
+}
+
 // Frosted-glass look without a real backdrop blur: the dashboard behind it is
 // already heavily blurred album art, so a translucent top-lit fill, a thin
 // bright rim and a soft shadow read as glass at no rendering cost.
@@ -947,7 +996,7 @@ fun GlassIconButton(
         onClick = onClick,
         modifier = modifier
             .size(size)
-            .shadow(elevation = 6.dp, shape = CircleShape)
+            .glassShadow(CircleShape)
             .background(
                 Brush.verticalGradient(
                     colors = if (active) listOf(Color.White.copy(alpha = 0.95f), Color.White.copy(alpha = 0.75f))
@@ -978,7 +1027,7 @@ fun GlassSurface(
 ) {
     Box(
         modifier = Modifier
-            .shadow(elevation = 6.dp, shape = shape)
+            .glassShadow(shape)
             .then(modifier)
             .clip(shape)
             .background(

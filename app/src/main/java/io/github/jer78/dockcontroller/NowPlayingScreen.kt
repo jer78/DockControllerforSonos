@@ -26,6 +26,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
@@ -109,7 +111,11 @@ fun DockDashboardUI(
     onSetLoudness: (Boolean) -> Unit = {},
     onToggleSubEnabled: () -> Unit = {},
     // The widgets shown, in their new order, after a drag to reorder them.
-    onReorderHaWidgets: (List<HaWidgetSlot>) -> Unit = {}
+    onReorderHaWidgets: (List<HaWidgetSlot>) -> Unit = {},
+    // Settings > Now Playing > Show Cover Flow Between Songs: called once an
+    // album has played SWAP_WHILE_PLAYING_DELAY_MS here untouched.
+    swapWhilePlaying: Boolean = false,
+    onSwapWhilePlaying: () -> Unit = {}
 ) {
     var showDebugInfo by remember { mutableStateOf(false) }
     // A widget being held/dragged - the 3s debug hold mustn't fire then.
@@ -151,10 +157,31 @@ fun DockDashboardUI(
     // A fresh pick each time it's muted, or the art changes while muted.
     val muteColor = remember(trackState.isMuted, albumPalette) { pickMuteColor(albumPalette) }
 
+    // Only queued albums (not radio or TV), and never with a panel open. A
+    // touch or a new song starts the wait over.
+    var touches by remember { mutableIntStateOf(0) }
+    val panelOpen = showDebugInfo || showTvDebug || showGroupingModal || openHaEntity != null ||
+        showSoundSettings || showQueue || previousTrackDetails != null || reorderingWidget
+    val albumPlaying = swapWhilePlaying && !isTvMode && trackState.isPlaying && trackState.shuffleAvailable
+    val currentOnSwapWhilePlaying by rememberUpdatedState(onSwapWhilePlaying)
+    LaunchedEffect(albumPlaying, panelOpen, touches, trackState.title) {
+        if (albumPlaying && !panelOpen) {
+            delay(SWAP_WHILE_PLAYING_DELAY_MS)
+            currentOnSwapWhilePlaying()
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        if (awaitPointerEvent(PointerEventPass.Initial).type == PointerEventType.Press) touches++
+                    }
+                }
+            }
             .debugToggleHoldGesture(isSuppressed = { reorderingWidget }) { showDebugInfo = !showDebugInfo }
             .pointerInput(Unit) {
                 // Swipe down, left or right anywhere on the background to

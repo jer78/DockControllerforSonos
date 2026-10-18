@@ -416,7 +416,11 @@ fun SettingsModal(
     savedFavorites: List<AlbumHistoryItem> = emptyList(),
     onRemoveFromSonos: (AlbumHistoryItem) -> Unit = {},
     onDeleteEverywhere: (AlbumHistoryItem) -> Unit = {},
-    onDeleteSaved: (AlbumHistoryItem) -> Unit = {}
+    onDeleteSaved: (AlbumHistoryItem) -> Unit = {},
+    // The speaker's own crossfade setting, changed on the speaker straight
+    // away rather than on Save & Apply. null = not known (yet).
+    crossfade: Boolean? = null,
+    onCrossfadeChange: (Boolean) -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
 
@@ -450,12 +454,18 @@ fun SettingsModal(
     var nowPlayingHidePrevious by remember { mutableStateOf(false) }
     var nowPlayingClockMode by remember { mutableStateOf(NowPlayingClockMode.OFF) }
     var showEndsAt by remember { mutableStateOf(true) }
+    var swapWhilePlaying by remember { mutableStateOf(true) }
+    var lastFmApiKey by remember { mutableStateOf("") }
+    var lastFmKeyHidden by remember { mutableStateOf(false) }
+    var lastFmKeyCheck by remember { mutableStateOf<ArtistSuggestions.KeyCheck?>(null) }
+    var artistSuggestions by remember { mutableStateOf(true) }
     var coverFlowWidgetsMode by remember { mutableStateOf(CoverFlowWidgetsMode.NEAR) }
     var gridRecentlyPlayed by remember { mutableStateOf(true) }
     var coverFlowMotionSensor by remember { mutableStateOf("") }
     var autoUnmuteAfterAds by remember { mutableStateOf(false) }
     var tvShowImages by remember { mutableStateOf(true) }
     var continueWithRandomAlbum by remember { mutableStateOf(false) }
+    var continuePreferSameGenre by remember { mutableStateOf(true) }
     var nowPlayingHideNextUp by remember { mutableStateOf(false) }
     var tvFallbackImage by remember { mutableStateOf("") }
     var showSpectrumAnalyzer by remember { mutableStateOf(false) }
@@ -537,12 +547,17 @@ fun SettingsModal(
         nowPlayingHideNextUp = settingsManager.nowPlayingHideNextUp.first()
         nowPlayingClockMode = settingsManager.nowPlayingClockMode.first()
         showEndsAt = settingsManager.showEndsAt.first()
+        swapWhilePlaying = settingsManager.swapWhilePlaying.first()
+        lastFmApiKey = settingsManager.lastFmApiKey.first()
+        lastFmKeyHidden = lastFmApiKey.isNotBlank()
+        artistSuggestions = settingsManager.artistSuggestions.first()
         coverFlowWidgetsMode = settingsManager.coverFlowWidgetsMode.first()
         gridRecentlyPlayed = settingsManager.gridRecentlyPlayed.first()
         coverFlowMotionSensor = settingsManager.coverFlowMotionSensor.first()
         autoUnmuteAfterAds = settingsManager.autoUnmuteAfterAds.first()
         tvShowImages = settingsManager.tvShowImages.first()
         continueWithRandomAlbum = settingsManager.continueWithRandomAlbum.first()
+        continuePreferSameGenre = settingsManager.continuePreferSameGenre.first()
         tvFallbackImage = settingsManager.tvFallbackImage.first()
         fAlbums = settingsManager.filterAlbums.first()
         fPlaylists = settingsManager.filterPlaylists.first()
@@ -720,6 +735,20 @@ fun SettingsModal(
                                             },
                                             label = { Text("24-Hour") }
                                         )
+                                    }
+                                    HorizontalDivider()
+
+                                    Text("Crossfade:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "Fades each song into the next on the saved speaker (and any rooms grouped with it). " +
+                                            "Applies to albums and playlists, not radio. Changes the speaker straight away.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    if (crossfade == null) {
+                                        Text("Checking the speaker...", fontSize = 12.sp, color = Color.Gray)
+                                    } else {
+                                        SettingsToggleRow("Crossfade Between Songs", crossfade, onCrossfadeChange)
                                     }
                                 }
                             }
@@ -921,6 +950,64 @@ fun SettingsModal(
                                     }
                                     HorizontalDivider()
 
+                                    Text("While an Album Plays:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "After 20 seconds on Now Playing, switches to Cover Flow or the grid (whichever you last used), already scrolling, and comes back when the next song starts.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    SettingsToggleRow("Show Cover Flow Between Songs", swapWhilePlaying) {
+                                        swapWhilePlaying = it
+                                        scope.launch { settingsManager.setSwapWhilePlaying(it) }
+                                    }
+                                    HorizontalDivider()
+
+                                    Text("Artist Suggestions:", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "After a minute of music on Cover Flow or the grid, shows three albums by artists like the one " +
+                                            "playing that aren't in your favorites - at most every 10 minutes, or sooner for a new artist. " +
+                                            "Needs a free API key from last.fm/api.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    SecretField(
+                                        value = lastFmApiKey,
+                                        onValueChange = {
+                                            lastFmApiKey = it
+                                            lastFmKeyCheck = null
+                                        },
+                                        label = "Last.fm API Key",
+                                        hidden = lastFmKeyHidden,
+                                        onChange = { lastFmKeyHidden = false },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    // Checked with Last.fm a moment after typing
+                                    // stops; one it accepts is saved straight away
+                                    // and hidden, like the Home Assistant token.
+                                    LaunchedEffect(lastFmApiKey, lastFmKeyHidden) {
+                                        if (lastFmKeyHidden || lastFmApiKey.isBlank()) return@LaunchedEffect
+                                        delay(800)
+                                        val result = ArtistSuggestions.checkKey(lastFmApiKey)
+                                        lastFmKeyCheck = result
+                                        if (result == ArtistSuggestions.KeyCheck.OK) {
+                                            settingsManager.setLastFmApiKey(lastFmApiKey)
+                                            lastFmKeyHidden = true
+                                        }
+                                    }
+                                    when (lastFmKeyCheck) {
+                                        ArtistSuggestions.KeyCheck.OK -> Text("Key works - saved.", fontSize = 12.sp, color = Color(0xFF81C784))
+                                        ArtistSuggestions.KeyCheck.REJECTED -> Text("Last.fm didn't accept this key.", fontSize = 12.sp, color = Color(0xFFFF8A80))
+                                        ArtistSuggestions.KeyCheck.UNREACHABLE -> Text("Couldn't reach Last.fm to check the key.", fontSize = 12.sp, color = Color(0xFFFF8A80))
+                                        null -> Unit
+                                    }
+                                    if (lastFmApiKey.isNotBlank()) {
+                                        SettingsToggleRow("Suggest Similar Artists", artistSuggestions) {
+                                            artistSuggestions = it
+                                            scope.launch { settingsManager.setArtistSuggestions(it) }
+                                        }
+                                    }
+                                    HorizontalDivider()
+
                                     Text("Clock:", fontWeight = FontWeight.SemiBold)
                                     Text(
                                         "The current time, shown above the artwork. Follows the 12/24-hour clock setting.",
@@ -1099,13 +1186,19 @@ fun SettingsModal(
 
                                     Text("When an Album Ends:", fontWeight = FontWeight.SemiBold)
                                     Text(
-                                        "Starts another random album from your Sonos Favorites. Doesn't apply to radio.",
+                                        "Starts another random album from your Sonos Favorites, skipping any played in the last 24 hours. Doesn't apply to radio.",
                                         fontSize = 12.sp,
                                         color = Color.Gray
                                     )
                                     SettingsToggleRow("Continue With a Random Album", continueWithRandomAlbum) {
                                         continueWithRandomAlbum = it
                                         scope.launch { settingsManager.setContinueWithRandomAlbum(it) }
+                                    }
+                                    if (continueWithRandomAlbum) {
+                                        SettingsToggleRow("Prefer Same Genre", continuePreferSameGenre) {
+                                            continuePreferSameGenre = it
+                                            scope.launch { settingsManager.setContinuePreferSameGenre(it) }
+                                        }
                                     }
                                     HorizontalDivider()
 
@@ -1340,6 +1433,7 @@ fun SettingsModal(
                         fRadio
                     )
                     settingsManager.setCoverFlowMotionSensor(coverFlowMotionSensor)
+                    settingsManager.setLastFmApiKey(lastFmApiKey)
                     onSettingsSaved()
                     onDismiss()
                 }

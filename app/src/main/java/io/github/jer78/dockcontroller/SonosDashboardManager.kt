@@ -87,14 +87,24 @@ class SonosDashboardManager private constructor(context: Context) {
     private val _recentlyPlayed = MutableStateFlow<List<Pair<String, Long>>>(emptyList())
     val recentlyPlayed: StateFlow<List<Pair<String, Long>>> = _recentlyPlayed.asStateFlow()
 
+    // Every favorite started in the last PLAYED_TODAY_MS, same shape - so
+    // Continue With a Random Album can skip them (the list above is too short).
+    @Volatile private var favoritesPlayedToday: List<Pair<String, Long>> = emptyList()
+
     // Playing the same favorite on and on keeps the time it started.
     private fun markFavoritePlayed(item: AlbumHistoryItem) {
         val key = favoriteKey(item)
         val played = _recentlyPlayed.value
         if (played.firstOrNull()?.first == key) return
-        val updated = (listOf(key to System.currentTimeMillis()) + played.filterNot { it.first == key }).take(RECENTLY_PLAYED_COUNT)
+        val now = System.currentTimeMillis()
+        val updated = (listOf(key to now) + played.filterNot { it.first == key }).take(RECENTLY_PLAYED_COUNT)
         _recentlyPlayed.value = updated
-        scope.launch { settingsManager.saveRecentlyPlayedFavorites(updated) }
+        val today = listOf(key to now) + favoritesPlayedToday.filter { it.first != key && now - it.second < PLAYED_TODAY_MS }
+        favoritesPlayedToday = today
+        scope.launch {
+            settingsManager.saveRecentlyPlayedFavorites(updated)
+            settingsManager.saveFavoritesPlayedToday(today)
+        }
     }
 
     private val _discoveredSpeakers = MutableStateFlow<List<String>>(emptyList())
@@ -132,6 +142,7 @@ class SonosDashboardManager private constructor(context: Context) {
     companion object {
         private const val ACTIVE_POLL_INTERVAL_MS = 2000L
         private const val RECENTLY_PLAYED_COUNT = 5
+        private const val PLAYED_TODAY_MS = 24 * 60 * 60 * 1000L
         private const val IDLE_POLL_INTERVAL_MS = 6000L
         private const val ACTIVE_HA_POLL_INTERVAL_MS = 5000L
         private const val IDLE_HA_POLL_INTERVAL_MS = 15000L
@@ -200,6 +211,7 @@ class SonosDashboardManager private constructor(context: Context) {
         scope.launch {
             _favoriteArtistCache.value = settingsManager.favoriteArtistCache.first()
             _recentlyPlayed.value = settingsManager.recentlyPlayedFavorites.first()
+            favoritesPlayedToday = settingsManager.favoritesPlayedToday.first()
             // The saved favorites show straight away, even with the
             // speaker offline, until the refresh below brings them up to date.
             shownKinds = Triple(
@@ -305,7 +317,8 @@ class SonosDashboardManager private constructor(context: Context) {
                             bass = map[PyObject.fromJava("bass")]?.toJava(Int::class.javaObjectType),
                             treble = map[PyObject.fromJava("treble")]?.toJava(Int::class.javaObjectType),
                             loudness = map[PyObject.fromJava("loudness")]?.toJava(Boolean::class.javaObjectType),
-                            subEnabled = map[PyObject.fromJava("sub_enabled")]?.toJava(Boolean::class.javaObjectType)
+                            subEnabled = map[PyObject.fromJava("sub_enabled")]?.toJava(Boolean::class.javaObjectType),
+                            crossfade = map[PyObject.fromJava("cross_fade")]?.toJava(Boolean::class.javaObjectType)
                         )
                     }
                 } catch (e: Exception) {
@@ -380,6 +393,17 @@ class SonosDashboardManager private constructor(context: Context) {
                 val py = Python.getInstance()
                 val ok = py.getModule("sonos_bridge").callAttr("set_sub_enabled", newValue, speaker).toBoolean()
                 if (ok) _audioSettings.update { it.copy(subEnabled = newValue) }
+            }
+        }
+    }
+
+    fun setCrossfade(enabled: Boolean) {
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            if (speaker.isNotBlank()) {
+                val py = Python.getInstance()
+                val ok = py.getModule("sonos_bridge").callAttr("set_cross_fade", enabled, speaker).toBoolean()
+                if (ok) _audioSettings.update { it.copy(crossfade = enabled) }
             }
         }
     }
@@ -588,6 +612,15 @@ class SonosDashboardManager private constructor(context: Context) {
     // Which of the favorites matching the playing album's title is the one
     // actually playing - null when that can't be told, so one album's
     // artist is never stamped onto another that merely shares its title.
+    private fun matchPlayingFavorite(favorites: List<AlbumHistoryItem>, album: String, artist: String): AlbumHistoryItem? {
+        val normalizedAlbum = normalizeAlbumTitle(album)
+        return pickPlayingFavorite(
+            favorites.filter { it.albumTitle.equals(album, ignoreCase = true) }
+                .ifEmpty { favorites.filter { normalizeAlbumTitle(it.albumTitle) == normalizedAlbum } },
+            artist
+        )
+    }
+
     private fun pickPlayingFavorite(candidates: List<AlbumHistoryItem>, playingArtist: String): AlbumHistoryItem? {
         if (candidates.size <= 1) return candidates.firstOrNull()
         candidates.find { it.artist.equals(playingArtist, ignoreCase = true) }?.let { return it }
@@ -732,7 +765,8 @@ class SonosDashboardManager private constructor(context: Context) {
                             val onLastTrack = pyDict[PyObject.fromJava("on_last_track")]?.toBoolean() ?: false
                             maybeContinueWithRandomAlbum(
                                 state, fromQueue, shuffled, onLastTrack, position, duration,
-                                settingsManager.continueWithRandomAlbum.first()
+                                settingsManager.continueWithRandomAlbum.first(),
+                                settingsManager.continuePreferSameGenre.first()
                             )
                             // "None" is TrackState's existing "nothing to show"
                             // marker for these, which the UI checks for.
@@ -811,13 +845,8 @@ class SonosDashboardManager private constructor(context: Context) {
                                 // Several favorites can share a title (Pearl
                                 // Jam's and Alice in Chains' "MTV Unplugged
                                 // (Live)") - see pickPlayingFavorite.
-                                val normalizedAlbum = normalizeAlbumTitle(album)
                                 val favorites = _favoriteAlbumsRef.value
-                                val match = pickPlayingFavorite(
-                                    favorites.filter { it.albumTitle.equals(album, ignoreCase = true) }
-                                        .ifEmpty { favorites.filter { normalizeAlbumTitle(it.albumTitle) == normalizedAlbum } },
-                                    artist
-                                )
+                                val match = matchPlayingFavorite(favorites, album, artist)
                                 if (match != null) {
                                     if (state == "PLAYING") markFavoritePlayed(match)
                                     // Keyed by the album's service ID, not
@@ -1462,6 +1491,10 @@ class SonosDashboardManager private constructor(context: Context) {
     // those can be many seconds apart. In shuffle the queue position isn't
     // the play order, so any track can be the final one. Radio, TV etc.
     // never play from the queue, so never arm this.
+    //
+    // Favorites played in the last day are skipped. preferSameGenre picks
+    // from those sharing the ended album's genre when there are any (genres
+    // are only known for Apple Music favorites), otherwise from them all.
     private var finalTrackEndsAtMs: Long? = null
 
     private fun maybeContinueWithRandomAlbum(
@@ -1471,7 +1504,8 @@ class SonosDashboardManager private constructor(context: Context) {
         onLastTrack: Boolean,
         positionSeconds: Int,
         durationSeconds: Int,
-        enabled: Boolean
+        enabled: Boolean,
+        preferSameGenre: Boolean
     ) {
         val now = System.currentTimeMillis()
         when (state) {
@@ -1484,10 +1518,17 @@ class SonosDashboardManager private constructor(context: Context) {
                 val endsAt = finalTrackEndsAtMs
                 if (enabled && endsAt != null && now >= endsAt - ALBUM_END_WINDOW_SECONDS * 1000L) {
                     val current = _trackState.value.album
-                    val candidates = _favoriteAlbumsRef.value.filter {
-                        it.playUri.isNotBlank() && !it.albumTitle.equals(current, ignoreCase = true)
+                    val favorites = _favoriteAlbumsRef.value
+                    val playedToday = favoritesPlayedToday.filter { now - it.second < PLAYED_TODAY_MS }.map { it.first }.toSet()
+                    val candidates = favorites.filter {
+                        it.playUri.isNotBlank() && !it.albumTitle.equals(current, ignoreCase = true) &&
+                            favoriteKey(it) !in playedToday
                     }
-                    candidates.randomOrNull()?.let { album ->
+                    val genre = if (preferSameGenre) {
+                        matchPlayingFavorite(favorites, current, _trackState.value.artist)?.genre.orEmpty()
+                    } else ""
+                    val sameGenre = if (genre.isNotBlank()) candidates.filter { it.genre.equals(genre, ignoreCase = true) } else emptyList()
+                    sameGenre.ifEmpty { candidates }.randomOrNull()?.let { album ->
                         Log.i("SonosDashboard", "Album finished - continuing with '${album.albumTitle}'")
                         playAlbum(album)
                     }

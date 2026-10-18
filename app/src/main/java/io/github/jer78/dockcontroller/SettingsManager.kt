@@ -1,6 +1,7 @@
 package io.github.jer78.dockcontroller
 
 import android.content.Context
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
@@ -97,6 +98,13 @@ class SettingsManager(private val context: Context) {
         val NOW_PLAYING_CLOCK_MODE = stringPreferencesKey("now_playing_clock_mode")
         // TV mode's clock takes turns with when the show ends (on by default).
         val SHOW_ENDS_AT = booleanPreferencesKey("show_ends_at")
+        // A playing album hands over to Cover Flow / the grid, and comes back
+        // for each new song (on by default).
+        val SWAP_WHILE_PLAYING = booleanPreferencesKey("swap_while_playing")
+        // Last.fm API key, and whether Cover Flow suggests similar artists
+        // with it (on by default, but only once there's a key).
+        val LASTFM_API_KEY = stringPreferencesKey("lastfm_api_key")
+        val ARTIST_SUGGESTIONS = booleanPreferencesKey("artist_suggestions")
         // Stores a CoverFlowWidgetsMode's name, and the binary_sensor that
         // tells it someone's near (blank = touch only).
         val COVER_FLOW_WIDGETS_MODE = stringPreferencesKey("cover_flow_widgets_mode")
@@ -127,6 +135,9 @@ class SettingsManager(private val context: Context) {
         // When a queued album plays to the end, start another random album
         // from Sonos Favorites (see SonosDashboardManager.maybeContinueWithRandomAlbum).
         val CONTINUE_WITH_RANDOM_ALBUM = booleanPreferencesKey("continue_with_random_album")
+        // ...of the same genre as the one that ended when there is one (on
+        // by default).
+        val CONTINUE_PREFER_SAME_GENRE = booleanPreferencesKey("continue_prefer_same_genre")
 
         // How long TV mode sits on the Now Playing screen (actively playing)
         // before dropping into the TV Ambient screensaver, in seconds.
@@ -146,6 +157,9 @@ class SettingsManager(private val context: Context) {
         // of {"key": <favoriteKey>, "at": <epoch ms>}, newest first.
         val GRID_RECENTLY_PLAYED = booleanPreferencesKey("grid_recently_played")
         val RECENTLY_PLAYED_FAVORITES = stringPreferencesKey("recently_played_favorites")
+        // Every favorite played in the last day, same format - so Continue
+        // With a Random Album skips them.
+        val FAVORITES_PLAYED_TODAY = stringPreferencesKey("favorites_played_today")
 
         const val TV_SCREENSAVER_DELAY_MIN_SECONDS = 30
         const val TV_SCREENSAVER_DELAY_MAX_SECONDS = 1800
@@ -268,9 +282,9 @@ class SettingsManager(private val context: Context) {
         context.dataStore.edit { it[GRID_RECENTLY_PLAYED] = enabled }
     }
 
-    val recentlyPlayedFavorites: Flow<List<Pair<String, Long>>> = context.dataStore.data.map { prefs ->
+    private fun playedFavorites(key: Preferences.Key<String>): Flow<List<Pair<String, Long>>> = context.dataStore.data.map { prefs ->
         try {
-            val array = JSONArray(prefs[RECENTLY_PLAYED_FAVORITES] ?: "[]")
+            val array = JSONArray(prefs[key] ?: "[]")
             (0 until array.length()).map { i ->
                 val entry = array.getJSONObject(i)
                 entry.getString("key") to entry.getLong("at")
@@ -281,11 +295,21 @@ class SettingsManager(private val context: Context) {
         }
     }
 
-    suspend fun saveRecentlyPlayedFavorites(played: List<Pair<String, Long>>) {
+    private suspend fun savePlayedFavorites(key: Preferences.Key<String>, played: List<Pair<String, Long>>) {
         val array = JSONArray()
-        played.forEach { (key, at) -> array.put(JSONObject().put("key", key).put("at", at)) }
-        context.dataStore.edit { it[RECENTLY_PLAYED_FAVORITES] = array.toString() }
+        played.forEach { (favorite, at) -> array.put(JSONObject().put("key", favorite).put("at", at)) }
+        context.dataStore.edit { it[key] = array.toString() }
     }
+
+    val recentlyPlayedFavorites: Flow<List<Pair<String, Long>>> = playedFavorites(RECENTLY_PLAYED_FAVORITES)
+
+    suspend fun saveRecentlyPlayedFavorites(played: List<Pair<String, Long>>) =
+        savePlayedFavorites(RECENTLY_PLAYED_FAVORITES, played)
+
+    val favoritesPlayedToday: Flow<List<Pair<String, Long>>> = playedFavorites(FAVORITES_PLAYED_TODAY)
+
+    suspend fun saveFavoritesPlayedToday(played: List<Pair<String, Long>>) =
+        savePlayedFavorites(FAVORITES_PLAYED_TODAY, played)
 
     val coverFlowSortByArtist: Flow<Boolean> = context.dataStore.data.map { it[COVER_FLOW_SORT_BY_ARTIST] ?: true }
 
@@ -343,6 +367,24 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setShowEndsAt(enabled: Boolean) {
         context.dataStore.edit { it[SHOW_ENDS_AT] = enabled }
+    }
+
+    val swapWhilePlaying: Flow<Boolean> = context.dataStore.data.map { it[SWAP_WHILE_PLAYING] ?: true }
+
+    suspend fun setSwapWhilePlaying(enabled: Boolean) {
+        context.dataStore.edit { it[SWAP_WHILE_PLAYING] = enabled }
+    }
+
+    val lastFmApiKey: Flow<String> = context.dataStore.data.map { it[LASTFM_API_KEY] ?: "" }
+
+    suspend fun setLastFmApiKey(key: String) {
+        context.dataStore.edit { it[LASTFM_API_KEY] = key.trim() }
+    }
+
+    val artistSuggestions: Flow<Boolean> = context.dataStore.data.map { it[ARTIST_SUGGESTIONS] ?: true }
+
+    suspend fun setArtistSuggestions(enabled: Boolean) {
+        context.dataStore.edit { it[ARTIST_SUGGESTIONS] = enabled }
     }
 
     val coverFlowWidgetsMode: Flow<CoverFlowWidgetsMode> = context.dataStore.data.map { prefs ->
@@ -417,6 +459,12 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setContinueWithRandomAlbum(enabled: Boolean) {
         context.dataStore.edit { it[CONTINUE_WITH_RANDOM_ALBUM] = enabled }
+    }
+
+    val continuePreferSameGenre: Flow<Boolean> = context.dataStore.data.map { it[CONTINUE_PREFER_SAME_GENRE] ?: true }
+
+    suspend fun setContinuePreferSameGenre(enabled: Boolean) {
+        context.dataStore.edit { it[CONTINUE_PREFER_SAME_GENRE] = enabled }
     }
 
     val tvScreensaverDelaySeconds: Flow<Int> = context.dataStore.data.map {

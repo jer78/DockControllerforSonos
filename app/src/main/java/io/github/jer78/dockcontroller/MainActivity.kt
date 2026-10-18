@@ -162,9 +162,45 @@ class MainActivity : ComponentActivity() {
                 initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
             )
 
+            val swapWhilePlaying by settingsManager.swapWhilePlaying.collectAsState(initial = true)
+
             var showSettings by remember { mutableStateOf(false) }
             var isAmbientMode by remember { mutableStateOf(false) }
             var isTvAmbientMode by remember { mutableStateOf(false) }
+            // On Cover Flow because of Show Cover Flow Between Songs, rather
+            // than idle - so the screen stays on and Sonos is polled at the
+            // normal rate, to catch the next song.
+            var swappedWhilePlaying by remember { mutableStateOf(false) }
+            // Sonos is briefly "TRANSITIONING" (not playing) between songs,
+            // so only a real pause ends it.
+            LaunchedEffect(isAmbientMode, trackState.isPlaying) {
+                if (!isAmbientMode) swappedWhilePlaying = false
+                else if (!trackState.isPlaying) {
+                    delay(10_000)
+                    swappedWhilePlaying = false
+                }
+            }
+            // Artist suggestions, showing over Cover Flow while non-null. A
+            // new song while they show doesn't cut them short - it's put off
+            // (returnAfterSuggestions) until they close.
+            val lastFmApiKey by settingsManager.lastFmApiKey.collectAsState(initial = "")
+            val artistSuggestions by settingsManager.artistSuggestions.collectAsState(initial = true)
+            var suggestions by remember { mutableStateOf<List<SuggestedAlbum>?>(null) }
+            var returnAfterSuggestions by remember { mutableStateOf(false) }
+            LaunchedEffect(isAmbientMode) {
+                if (!isAmbientMode) {
+                    suggestions = null
+                    returnAfterSuggestions = false
+                }
+            }
+            fun closeSuggestions() {
+                suggestions = null
+                if (returnAfterSuggestions) isAmbientMode = false
+                returnAfterSuggestions = false
+            }
+            ReturnForNextSongEffect(trackState, swappedWhilePlaying) {
+                if (suggestions != null) returnAfterSuggestions = true else isAmbientMode = false
+            }
 
             var lastIsPlaying by remember { mutableStateOf(trackState.isPlaying) }
             var lastIsTvMode by remember { mutableStateOf(isTvMode) }
@@ -238,8 +274,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            LaunchedEffect(isAmbientMode, isTvAmbientMode) {
-                if (isAmbientMode || isTvAmbientMode) {
+            LaunchedEffect(isAmbientMode, isTvAmbientMode, swappedWhilePlaying) {
+                val idle = (isAmbientMode && !swappedWhilePlaying) || isTvAmbientMode
+                if (idle) {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 } else {
                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -247,7 +284,7 @@ class MainActivity : ComponentActivity() {
                 // Cover Flow / TV Ambient run most of the time on a
                 // screensaver - back off polling while idle there instead of
                 // polling Sonos/HA every couple seconds around the clock.
-                manager.setIdleScreen(isAmbientMode || isTvAmbientMode)
+                manager.setIdleScreen(idle)
             }
 
             LaunchedEffect(Unit) {
@@ -269,9 +306,18 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.fillMaxSize()) {
                 val currentScreen = when {
                     isTvAmbientMode -> DockScreen.TV_AMBIENT
+                    isAmbientMode && suggestions != null -> DockScreen.SUGGESTIONS
                     isAmbientMode -> DockScreen.COVER_FLOW
                     else -> DockScreen.NOW_PLAYING
                 }
+                SuggestionsEffect(
+                    active = artistSuggestions && currentScreen == DockScreen.COVER_FLOW && trackState.isPlaying &&
+                        !isTvMode && !showSettings && transitioningAlbum == null,
+                    artist = trackState.artist,
+                    apiKey = lastFmApiKey,
+                    favorites = albumHistory,
+                    onShow = { suggestions = it }
+                )
                 // The swipe direction only shapes the trip to Cover Flow and back -
                 // once Now Playing is reached again, later switches are vertical.
                 LaunchedEffect(currentScreen) {
@@ -284,6 +330,17 @@ class MainActivity : ComponentActivity() {
                     label = "screenTransition"
                 ) { screen ->
                     when (screen) {
+                        DockScreen.SUGGESTIONS -> {
+                            // Kept while it animates away, after suggestions is cleared.
+                            val shown = remember { suggestions.orEmpty() }
+                            val sonosApp = remember { sonosAppLaunchIntent(this@MainActivity) }
+                            SuggestionsScreen(
+                                suggestions = shown,
+                                playingArtist = trackState.artist,
+                                onDone = { closeSuggestions() },
+                                onOpenSonosApp = sonosApp?.let { intent -> { startActivity(intent) } }
+                            )
+                        }
                         DockScreen.TV_AMBIENT -> {
                             TvAmbientScreen(
                                 trackState = trackState,
@@ -331,7 +388,14 @@ class MainActivity : ComponentActivity() {
                                 onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
                                 onReorderHaWidgets = { manager.reorderHaWidgets(it) },
                                 recentlyPlayed = recentlyPlayed,
-                                showRecentlyPlayed = gridRecentlyPlayed
+                                showRecentlyPlayed = gridRecentlyPlayed,
+                                startScrolling = swappedWhilePlaying,
+                                suggestions = if (artistSuggestions && lastFmApiKey.isNotBlank()) {
+                                    ArtistSuggestions.latestFor(trackState.artist)
+                                } else emptyList(),
+                                onShowSuggestions = {
+                                    suggestions = ArtistSuggestions.latestFor(trackState.artist).ifEmpty { null }
+                                }
                             )
                         }
                         DockScreen.NOW_PLAYING -> {
@@ -386,7 +450,13 @@ class MainActivity : ComponentActivity() {
                                 hideNextUp = nowPlayingHideNextUp,
                                 clockMode = nowPlayingClockMode,
                                 use24HourClock = use24HourClock,
-                                showEndsAt = showEndsAt
+                                showEndsAt = showEndsAt,
+                                swapWhilePlaying = swapWhilePlaying && !showSettings,
+                                onSwapWhilePlaying = {
+                                    screenSlide = ScreenSlide.VERTICAL
+                                    swappedWhilePlaying = true
+                                    isAmbientMode = true
+                                }
                             )
                         }
                     }
@@ -440,6 +510,8 @@ class MainActivity : ComponentActivity() {
             val unplayableFavorite by manager.unplayableFavorite.collectAsState()
 
             if (showSettings) {
+                // Crossfade could have been changed in the Sonos app since.
+                LaunchedEffect(Unit) { manager.refreshAudioSettings() }
                 SettingsModal(
                     discoveredSpeakers = discoveredSpeakers,
                     settingsManager = SettingsManager(this),
@@ -453,7 +525,9 @@ class MainActivity : ComponentActivity() {
                     savedFavorites = savedFavorites,
                     onRemoveFromSonos = { manager.deleteSonosFavorite(it, keepInApp = true) },
                     onDeleteEverywhere = { manager.deleteSonosFavorite(it, keepInApp = false) },
-                    onDeleteSaved = { manager.deleteSavedFavorite(it) }
+                    onDeleteSaved = { manager.deleteSavedFavorite(it) },
+                    crossfade = audioSettings.crossfade,
+                    onCrossfadeChange = { manager.setCrossfade(it) }
                 )
             }
 

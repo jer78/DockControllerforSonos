@@ -12,6 +12,12 @@
     <!-- Optional: only requested if the Spectrum Analyzer display setting is turned on -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- So artist suggestions can offer to open the Sonos app (new, then S1) -->
+    <queries>
+        <package android:name="com.sonos.acr2" />
+        <package android:name="com.sonos.acr" />
+    </queries>
+
     <application
         android:name=".SonosApplication"
         android:allowBackup="true"

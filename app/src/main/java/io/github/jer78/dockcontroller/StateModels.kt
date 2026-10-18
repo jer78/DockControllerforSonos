@@ -3,7 +3,8 @@ package io.github.jer78.dockcontroller
 // The three top-level screens MainActivity/SonosDreamService switch between,
 // used to drive the drop/rise AnimatedContent transition instead of an
 // unordered `when` (see DashboardUI.kt's SonosScreenTransitionSpec).
-enum class DockScreen { NOW_PLAYING, COVER_FLOW, TV_AMBIENT }
+// SUGGESTIONS is Cover Flow's artist suggestions (see SuggestionsScreen).
+enum class DockScreen { NOW_PLAYING, COVER_FLOW, TV_AMBIENT, SUGGESTIONS }
 
 // How Now Playing was left for Cover Flow, so the transition can follow the
 // gesture: a swipe right or the Cover Flow button brings Cover Flow in
@@ -135,7 +136,9 @@ data class SonosAudioSettings(
     val bass: Int? = null,
     val treble: Int? = null,
     val loudness: Boolean? = null,
-    val subEnabled: Boolean? = null
+    val subEnabled: Boolean? = null,
+    // Crossfade between queued tracks (Settings > Setup).
+    val crossfade: Boolean? = null
 )
 
 // The kinds of Home Assistant entity a Now Playing widget can control.

@@ -767,7 +767,8 @@ def get_audio_settings(speaker_name=None):
             "bass": None,
             "treble": None,
             "loudness": None,
-            "sub_enabled": None
+            "sub_enabled": None,
+            "cross_fade": None
         }
 
         try:
@@ -801,6 +802,12 @@ def get_audio_settings(speaker_name=None):
             pass
         try:
             result["loudness"] = bool(master.loudness)
+        except Exception:
+            pass
+        # Crossfade between queued tracks - a play mode, not EQ, but it
+        # rarely changes either.
+        try:
+            result["cross_fade"] = bool(master.cross_fade)
         except Exception:
             pass
 
@@ -853,6 +860,14 @@ def set_sub_enabled(enabled, speaker_name=None):
         device = get_speaker_instance(speaker_name)
         if not device: return False
         device.group.coordinator.sub_enabled = bool(enabled)
+        return True
+    except: return False
+
+def set_cross_fade(enabled, speaker_name=None):
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return False
+        device.group.coordinator.cross_fade = bool(enabled)
         return True
     except: return False
 
