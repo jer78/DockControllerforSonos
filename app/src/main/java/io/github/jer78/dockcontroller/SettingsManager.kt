@@ -97,6 +97,10 @@ class SettingsManager(private val context: Context) {
         val NOW_PLAYING_CLOCK_MODE = stringPreferencesKey("now_playing_clock_mode")
         // TV mode's clock takes turns with when the show ends (on by default).
         val SHOW_ENDS_AT = booleanPreferencesKey("show_ends_at")
+        // Stores a CoverFlowWidgetsMode's name, and the binary_sensor that
+        // tells it someone's near (blank = touch only).
+        val COVER_FLOW_WIDGETS_MODE = stringPreferencesKey("cover_flow_widgets_mode")
+        val COVER_FLOW_MOTION_SENSOR = stringPreferencesKey("cover_flow_motion_sensor")
 
         // Experimental: in TV mode, unmute the speaker when the HA media
         // player's time remaining jumps up - a sign a commercial break just
@@ -309,6 +313,20 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setShowEndsAt(enabled: Boolean) {
         context.dataStore.edit { it[SHOW_ENDS_AT] = enabled }
+    }
+
+    val coverFlowWidgetsMode: Flow<CoverFlowWidgetsMode> = context.dataStore.data.map { prefs ->
+        CoverFlowWidgetsMode.entries.find { it.name == prefs[COVER_FLOW_WIDGETS_MODE] } ?: CoverFlowWidgetsMode.NEAR
+    }
+
+    suspend fun setCoverFlowWidgetsMode(mode: CoverFlowWidgetsMode) {
+        context.dataStore.edit { it[COVER_FLOW_WIDGETS_MODE] = mode.name }
+    }
+
+    val coverFlowMotionSensor: Flow<String> = context.dataStore.data.map { it[COVER_FLOW_MOTION_SENSOR] ?: "" }
+
+    suspend fun setCoverFlowMotionSensor(entityId: String) {
+        context.dataStore.edit { it[COVER_FLOW_MOTION_SENSOR] = entityId.trim() }
     }
 
     val autoUnmuteAfterAds: Flow<Boolean> = context.dataStore.data.map { it[AUTO_UNMUTE_AFTER_ADS] ?: false }

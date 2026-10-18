@@ -128,6 +128,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
                     val nowPlayingClockMode by settingsManager.nowPlayingClockMode.collectAsState(initial = NowPlayingClockMode.OFF)
                     val showEndsAt by settingsManager.showEndsAt.collectAsState(initial = true)
+                    val coverFlowWidgetsMode by settingsManager.coverFlowWidgetsMode.collectAsState(initial = CoverFlowWidgetsMode.NEAR)
                     val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
                         initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
                     )
@@ -145,22 +146,6 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     // Errors are logged (with timestamps) in the manager; CommandErrorFlash
                     // shows only fresh ones, so re-entering this screen doesn't re-flash an old error.
                     val recentErrors by manager.recentErrors.collectAsState()
-
-                    // Dims the screen in a dark room instead of always running
-                    // at full system brightness (see AmbientBrightnessController)
-                    // - matters even more here than in MainActivity, since a
-                    // screensaver runs for hours unattended overnight.
-                    val ambientBrightnessController = remember { AmbientBrightnessController(this@SonosDreamService) }
-                    DisposableEffect(Unit) {
-                        ambientBrightnessController.start()
-                        onDispose { ambientBrightnessController.stop() }
-                    }
-                    val ambientBrightness by ambientBrightnessController.brightness.collectAsState()
-                    LaunchedEffect(ambientBrightness) {
-                        val attributes = window.attributes
-                        attributes.screenBrightness = ambientBrightness
-                        window.attributes = attributes
-                    }
 
                     var lastIsPlaying by remember { mutableStateOf(trackState.isPlaying) }
                     var lastIsTvMode by remember { mutableStateOf(isTvMode) }
@@ -292,7 +277,12 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         // status line, which hub mode draws over the
                                         // screensaver.
                                         bottomStartInset = 96.dp,
-                                        topEndInset = 32.dp
+                                        topEndInset = 32.dp,
+                                        haState = haState,
+                                        widgetsMode = coverFlowWidgetsMode,
+                                        onHaCommand = { manager.sendHaCommand(it) },
+                                        onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
+                                        onReorderHaWidgets = { manager.reorderHaWidgets(it) }
                                     )
                                 }
                                 DockScreen.NOW_PLAYING -> {
@@ -397,6 +387,12 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     }
 
                     InWindowDialogLayer(dialogHost)
+
+                    // Dims the screen in a dark room, and blacks out Cover
+                    // Flow / TV Ambient there (see DarkRoomBlackout) - over
+                    // any pop-up too, since a screensaver runs unattended
+                    // all night.
+                    DarkRoomBlackout(idle = isAmbientMode || isTvAmbientMode, window = window)
                 }
             }
         }

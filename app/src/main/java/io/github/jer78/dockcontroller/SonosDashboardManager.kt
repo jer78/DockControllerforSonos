@@ -977,6 +977,7 @@ class SonosDashboardManager private constructor(context: Context) {
     private suspend fun pollHA() {
         coroutineScope {
             launch { settingsManager.haWidgets.distinctUntilChanged().drop(1).collect { haWake.trySend(Unit) } }
+            launch { settingsManager.coverFlowMotionSensor.distinctUntilChanged().drop(1).collect { haWake.trySend(Unit) } }
             pollHALoop()
         }
     }
@@ -988,7 +989,11 @@ class SonosDashboardManager private constructor(context: Context) {
             val widgets = settingsManager.haWidgets.first().filterNotNull()
             val widgetEntities = widgets.map { it.entityId }.distinct()
             // The sun comes along with any weather widget, for night icons.
-            val stateEntities = if (widgetEntities.any { it.startsWith("weather.") }) widgetEntities + SUN_ENTITY else widgetEntities
+            val withSun = if (widgetEntities.any { it.startsWith("weather.") }) widgetEntities + SUN_ENTITY else widgetEntities
+            // Cover Flow's motion sensor rides along too, so it's pushed
+            // the moment someone walks up.
+            val motionSensor = settingsManager.coverFlowMotionSensor.first()
+            val stateEntities = if (motionSensor.isNotBlank()) (withSun + motionSensor).distinct() else withSun
             val haMedia = settingsManager.selectedHaMediaPlayer.first()
             haEvents.ensure(url, token, stateEntities + haMedia) { entityId ->
                 if (entityId == haMedia) {
@@ -1021,7 +1026,7 @@ class SonosDashboardManager private constructor(context: Context) {
                         val merged = stateEntities.mapNotNull { id ->
                             (entities[id] ?: old.entities[id])?.let { id to it }
                         }.toMap()
-                        HAState(widgets = widgets, entities = merged.mapValues { (_, e) -> withForecasts(e, merged) })
+                        HAState(widgets = widgets, entities = merged.mapValues { (_, e) -> withForecasts(e, merged) }, motionSensor = motionSensor)
                     }
                     entities.values.filterIsInstance<HaWeatherState>().forEach { refreshForecastsIfStale(url, token, it) }
                 }

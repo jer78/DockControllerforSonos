@@ -155,6 +155,7 @@ class MainActivity : ComponentActivity() {
             val nowPlayingHideNextUp by settingsManager.nowPlayingHideNextUp.collectAsState(initial = false)
             val nowPlayingClockMode by settingsManager.nowPlayingClockMode.collectAsState(initial = NowPlayingClockMode.OFF)
             val showEndsAt by settingsManager.showEndsAt.collectAsState(initial = true)
+            val coverFlowWidgetsMode by settingsManager.coverFlowWidgetsMode.collectAsState(initial = CoverFlowWidgetsMode.NEAR)
             val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
                 initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
             )
@@ -163,20 +164,6 @@ class MainActivity : ComponentActivity() {
             var isAmbientMode by remember { mutableStateOf(false) }
             var isTvAmbientMode by remember { mutableStateOf(false) }
 
-            // Dims the screen in a dark room instead of always running at
-            // full system brightness (see AmbientBrightnessController).
-            val ambientBrightnessController = remember { AmbientBrightnessController(this@MainActivity) }
-            DisposableEffect(Unit) {
-                ambientBrightnessController.start()
-                onDispose { ambientBrightnessController.stop() }
-            }
-            val ambientBrightness by ambientBrightnessController.brightness.collectAsState()
-            LaunchedEffect(ambientBrightness) {
-                val attributes = window.attributes
-                attributes.screenBrightness = ambientBrightness
-                window.attributes = attributes
-            }
-            
             var lastIsPlaying by remember { mutableStateOf(trackState.isPlaying) }
             var lastIsTvMode by remember { mutableStateOf(isTvMode) }
 
@@ -333,7 +320,12 @@ class MainActivity : ComponentActivity() {
                                 sortByArtist = coverFlowSortByArtist,
                                 onSortChange = { byArtist -> settingsScope.launch { settingsManager.setCoverFlowSortByArtist(byArtist) } },
                                 onRefreshFavorites = { onResult -> manager.refreshSavedFavorites(onResult) },
-                                isRefreshingFavorites = favoritesRefreshStatus.startsWith("Starting")
+                                isRefreshingFavorites = favoritesRefreshStatus.startsWith("Starting"),
+                                haState = haState,
+                                widgetsMode = coverFlowWidgetsMode,
+                                onHaCommand = { manager.sendHaCommand(it) },
+                                onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
+                                onReorderHaWidgets = { manager.reorderHaWidgets(it) }
                             )
                         }
                         DockScreen.NOW_PLAYING -> {
@@ -429,6 +421,10 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+
+                // Dims the screen in a dark room, and blacks out Cover Flow /
+                // TV Ambient there (see DarkRoomBlackout).
+                DarkRoomBlackout(idle = isAmbientMode || isTvAmbientMode, window = window)
             }
 
             val refreshStatus by manager.favoritesRefreshStatus.collectAsState()

@@ -79,6 +79,14 @@ import kotlin.math.roundToInt
 private val TrackCardBottomPadding = 8.dp
 // Clear space kept between the grid and those cards.
 private val TrackCardGridGap = 16.dp
+// How long the Home Assistant widgets stay after the motion sensor clears,
+// or after the last touch if nothing starts moving by itself before then.
+private const val WIDGETS_LINGER_MS = 30_000L
+// Room the pushed-right clock leaves for the controls button (24dp in from
+// the edge, about 50dp wide).
+private val ClockPushedEndPadding = 100.dp
+// The least space kept between the widgets and the clock beside them.
+private val ClockWidgetsGap = 32.dp
 
 // One of Cover Flow's bottom track cards (Previous / Now Playing / Next Up).
 @Composable
@@ -249,7 +257,14 @@ fun AmbientClockScreen(
     // top-right controls, for overlays the system draws there (the Pixel
     // Tablet's Home button and status line over the screensaver).
     bottomStartInset: Dp = 0.dp,
-    topEndInset: Dp = 0.dp
+    topEndInset: Dp = 0.dp,
+    // Now Playing's Home Assistant widgets, slid in beside the clock as set
+    // in Settings > Now Playing (see CoverFlowWidgetsMode).
+    haState: HAState = HAState(),
+    widgetsMode: CoverFlowWidgetsMode = CoverFlowWidgetsMode.OFF,
+    onHaCommand: (HaCommand) -> Unit = {},
+    onHaCommandWithResult: (HaCommand, (HaServiceResult) -> Unit) -> Unit = { _, _ -> },
+    onReorderHaWidgets: (List<HaWidgetSlot>) -> Unit = {}
 ) {
     var isFadingOut by remember { mutableStateOf(false) }
     // Favorite awaiting the user's confirm/cancel, and then the one they
@@ -299,6 +314,43 @@ fun AmbientClockScreen(
     // after CONTROLS_AUTO_COLLAPSE_MS without a tap (kept open while
     // searching, whose button closes the search).
     var controlsOpen by remember { mutableStateOf(false) }
+
+    // The Home Assistant widgets. In NEAR mode they come in on a touch, and
+    // go again as soon as Cover Flow or the grid starts moving by itself
+    // again (bumped in autoScrolls). The motion sensor keeps them in while
+    // it detects someone, and for WIDGETS_LINGER_MS after it clears - so a
+    // sensor that briefly clears while someone stands still doesn't snap
+    // them away. An open widget pop-up keeps them too. They make way for
+    // the controls.
+    var openHaEntity by remember { mutableStateOf<String?>(null) }
+    var screenTouches by remember { mutableIntStateOf(0) }
+    var autoScrolls by remember { mutableIntStateOf(0) }
+    var touched by remember { mutableStateOf(false) }
+    // Short grids never drift, so a touch also wears off by itself.
+    LaunchedEffect(screenTouches) {
+        if (screenTouches > 0) {
+            touched = true
+            delay(WIDGETS_LINGER_MS)
+            touched = false
+        }
+    }
+    LaunchedEffect(autoScrolls) {
+        touched = false
+    }
+    var motionNear by remember { mutableStateOf(haState.presenceDetected) }
+    LaunchedEffect(haState.presenceDetected) {
+        if (haState.presenceDetected) motionNear = true else {
+            delay(WIDGETS_LINGER_MS)
+            motionNear = false
+        }
+    }
+    val nearby = touched || motionNear
+    val hasHaWidgets = haState.widgets.any { slot -> haState.entities[slot.entityId].let { it != null && it !is HaSunState } }
+    val showHaWidgets = hasHaWidgets && !controlsOpen && when (widgetsMode) {
+        CoverFlowWidgetsMode.ALWAYS -> true
+        CoverFlowWidgetsMode.NEAR -> nearby || openHaEntity != null
+        CoverFlowWidgetsMode.OFF -> false
+    }
 
     // The bottom track cards' measured height, so the grid stops above them
     // whatever the font size. Until they've been drawn, a close estimate.
@@ -413,7 +465,23 @@ fun AmbientClockScreen(
     var showLabels by remember { mutableStateOf(false) }
     var previousTrackDetails by remember { mutableStateOf<TrackDetails?>(null) }
 
-    LaunchedEffect(isUserInteracting, isDragged) {
+    // The grid's A-Z bar, along the bottom of Cover Flow while it's being
+    // swiped through (the track cards step aside for it). It goes when the
+    // centered album's play and X buttons do (showLabels). Bumped on each
+    // letter picked, which also holds off the auto-advance.
+    var letterPicks by remember { mutableIntStateOf(0) }
+    var showCoverFlowLetterBar by remember { mutableStateOf(false) }
+    val coverFlowLetters = remember(shownAlbums, isSortByArtist) { shownAlbums.map { indexLetter(sortKey(it)) } }
+    val hasCoverFlowLetterBar = !isGridView && coverFlowLetters.size > 24
+    LaunchedEffect(isDragged, letterPicks) {
+        if (isDragged || letterPicks > 0) showCoverFlowLetterBar = true
+    }
+    LaunchedEffect(showLabels) {
+        if (!showLabels) showCoverFlowLetterBar = false
+    }
+    val letterBarShown = hasCoverFlowLetterBar && showCoverFlowLetterBar
+
+    LaunchedEffect(isUserInteracting, isDragged, letterPicks) {
         if (isUserInteracting || isDragged) {
             showLabels = true
         } else {
@@ -422,11 +490,12 @@ fun AmbientClockScreen(
         }
     }
 
-    LaunchedEffect(shownAlbums, isUserInteracting, isDragged, pendingFavoriteDelete, isGridView) {
+    LaunchedEffect(shownAlbums, isUserInteracting, isDragged, pendingFavoriteDelete, isGridView, letterPicks) {
         if (shownAlbums.isNotEmpty() && pendingFavoriteDelete == null && !isGridView) {
             while (true) {
                 delay(8000)
                 if (pagerState.pageCount > 0 && !isUserInteracting && !isDragged && !pagerState.isScrollInProgress) {
+                    autoScrolls++
                     pagerState.animateScrollToPage(
                         pagerState.currentPage + 1,
                         animationSpec = tween(1500, easing = FastOutSlowInEasing)
@@ -464,6 +533,14 @@ fun AmbientClockScreen(
             .background(Color.Black)
             .onGloballyPositioned { screenOrigin = it.boundsInWindow().topLeft }
             .debugToggleHoldGesture { showDebugInfo = !showDebugInfo }
+            // Any touch - swiping the albums, scrolling the grid - counts as
+            // someone being near, for the widgets. Only watched, never taken.
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    screenTouches++
+                }
+            }
             .pointerInput(Unit) {
                 val artworkMarginPx = 32.dp.toPx()
                 detectTapGestures(onTap = { offset ->
@@ -580,6 +657,7 @@ fun AmbientClockScreen(
                 onLongPress = { pendingFavoriteDelete = it },
                 // The same rules as Cover Flow's own auto-advance.
                 autoScroll = !searchOpen && pendingFavoriteDelete == null,
+                onDriftStart = { autoScrolls++ },
                 modifier = Modifier.fillMaxSize().alpha(fadeAlpha)
             )
         } else if (shownAlbums.isNotEmpty()) {
@@ -854,6 +932,17 @@ fun AmbientClockScreen(
         val showPreviousCard = trackState.isPlaying && hasPrevious && !hidePrevious && !searchOpen
         val showNowPlayingCard = trackState.isPlaying && !hideNowPlaying && !searchOpen
         val showNextUpCard = trackState.isPlaying && hasNext && !hideNextUp && !searchOpen
+        // While the A-Z bar is up, the cards drop out of the way below the
+        // screen's edge as it rises, and come back up as it goes.
+        val cardsAway by animateFloatAsState(
+            targetValue = if (letterBarShown) 1f else 0f,
+            animationSpec = tween(if (letterBarShown) 300 else 250, easing = FastOutSlowInEasing),
+            label = "trackCardsAway"
+        )
+        val cardsAwayModifier = Modifier.graphicsLayer {
+            translationY = cardsAway * (size.height + TrackCardBottomPadding.toPx())
+            alpha = 1f - cardsAway
+        }
 
         AnimatedVisibility(
             visible = showPreviousCard,
@@ -864,6 +953,7 @@ fun AmbientClockScreen(
                 .padding(start = 24.dp + bottomStartInset, top = 24.dp, end = 24.dp, bottom = TrackCardBottomPadding)
                 .onSizeChanged { onTrackCardMeasured(it.height) }
                 .alpha(fadeAlpha)
+                .then(cardsAwayModifier)
         ) {
             CoverFlowTrackCard(
                 label = "PREVIOUS",
@@ -901,7 +991,8 @@ fun AmbientClockScreen(
                     .align(Alignment.BottomEnd)
                     .padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = TrackCardBottomPadding)
                     .onSizeChanged { onTrackCardMeasured(it.height) }
-                    .alpha(fadeAlpha),
+                    .alpha(fadeAlpha)
+                    .then(cardsAwayModifier),
                 label = "nowPlayingNextUp"
             ) { nextUp ->
                 if (nextUp) {
@@ -924,22 +1015,77 @@ fun AmbientClockScreen(
             }
         }
 
+        AnimatedVisibility(
+            visible = letterBarShown,
+            enter = slideInVertically(tween(300, easing = FastOutSlowInEasing)) { it } + fadeIn(tween(300)),
+            exit = slideOutVertically(tween(250, easing = FastOutSlowInEasing)) { it } + fadeOut(tween(250)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(start = 48.dp + bottomStartInset, end = 48.dp, bottom = TrackCardBottomPadding + 16.dp)
+                .alpha(fadeAlpha)
+        ) {
+            val centered by remember(coverFlowLetters) {
+                derivedStateOf { coverFlowLetters.getOrNull(pagerState.currentPage % coverFlowLetters.size.coerceAtLeast(1)) }
+            }
+            LetterBar(
+                present = remember(coverFlowLetters) { coverFlowLetters.toSet() },
+                current = centered,
+                onLetter = { letter ->
+                    letterPicks++
+                    showLabels = true
+                    // The first album at that letter, or the next one there
+                    // is - the copy of it nearest the current page.
+                    val target = INDEX_LETTERS.indexOf(letter)
+                    val index = coverFlowLetters.indexOfFirst { INDEX_LETTERS.indexOf(it) >= target }
+                        .takeIf { it >= 0 } ?: coverFlowLetters.lastIndex
+                    val page = pagerState.currentPage
+                    scope.launch { pagerState.scrollToPage(page - page % coverFlowLetters.size + index) }
+                }
+            )
+        }
+
         // The open controls stretch across the top right, so a centered
         // time slides over to the left as they open - in step with them, as
-        // if they push it - and back as they close. (Its periodic move
-        // between the left and the center still fades.)
-        val pushBias by animateFloatAsState(
-            targetValue = if (controlsOpen) -1f else 0f,
+        // if they push it - and back as they close. The Home Assistant
+        // widgets push it the other way, to the right, just the same. (Its
+        // periodic move between the left and the center still fades.)
+        val controlsPush by animateFloatAsState(
+            targetValue = if (controlsOpen) 1f else 0f,
             animationSpec = tween(if (controlsOpen) 300 else 250, easing = FastOutSlowInEasing),
             label = "clockPush"
         )
+        val widgetsPush by animateFloatAsState(
+            targetValue = if (showHaWidgets) 1f else 0f,
+            animationSpec = tween(if (showHaWidgets) 300 else 250, easing = FastOutSlowInEasing),
+            label = "clockWidgetsPush"
+        )
+        // The time and date's widths (not the weather's, which folds away
+        // for the widgets), and the widgets' - when they can't all fit
+        // across the top, the clock fades out while the widgets are in,
+        // giving them the whole width.
+        var clockTimeWidth by remember { mutableIntStateOf(0) }
+        var clockDateWidth by remember { mutableIntStateOf(0) }
+        var haWidgetsWidth by remember { mutableIntStateOf(0) }
+        val topWidth = screenWidth.dp - 24.dp - ClockPushedEndPadding
+        val clockFitsBesideWidgets = with(screenDensity) {
+            (haWidgetsWidth + maxOf(clockTimeWidth, clockDateWidth)).toDp() + ClockWidgetsGap <= topWidth
+        }
+        val clockAlpha by animateFloatAsState(
+            targetValue = if (showHaWidgets && !clockFitsBesideWidgets) 0f else 1f,
+            animationSpec = tween(if (showHaWidgets) 300 else 250, easing = FastOutSlowInEasing),
+            label = "clockMakeRoom"
+        )
+        // Pushed right, the time stops short of the controls button.
+        val clockEnd = lerp(60f, ClockPushedEndPadding.value, widgetsPush).dp
         AnimatedContent(
             targetState = clockAlignment,
             transitionSpec = { fadeIn(tween(1500)) togetherWith fadeOut(tween(1500)) },
-            modifier = Modifier.fillMaxSize().padding(top = 20.dp, start = 60.dp, end = 60.dp).alpha(fadeAlpha),
+            modifier = Modifier.fillMaxSize().padding(top = 20.dp, start = 60.dp, end = clockEnd).alpha(fadeAlpha * clockAlpha),
             label = "clockMove"
         ) { alignment ->
-            val boxAlignment = if (alignment == Alignment.TopCenter) BiasAlignment(pushBias, -1f) else alignment
+            val restBias = if (alignment == Alignment.TopCenter) 0f else -1f
+            val pushedRight = lerp(restBias, 1f, widgetsPush)
+            val boxAlignment = BiasAlignment(lerp(pushedRight, -1f, controlsPush), -1f)
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = boxAlignment) {
                 Column(
                     horizontalAlignment = when {
@@ -952,28 +1098,65 @@ fun AmbientClockScreen(
                     // date, so it stays clear of the album art and the grid's
                     // A-Z bar: on the outer side when the clock is on the
                     // left, otherwise on the time's left.
+                    // While the widgets are in, the weather widget among them
+                    // already shows it, so it folds away to leave them room.
                     val clockWeather = weather?.takeIf { it.temperature != null }
                     val weatherAfter = alignment.toString().contains("Start")
+                    val weatherEnter = expandHorizontally(tween(300)) + fadeIn(tween(300))
+                    val weatherExit = shrinkHorizontally(tween(250)) + fadeOut(tween(250))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (clockWeather != null && !weatherAfter) {
-                            ClockWeather(clockWeather)
-                            Spacer(Modifier.width(24.dp))
+                            AnimatedVisibility(visible = !showHaWidgets, enter = weatherEnter, exit = weatherExit) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    ClockWeather(clockWeather)
+                                    Spacer(Modifier.width(24.dp))
+                                }
+                            }
                         }
                         Text(
                             text = formatClockTime(currentTime, use24HourClock),
-                            fontSize = 90.sp, fontWeight = FontWeight.ExtraLight, color = Color.White.copy(alpha = 0.5f)
+                            fontSize = 90.sp, fontWeight = FontWeight.ExtraLight, color = Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.onSizeChanged { clockTimeWidth = it.width }
                         )
                         if (clockWeather != null && weatherAfter) {
-                            Spacer(Modifier.width(24.dp))
-                            ClockWeather(clockWeather)
+                            AnimatedVisibility(visible = !showHaWidgets, enter = weatherEnter, exit = weatherExit) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Spacer(Modifier.width(24.dp))
+                                    ClockWeather(clockWeather)
+                                }
+                            }
                         }
                     }
                     Text(
                         text = String.format(Locale.getDefault(), "%tA, %tB %te", currentTime, currentTime, currentTime).uppercase(),
-                        fontSize = 16.sp, color = Color.White.copy(alpha = 0.3f), letterSpacing = 2.sp
+                        fontSize = 16.sp, color = Color.White.copy(alpha = 0.3f), letterSpacing = 2.sp,
+                        modifier = Modifier.onSizeChanged { clockDateWidth = it.width }
                     )
                 }
             }
+        }
+
+        // The widgets come in from the left in step with the clock moving
+        // right, like the controls opening on the other side. They can have
+        // the whole width (the clock makes way if needed), scrolling if
+        // there are more still.
+        AnimatedVisibility(
+            visible = showHaWidgets,
+            enter = slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { -it } + fadeIn(tween(300)),
+            exit = slideOutHorizontally(tween(250, easing = FastOutSlowInEasing)) { -it } + fadeOut(tween(250)),
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 24.dp, top = 40.dp)
+                .widthIn(max = topWidth.coerceAtLeast(0.dp))
+                .onSizeChanged { haWidgetsWidth = it.width }
+                .alpha(fadeAlpha)
+        ) {
+            HaWidgetRow(
+                haState = haState,
+                onOpen = { openHaEntity = it },
+                onHaCommand = onHaCommand,
+                onReorder = onReorderHaWidgets
+            )
         }
 
         if (albumHistory.isNotEmpty()) {
@@ -1214,6 +1397,15 @@ fun AmbientClockScreen(
             )
         }
 
+        openHaEntity?.let { haState.entities[it] }?.let { entity ->
+            HaWidgetDialog(
+                entity = entity,
+                onHaCommand = onHaCommand,
+                onHaCommandWithResult = onHaCommandWithResult,
+                onDismiss = { openHaEntity = null }
+            )
+        }
+
         // Drawn in-tree rather than as an AlertDialog, since this screen
         // also runs inside SonosDreamService, which isn't an Activity.
         pendingFavoriteDelete?.let { item ->
@@ -1299,6 +1491,7 @@ private fun CoverGrid(
     // while, drift slowly sideways with the A-Z bar hidden, so nothing sits
     // still long enough to burn in.
     autoScroll: Boolean = false,
+    onDriftStart: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val animatedBottom by animateDpAsState(bottomPadding, tween(400), label = "gridBottom")
@@ -1340,6 +1533,7 @@ private fun CoverGrid(
         if (!autoScroll || !endless) return@LaunchedEffect
         delay(GRID_DRIFT_DELAY_MS)
         drifting = true
+        onDriftStart()
         pickedLetter = null
         highlightLetter = null
         var lastFrame = 0L

@@ -172,8 +172,25 @@ const val MAX_HA_WIDGETS = 10
 // has been read, rather than showing placeholder values.
 data class HAState(
     val widgets: List<HaWidgetSlot> = emptyList(),
-    val entities: Map<String, HaEntityState> = emptyMap()
-)
+    val entities: Map<String, HaEntityState> = emptyMap(),
+    // Settings > Now Playing's motion sensor for Cover Flow's widgets (a
+    // binary_sensor id, or blank). Its state is in entities, but it isn't
+    // one of the widgets.
+    val motionSensor: String = ""
+) {
+    // Someone's near the dock, as far as the motion sensor can tell.
+    val presenceDetected: Boolean
+        get() = (entities[motionSensor] as? HaBinarySensorState)?.isOn == true
+}
+
+// When Cover Flow and the grid slide in the Now Playing widgets beside the
+// clock. Near: while the motion sensor (if one is set) detects someone, or
+// the screen is being touched.
+enum class CoverFlowWidgetsMode(val label: String) {
+    NEAR("When Someone's Near"),
+    ALWAYS("Always"),
+    OFF("Off")
+}
 
 // The first weather widget's state, for Cover Flow's ambient clock.
 fun HAState.firstWeather(): HaWeatherState? =

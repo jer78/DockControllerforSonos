@@ -72,7 +72,14 @@ sits on its dock.
   quicker for finding one album among all your favorites. Tap a cover to
   play it, or long-press it to delete it (after a confirmation)
 - **A-Z bar** above the grid: tap a letter, or drag along the bar, to jump
-  straight to it
+  straight to it. In Cover Flow it slides up along the bottom while you swipe
+  through the albums, with the track cards stepping aside for it
+- **Home Assistant widgets** slide in from the left when someone's near,
+  pushing the clock aside (and stepping in for its weather): when you touch
+  the screen, until the albums start moving by themselves again, or while a
+  Home Assistant motion sensor you pick detects someone. If there isn't room
+  for both, the clock makes way until they go. You can also show them always,
+  or never (Settings → Cover Flow / Grid, once Home Assistant is connected)
 - **Search**: the magnifier button opens an on-screen keyboard; type any
   part of a title or artist (case and accents don't matter) and the grid
   narrows as you type
@@ -159,7 +166,9 @@ sits on its dock.
   straight away, without waiting for the next refresh
 - Works as an Android screensaver (Daydream), with every pop-up available
   from it; Settings opens in the app, where it scrolls properly
-- Dims automatically in a dark room using the light sensor
+- Dims automatically in a dark room using the light sensor, and fades Cover
+  Flow and the TV screensaver to black once the lights go out (a tap shows it
+  again for 30 seconds; it comes back by itself when the lights go on)
 
 ## Experimental features
 
@@ -231,7 +240,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.34.apk`). It's about 55 MB.
+   `DockController-v1.0.35.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -262,7 +271,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.34.apk
+adb install -r DockController-v1.0.35.apk
 ```
 
 Every release is signed with the same key. If Android says **App not

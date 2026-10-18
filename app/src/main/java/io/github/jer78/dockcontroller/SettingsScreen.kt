@@ -450,6 +450,8 @@ fun SettingsModal(
     var nowPlayingHidePrevious by remember { mutableStateOf(false) }
     var nowPlayingClockMode by remember { mutableStateOf(NowPlayingClockMode.OFF) }
     var showEndsAt by remember { mutableStateOf(true) }
+    var coverFlowWidgetsMode by remember { mutableStateOf(CoverFlowWidgetsMode.NEAR) }
+    var coverFlowMotionSensor by remember { mutableStateOf("") }
     var autoUnmuteAfterAds by remember { mutableStateOf(false) }
     var tvShowImages by remember { mutableStateOf(true) }
     var continueWithRandomAlbum by remember { mutableStateOf(false) }
@@ -534,6 +536,8 @@ fun SettingsModal(
         nowPlayingHideNextUp = settingsManager.nowPlayingHideNextUp.first()
         nowPlayingClockMode = settingsManager.nowPlayingClockMode.first()
         showEndsAt = settingsManager.showEndsAt.first()
+        coverFlowWidgetsMode = settingsManager.coverFlowWidgetsMode.first()
+        coverFlowMotionSensor = settingsManager.coverFlowMotionSensor.first()
         autoUnmuteAfterAds = settingsManager.autoUnmuteAfterAds.first()
         tvShowImages = settingsManager.tvShowImages.first()
         continueWithRandomAlbum = settingsManager.continueWithRandomAlbum.first()
@@ -741,6 +745,52 @@ fun SettingsModal(
                                     SettingsToggleRow("Hide Next Up", hideNextUp) {
                                         hideNextUp = it
                                         scope.launch { settingsManager.setCoverFlowHideNextUp(it) }
+                                    }
+                                    HorizontalDivider()
+
+                                    Text("Home Assistant Widgets:", fontWeight = FontWeight.SemiBold)
+                                    // Like the Home Assistant tab's widget list, only
+                                    // once Home Assistant has connected - the motion
+                                    // sensor field needs its entities.
+                                    if (haEverConnected) {
+                                        Text(
+                                            "The Home Assistant widgets slide in from the left, beside the clock. Near: while the " +
+                                                "motion sensor below detects someone, or the screen is being touched.",
+                                            fontSize = 12.sp,
+                                            color = Color.Gray
+                                        )
+                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            CoverFlowWidgetsMode.entries.forEach { mode ->
+                                                FilterChip(
+                                                    selected = (coverFlowWidgetsMode == mode),
+                                                    onClick = {
+                                                        coverFlowWidgetsMode = mode
+                                                        scope.launch { settingsManager.setCoverFlowWidgetsMode(mode) }
+                                                    },
+                                                    label = { Text(mode.label) }
+                                                )
+                                            }
+                                        }
+                                        if (coverFlowWidgetsMode == CoverFlowWidgetsMode.NEAR) {
+                                            // Saved with Save & Apply, like the other entity fields.
+                                            EntityAutocompleteField(
+                                                label = "Motion Sensor (optional)",
+                                                value = coverFlowMotionSensor,
+                                                onValueChange = { coverFlowMotionSensor = it },
+                                                suggestions = widgetEntityOptions[HaWidgetType.BINARY_SENSOR].orEmpty(),
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                    } else {
+                                        Text(
+                                            if (haConnection == HaConnectionStatus.Testing) {
+                                                "Connecting to Home Assistant..."
+                                            } else {
+                                                "Set up Home Assistant in the Home Assistant tab to show its widgets here."
+                                            },
+                                            fontSize = 12.sp,
+                                            color = Color.Gray
+                                        )
                                     }
                                 }
 
@@ -1274,6 +1324,7 @@ fun SettingsModal(
                         fPlaylists,
                         fRadio
                     )
+                    settingsManager.setCoverFlowMotionSensor(coverFlowMotionSensor)
                     onSettingsSaved()
                     onDismiss()
                 }
