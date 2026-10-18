@@ -143,6 +143,16 @@ class SonosDashboardManager private constructor(context: Context) {
         private const val ACTIVE_POLL_INTERVAL_MS = 2000L
         private const val RECENTLY_PLAYED_COUNT = 5
         private const val PLAYED_TODAY_MS = 24 * 60 * 60 * 1000L
+        // "Live" as a word in the album title: "(Live)", "Live at Leeds",
+        // "MTV Unplugged (Live)" - but not "Alive" or "Delivery".
+        private val LIVE_ALBUM = Regex("""\b(Live|LIVE)\b""")
+        private const val LIVE_ALBUM_RESTART_WITHIN_SECONDS = 30
+        // How long after a song is picked from the queue to check it's the
+        // one playing, and how long the notice stays when it isn't.
+        private const val SKIP_CHECK_DELAY_MS = 6_000L
+        private const val SKIPPED_SONG_NOTICE_MS = 20_000L
+        // Half-second looks for a replayed track in a just-started album's queue.
+        private const val REPLAY_QUEUE_TRIES = 10
         private const val IDLE_POLL_INTERVAL_MS = 6000L
         private const val ACTIVE_HA_POLL_INTERVAL_MS = 5000L
         private const val IDLE_HA_POLL_INTERVAL_MS = 15000L
@@ -768,6 +778,7 @@ class SonosDashboardManager private constructor(context: Context) {
                                 settingsManager.continueWithRandomAlbum.first(),
                                 settingsManager.continuePreferSameGenre.first()
                             )
+                            maybeAdjustForLiveAlbum(album, fromQueue, shuffled, position, speaker)
                             // "None" is TrackState's existing "nothing to show"
                             // marker for these, which the UI checks for.
                             fun pyString(key: String) = pyDict[PyObject.fromJava(key)]?.toString() ?: ""
@@ -1251,11 +1262,27 @@ class SonosDashboardManager private constructor(context: Context) {
                     duration = map[PyObject.fromJava("duration")]?.toString() ?: ""
                 )
             }
-            SonosQueue(tracks, result[PyObject.fromJava("current")]?.toInt() ?: -1)
+            SonosQueue(tracks, result[PyObject.fromJava("current")]?.toInt() ?: -1).also { lastLoadedQueue = it }
         } catch (e: Exception) {
             Log.w("SonosDashboard", "Queue failed: ${e.message}")
             null
         }
+    }
+
+    // The queue as last shown in the song picker, for the skipped song's name.
+    @Volatile private var lastLoadedQueue: SonosQueue? = null
+
+    // A song picked from the queue that Sonos skipped right past - most
+    // likely an explicit one with explicit content turned off in the Sonos
+    // app, which Sonos doesn't report and the app can't read. Shown on Now
+    // Playing for SKIPPED_SONG_NOTICE_MS.
+    private val _skippedSongNotice = MutableStateFlow<String?>(null)
+    val skippedSongNotice: StateFlow<String?> = _skippedSongNotice.asStateFlow()
+    private var skippedSongNoticeJob: Job? = null
+
+    fun dismissSkippedSongNotice() {
+        skippedSongNoticeJob?.cancel()
+        _skippedSongNotice.value = null
     }
 
     fun playQueueTrack(index: Int) {
@@ -1263,7 +1290,25 @@ class SonosDashboardManager private constructor(context: Context) {
             val speaker = settingsManager.sonosSpeaker.first()
             if (speaker.isBlank()) return@launch
             _trackState.update { it.copy(lastCommandSent = "Action: play queue track ${index + 1}") }
-            Python.getInstance().getModule("sonos_bridge").callAttr("play_queue_track", index, speaker)
+            val sent = _trackState.value.lastCommandSent
+            val bridge = Python.getInstance().getModule("sonos_bridge")
+            if (!bridge.callAttr("play_queue_track", index, speaker).toBoolean()) return@launch
+            // In shuffle the queue position isn't the play order, so a
+            // different position proves nothing.
+            if (_trackState.value.isShuffled) return@launch
+            delay(SKIP_CHECK_DELAY_MS)
+            // Something else was pressed meanwhile (next, another song, ...).
+            if (_trackState.value.lastCommandSent != sent) return@launch
+            val position = bridge.callAttr("get_queue_position", speaker).toInt()
+            if (position < 0 || position == index) return@launch
+            val title = lastLoadedQueue?.tracks?.getOrNull(index)?.title.orEmpty()
+            Log.i("SonosDashboard", "Queue track ${index + 1} '$title' skipped - now at ${position + 1}")
+            skippedSongNoticeJob?.cancel()
+            _skippedSongNotice.value = title.ifBlank { "That song" }
+            skippedSongNoticeJob = scope.launch {
+                delay(SKIPPED_SONG_NOTICE_MS)
+                _skippedSongNotice.value = null
+            }
         }
     }
 
@@ -1336,8 +1381,9 @@ class SonosDashboardManager private constructor(context: Context) {
 
     // askIfUnplayable: a user's tap rather than e.g. Continue With a Random
     // Album - if a favorite that's no longer on Sonos won't play, the hosts
-    // then ask whether to delete it (see unplayableFavorite).
-    fun playAlbum(album: AlbumHistoryItem, askIfUnplayable: Boolean = false) {
+    // then ask whether to delete it (see unplayableFavorite). afterStart
+    // runs once it's playing (see replayTrack).
+    fun playAlbum(album: AlbumHistoryItem, askIfUnplayable: Boolean = false, afterStart: (suspend () -> Unit)? = null) {
         lastStartedFavorite = album to System.currentTimeMillis()
         scope.launch {
             val py = Python.getInstance()
@@ -1375,6 +1421,54 @@ class SonosDashboardManager private constructor(context: Context) {
             // itself still works.
             if (failed && fromSavedData && askIfUnplayable && result != "ERR: Speaker Offline") {
                 _unplayableFavorite.value = album
+            }
+            if (!failed) afterStart?.invoke()
+        }
+    }
+
+    // Replay in the Previous track's details: from the queue when it's still
+    // there (usually the same album), else by starting the favorite album
+    // it's on and jumping to it. Null when it's in neither.
+    private sealed interface ReplayTarget {
+        data class InQueue(val index: Int) : ReplayTarget
+        data class OnFavorite(val album: AlbumHistoryItem) : ReplayTarget
+    }
+
+    // The track's place in the queue - by title, preferring one by the same
+    // artist when titles repeat (a live version, a remix) - or -1.
+    private fun indexInQueue(queue: SonosQueue?, track: TrackDetails): Int {
+        val tracks = queue?.tracks.orEmpty()
+        val sameTitle = tracks.indices.filter { tracks[it].title.equals(track.title, ignoreCase = true) }
+        return sameTitle.firstOrNull { tracks[it].artist.equals(track.artist, ignoreCase = true) }
+            ?: sameTitle.firstOrNull() ?: -1
+    }
+
+    private suspend fun findReplayTarget(track: TrackDetails): ReplayTarget? {
+        if (track.title.isBlank() || track.title == "None" || _isTvMode.value) return null
+        indexInQueue(loadQueue(), track).takeIf { it >= 0 }?.let { return ReplayTarget.InQueue(it) }
+        if (track.album.isBlank()) return null
+        return matchPlayingFavorite(_favoriteAlbumsRef.value, track.album, track.artist)?.let { ReplayTarget.OnFavorite(it) }
+    }
+
+    suspend fun canReplay(track: TrackDetails): Boolean = findReplayTarget(track) != null
+
+    fun replayTrack(track: TrackDetails) {
+        scope.launch {
+            when (val target = findReplayTarget(track)) {
+                is ReplayTarget.InQueue -> playQueueTrack(target.index)
+                // The new queue takes a moment to fill.
+                is ReplayTarget.OnFavorite -> playAlbum(target.album) {
+                    repeat(REPLAY_QUEUE_TRIES) {
+                        delay(500)
+                        val index = indexInQueue(loadQueue(), track)
+                        if (index >= 0) {
+                            playQueueTrack(index)
+                            return@playAlbum
+                        }
+                    }
+                    Log.w("SonosDashboard", "Replay: '${track.title}' not found on '${target.album.albumTitle}'")
+                }
+                null -> reportError("Can't replay '${track.title}' - it's not in the queue or your favorites")
             }
         }
     }
@@ -1537,6 +1631,78 @@ class SonosDashboardManager private constructor(context: Context) {
             }
             else -> finalTrackEndsAtMs = null
         }
+    }
+
+    // A live album plays as recorded: when one starts from the queue, shuffle
+    // and crossfade (whichever are on) are turned off, and turned back on
+    // when a non-live album starts - unless restoreAfterLiveAlbum() already
+    // did. Live albums in a row keep them off. Checked once per album, so
+    // turning them back on by hand sticks. Not saved, so they stay off if
+    // the app closes mid-album.
+    private var lastSeenAlbum = ""
+    @Volatile private var liveAlbumOverride: LiveAlbumNotice? = null
+    // Shown on Now Playing until dismissed; the override stays either way.
+    private val _liveAlbumNotice = MutableStateFlow<LiveAlbumNotice?>(null)
+    val liveAlbumNotice: StateFlow<LiveAlbumNotice?> = _liveAlbumNotice.asStateFlow()
+
+    private fun maybeAdjustForLiveAlbum(album: String, fromQueue: Boolean, shuffled: Boolean, positionSeconds: Int, speaker: String) {
+        if (album.isBlank() || album == lastSeenAlbum) return
+        // The app just started - the album may be well under way.
+        val justStarted = lastSeenAlbum.isNotEmpty()
+        lastSeenAlbum = album
+        val previous = liveAlbumOverride
+        if (!fromQueue || !LIVE_ALBUM.containsMatchIn(album)) {
+            previous?.let { restoreSettings(it, speaker) }
+            return
+        }
+        if (previous != null) {
+            liveAlbumOverride = previous.copy(album = album)
+            _liveAlbumNotice.value = liveAlbumOverride
+            return
+        }
+        val bridge = Python.getInstance().getModule("sonos_bridge")
+        val crossfade = bridge.callAttr("get_cross_fade", speaker)?.toJava(Boolean::class.javaObjectType) == true
+        val shuffleOff = shuffled && bridge.callAttr("set_shuffle", false, speaker).toBoolean()
+        val crossfadeOff = crossfade && bridge.callAttr("set_cross_fade", false, speaker).toBoolean()
+        if (shuffleOff) {
+            _trackState.update { it.copy(isShuffled = false) }
+            // Shuffle picked where it started - start from the top instead,
+            // unless it's been playing a while.
+            if (justStarted && positionSeconds < LIVE_ALBUM_RESTART_WITHIN_SECONDS) {
+                bridge.callAttr("play_queue_track", 0, speaker)
+            }
+        }
+        if (crossfadeOff) _audioSettings.update { it.copy(crossfade = false) }
+        if (shuffleOff || crossfadeOff) {
+            Log.i("SonosDashboard", "Live album '$album' - shuffle off: $shuffleOff, crossfade off: $crossfadeOff")
+            liveAlbumOverride = LiveAlbumNotice(album, shuffleOff, crossfadeOff)
+            _liveAlbumNotice.value = liveAlbumOverride
+        }
+    }
+
+    private fun restoreSettings(override: LiveAlbumNotice, speaker: String) {
+        val bridge = Python.getInstance().getModule("sonos_bridge")
+        if (override.shuffleOff && bridge.callAttr("set_shuffle", true, speaker).toBoolean()) {
+            _trackState.update { it.copy(isShuffled = true) }
+        }
+        if (override.crossfadeOff && bridge.callAttr("set_cross_fade", true, speaker).toBoolean()) {
+            _audioSettings.update { it.copy(crossfade = true) }
+        }
+        liveAlbumOverride = null
+        _liveAlbumNotice.value = null
+    }
+
+    // The notice's Turn Back On button.
+    fun restoreAfterLiveAlbum() {
+        scope.launch {
+            val speaker = settingsManager.sonosSpeaker.first()
+            val override = liveAlbumOverride ?: return@launch
+            if (speaker.isNotBlank()) restoreSettings(override, speaker)
+        }
+    }
+
+    fun dismissLiveAlbumNotice() {
+        _liveAlbumNotice.value = null
     }
 
     fun toggleMute() {

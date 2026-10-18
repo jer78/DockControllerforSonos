@@ -35,16 +35,25 @@ sits on its dock.
   While muted, the volume bar says "Muted" and flashes in a color from the
   album art
 - Previous (the song that actually played last, even across album changes)
-  and Next Up (from the Sonos queue); tap Previous for details
+  and Next Up (from the Sonos queue); tap Previous for details, with a
+  **Replay** button when the song can be played again: from the queue, or by
+  starting the favorite album it's on and jumping to it. Works from Cover
+  Flow and the grid too
 - **Browse the queue**: open the album's or playlist's track list, see every
   song in the queue with its length and which one is playing, and tap one to
-  jump straight to it
+  jump straight to it. If Sonos skips the song you picked, a notice says so:
+  usually it's explicit and explicit content is turned off in the Sonos app
+  (Sonos doesn't let other apps read that setting)
 - Speaker Groups: join and unjoin rooms; each grouped room also gets its own
   volume slider
 - Sound Settings: bass, treble, loudness, Night Sound, Speech Enhancement and
   subwoofer, where the speaker supports them
 - **Crossfade** between songs, switched on or off right from Settings →
   Setup
+- **Live albums play as recorded**: when an album with "Live" in its title
+  starts, shuffle and crossfade are turned off (whichever were on), and a
+  notice offers **Turn Back On**. They come back on by themselves when a
+  non-live album starts
 - Optional clock, in music mode, TV mode or both. In TV mode it sits above
   the show's title and takes turns with the time the show will end
 - Optional spectrum analyzer behind the screen (or just over the artwork),
@@ -81,7 +90,8 @@ sits on its dock.
   Playing
 - **Recently played** in the grid: as it drifts, each of your last 5
   favorites played flips out to the front for a few seconds, saying when it
-  was last played, then flips back into its place (Settings → Cover Flow /
+  was last played (or Now Playing, if it's the album playing), then flips
+  back into its place (Settings → Cover Flow /
   Grid → Show Recently Played)
 - **A-Z bar** above the grid: tap a letter, or drag along the bar, to jump
   straight to it. In Cover Flow it slides up along the bottom while you swipe
@@ -263,7 +273,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.37.apk`). It's about 55 MB.
+   `DockController-v1.0.38.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -294,7 +304,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.37.apk
+adb install -r DockController-v1.0.38.apk
 ```
 
 Every release is signed with the same key. If Android says **App not

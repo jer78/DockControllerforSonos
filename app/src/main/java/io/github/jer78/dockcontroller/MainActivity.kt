@@ -131,6 +131,8 @@ class MainActivity : ComponentActivity() {
             val isTvMode by manager.isTvMode.collectAsState()
             val currentVolume by manager.currentVolume.collectAsState()
             val audioSettings by manager.audioSettings.collectAsState()
+            val liveAlbumNotice by manager.liveAlbumNotice.collectAsState()
+            val skippedSongNotice by manager.skippedSongNotice.collectAsState()
             val discoveredSpeakers by manager.discoveredSpeakers.collectAsState()
             val albumHistory by manager.albumHistory.collectAsState()
             val speakerGroups by manager.speakerGroups.collectAsState()
@@ -393,6 +395,8 @@ class MainActivity : ComponentActivity() {
                                 suggestions = if (artistSuggestions && lastFmApiKey.isNotBlank()) {
                                     ArtistSuggestions.latestFor(trackState.artist)
                                 } else emptyList(),
+                                canReplayTrack = { manager.canReplay(it) },
+                                onReplayTrack = { manager.replayTrack(it) },
                                 onShowSuggestions = {
                                     suggestions = ArtistSuggestions.latestFor(trackState.artist).ifEmpty { null }
                                 }
@@ -451,6 +455,13 @@ class MainActivity : ComponentActivity() {
                                 clockMode = nowPlayingClockMode,
                                 use24HourClock = use24HourClock,
                                 showEndsAt = showEndsAt,
+                                liveAlbumNotice = liveAlbumNotice,
+                                onRestoreLiveAlbumSettings = { manager.restoreAfterLiveAlbum() },
+                                onDismissLiveAlbumNotice = { manager.dismissLiveAlbumNotice() },
+                                skippedSongNotice = skippedSongNotice,
+                                onDismissSkippedSongNotice = { manager.dismissSkippedSongNotice() },
+                                canReplayTrack = { manager.canReplay(it) },
+                                onReplayTrack = { manager.replayTrack(it) },
                                 swapWhilePlaying = swapWhilePlaying && !showSettings,
                                 onSwapWhilePlaying = {
                                     screenSlide = ScreenSlide.VERTICAL

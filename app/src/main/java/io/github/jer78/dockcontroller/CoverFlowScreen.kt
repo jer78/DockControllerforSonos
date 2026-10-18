@@ -332,7 +332,10 @@ fun AmbientClockScreen(
     // The artist suggestions last shown for the playing artist, offered
     // again among the track cards, and showing them.
     suggestions: List<SuggestedAlbum> = emptyList(),
-    onShowSuggestions: () -> Unit = {}
+    onShowSuggestions: () -> Unit = {},
+    // Replay in the Previous track's details (see SonosDashboardManager.replayTrack).
+    canReplayTrack: suspend (TrackDetails) -> Boolean = { false },
+    onReplayTrack: (TrackDetails) -> Unit = {}
 ) {
     var isFadingOut by remember { mutableStateOf(false) }
     var scrollAtOnce by remember { mutableStateOf(startScrolling) }
@@ -739,6 +742,14 @@ fun AmbientClockScreen(
                 },
                 recentlyPlayed = remember(recentlyPlayed, showRecentlyPlayed) {
                     if (showRecentlyPlayed) recentlyPlayed.toMap() else emptyMap()
+                },
+                // The newest one played is the one playing, while its album is.
+                nowPlayingKey = recentlyPlayed.firstOrNull()?.first?.takeIf { key ->
+                    trackState.isPlaying && albumHistory.any {
+                        favoriteKey(it) == key && it.albumTitle.isNotBlank() && trackState.album.isNotBlank() &&
+                            (it.albumTitle.contains(trackState.album, ignoreCase = true) ||
+                                trackState.album.contains(it.albumTitle, ignoreCase = true))
+                    }
                 },
                 modifier = Modifier.fillMaxSize().alpha(fadeAlpha)
             )
@@ -1483,7 +1494,13 @@ fun AmbientClockScreen(
             TrackDetailsDialog(
                 heading = "Previous Track",
                 track = track,
-                onDismiss = { previousTrackDetails = null }
+                onDismiss = { previousTrackDetails = null },
+                canReplay = canReplayTrack,
+                // Back to Now Playing for it, like playing an album from here.
+                onReplay = {
+                    onReplayTrack(it)
+                    onWakeUp()
+                }
             )
         }
 
@@ -1592,6 +1609,8 @@ private fun CoverGrid(
     // one passing the middle flips out to the front for FEATURE_HOLD_MS,
     // saying when it was last played, then flips back into its place.
     recentlyPlayed: Map<String, Long> = emptyMap(),
+    // The favoriteKey of the one playing now, which says so instead.
+    nowPlayingKey: String? = null,
     modifier: Modifier = Modifier
 ) {
     val animatedBottom by animateDpAsState(bottomPadding, tween(400), label = "gridBottom")
@@ -1814,6 +1833,7 @@ private fun CoverGrid(
             FeaturedRecentAlbum(
                 album = albums[index % albums.size],
                 playedAt = recentlyPlayed[favoriteKey(albums[index % albums.size])],
+                playingNow = nowPlayingKey != null && favoriteKey(albums[index % albums.size]) == nowPlayingKey,
                 // Where its place in the grid is now, and the front: the
                 // middle of the space the grid's rows take up.
                 from = featuredBounds.translate(-gridOrigin),
@@ -1886,6 +1906,8 @@ private const val FEATURE_HOLD_MS = 3_000L
 private fun FeaturedRecentAlbum(
     album: AlbumHistoryItem,
     playedAt: Long?,
+    // Says "Now Playing" instead of when it was last played.
+    playingNow: Boolean,
     from: Rect,
     areaTop: Float,
     areaBottom: Float,
@@ -1939,7 +1961,9 @@ private fun FeaturedRecentAlbum(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        if (playedAt != null) {
+        if (playingNow) {
+            Text("Now Playing", color = Color.White.copy(alpha = 0.7f), fontSize = 15.sp, maxLines = 1)
+        } else if (playedAt != null) {
             val ago = DateUtils.getRelativeTimeSpanString(playedAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
             Text(
                 "Last played ${if (ago == "Yesterday") "yesterday" else ago}",

@@ -67,6 +67,15 @@ data class TrackState(
     val haAttributes: String = ""
 )
 
+// A live album is playing, so the app turned off shuffle and/or crossfade
+// (whichever were on) to play it as recorded - see
+// SonosDashboardManager.maybeAdjustForLiveAlbum.
+data class LiveAlbumNotice(
+    val album: String,
+    val shuffleOff: Boolean,
+    val crossfadeOff: Boolean
+)
+
 // A failed command (album play, favorite delete, ...), kept in
 // SonosDashboardManager.recentErrors for the Metadata Debugger. timestampMs
 // lets the error flash show only while it's fresh, instead of re-flashing a

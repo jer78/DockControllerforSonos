@@ -665,6 +665,15 @@ def get_queue(speaker_name=None, limit=500):
     except Exception as e:
         return {"error": str(e)}
 
+def get_queue_position(speaker_name=None):
+    """Index of the playing track in the queue, or -1."""
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return -1
+        info = device.group.coordinator.get_current_track_info()
+        return int(info.get('playlist_position') or 0) - 1
+    except: return -1
+
 def play_queue_track(index, speaker_name=None):
     try:
         device = get_speaker_instance(speaker_name)
@@ -862,6 +871,14 @@ def set_sub_enabled(enabled, speaker_name=None):
         device.group.coordinator.sub_enabled = bool(enabled)
         return True
     except: return False
+
+def get_cross_fade(speaker_name=None):
+    """True/False, or None when the speaker can't be asked."""
+    try:
+        device = get_speaker_instance(speaker_name)
+        if not device: return None
+        return bool(device.group.coordinator.cross_fade)
+    except: return None
 
 def set_cross_fade(enabled, speaker_name=None):
     try:

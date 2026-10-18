@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -115,7 +116,17 @@ fun DockDashboardUI(
     // Settings > Now Playing > Show Cover Flow Between Songs: called once an
     // album has played SWAP_WHILE_PLAYING_DELAY_MS here untouched.
     swapWhilePlaying: Boolean = false,
-    onSwapWhilePlaying: () -> Unit = {}
+    onSwapWhilePlaying: () -> Unit = {},
+    // Shuffle/crossfade turned off for a live album (see LiveAlbumNotice).
+    liveAlbumNotice: LiveAlbumNotice? = null,
+    onRestoreLiveAlbumSettings: () -> Unit = {},
+    onDismissLiveAlbumNotice: () -> Unit = {},
+    // A song picked from the queue that Sonos skipped (its title).
+    skippedSongNotice: String? = null,
+    onDismissSkippedSongNotice: () -> Unit = {},
+    // Replay in the Previous track's details (see SonosDashboardManager.replayTrack).
+    canReplayTrack: suspend (TrackDetails) -> Boolean = { false },
+    onReplayTrack: (TrackDetails) -> Unit = {}
 ) {
     var showDebugInfo by remember { mutableStateOf(false) }
     // A widget being held/dragged - the 3s debug hold mustn't fire then.
@@ -835,8 +846,44 @@ fun DockDashboardUI(
             TrackDetailsDialog(
                 heading = "Previous Track",
                 track = track,
-                onDismiss = { previousTrackDetails = null }
+                onDismiss = { previousTrackDetails = null },
+                canReplay = canReplayTrack,
+                onReplay = onReplayTrack
             )
+        }
+
+        // A live album: what the app turned off for it, and a button to
+        // turn it back on. Kept while it animates away.
+        // Below it, a song picked from the queue that Sonos skipped.
+        var lastLiveAlbumNotice by remember { mutableStateOf(liveAlbumNotice) }
+        if (liveAlbumNotice != null) lastLiveAlbumNotice = liveAlbumNotice
+        var lastSkippedSong by remember { mutableStateOf(skippedSongNotice) }
+        if (skippedSongNotice != null) lastSkippedSong = skippedSongNotice
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.align(Alignment.BottomStart).padding(24.dp)
+        ) {
+            AnimatedVisibility(
+                visible = liveAlbumNotice != null && !isTvMode,
+                enter = fadeIn(tween(500)) + slideInVertically(tween(500)) { it },
+                exit = fadeOut(tween(400)) + slideOutVertically(tween(400)) { it }
+            ) {
+                lastLiveAlbumNotice?.let { notice ->
+                    LiveAlbumNoticeBar(notice, onRestore = onRestoreLiveAlbumSettings, onDismiss = onDismissLiveAlbumNotice)
+                }
+            }
+            AnimatedVisibility(
+                visible = skippedSongNotice != null && !isTvMode,
+                enter = fadeIn(tween(500)) + slideInVertically(tween(500)) { it },
+                exit = fadeOut(tween(400)) + slideOutVertically(tween(400)) { it }
+            ) {
+                NowPlayingNoticeBar(
+                    icon = Icons.Default.Explicit,
+                    text = "Sonos skipped \"${lastSkippedSong.orEmpty()}\". If it's explicit, explicit songs are " +
+                        "turned off in the Sonos app (Allow Explicit Content in its settings).",
+                    onDismiss = onDismissSkippedSongNotice
+                )
+            }
         }
 
         if (showQueue) {
@@ -865,6 +912,51 @@ fun DockDashboardUI(
             )
         }
     }
+}
+
+// A notice along the bottom left of Now Playing, in the same glass as the
+// buttons: an icon, the message, an optional action and a close button.
+@Composable
+private fun NowPlayingNoticeBar(
+    icon: ImageVector,
+    text: String,
+    onDismiss: () -> Unit,
+    actionLabel: String? = null,
+    onAction: () -> Unit = {}
+) {
+    GlassSurface(shape = RoundedCornerShape(28.dp), modifier = Modifier.widthIn(max = 560.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(10.dp))
+            Text(text, fontSize = 14.sp, modifier = Modifier.weight(1f, fill = false).padding(vertical = 8.dp))
+            if (actionLabel != null) {
+                TextButton(onClick = onAction) {
+                    Text(actionLabel, color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Color.White.copy(alpha = 0.7f))
+            }
+        }
+    }
+}
+
+// "Live album: shuffle and crossfade turned off...", with Turn Back On; the
+// close button leaves them off.
+@Composable
+private fun LiveAlbumNoticeBar(notice: LiveAlbumNotice, onRestore: () -> Unit, onDismiss: () -> Unit) {
+    val turnedOff = listOfNotNull("shuffle".takeIf { notice.shuffleOff }, "crossfade".takeIf { notice.crossfadeOff })
+        .joinToString(" and ")
+    NowPlayingNoticeBar(
+        icon = Icons.Default.Mic,
+        text = "Live album: $turnedOff turned off so it plays as recorded",
+        onDismiss = onDismiss,
+        actionLabel = "Turn Back On",
+        onAction = onRestore
+    )
 }
 
 // TV mode's clock: the time, taking turns every TV_CLOCK_SWAP_MS with when

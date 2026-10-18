@@ -1009,13 +1009,18 @@ fun QueueDialog(
 }
 
 // Glass pop-up with a track's album art, song title, artist and album -
-// opened by tapping Previous on Now Playing or Cover Flow.
+// opened by tapping Previous on Now Playing or Cover Flow. A Replay button
+// shows once canReplay says the track can be played again.
 @Composable
 fun TrackDetailsDialog(
     heading: String,
     track: TrackDetails,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    canReplay: suspend (TrackDetails) -> Boolean = { false },
+    onReplay: (TrackDetails) -> Unit = {}
 ) {
+    var replayable by remember { mutableStateOf(false) }
+    LaunchedEffect(track) { replayable = canReplay(track) }
     GlassDialog(onDismissRequest = onDismiss) {
         GlassCard(modifier = Modifier.width(380.dp)) {
             Column(
@@ -1093,6 +1098,20 @@ fun TrackDetailsDialog(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+                AnimatedVisibility(visible = replayable, enter = fadeIn(tween(300)) + expandVertically(tween(300))) {
+                    Button(
+                        onClick = {
+                            onReplay(track)
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f), contentColor = Color.White),
+                        modifier = Modifier.padding(top = 20.dp)
+                    ) {
+                        Icon(Icons.Default.Replay, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Replay", fontSize = 16.sp)
+                    }
                 }
             }
         }

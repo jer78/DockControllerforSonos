@@ -105,6 +105,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     val isTvMode by manager.isTvMode.collectAsState()
                     val currentVolume by manager.currentVolume.collectAsState()
                     val audioSettings by manager.audioSettings.collectAsState()
+                    val liveAlbumNotice by manager.liveAlbumNotice.collectAsState()
+                    val skippedSongNotice by manager.skippedSongNotice.collectAsState()
                     val albumHistory by manager.albumHistory.collectAsState()
                     val speakerGroups by manager.speakerGroups.collectAsState()
                     val refreshStatus by manager.favoritesRefreshStatus.collectAsState()
@@ -344,6 +346,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         suggestions = if (artistSuggestions && lastFmApiKey.isNotBlank()) {
                                             ArtistSuggestions.latestFor(trackState.artist)
                                         } else emptyList(),
+                                        canReplayTrack = { manager.canReplay(it) },
+                                        onReplayTrack = { manager.replayTrack(it) },
                                         onShowSuggestions = {
                                             suggestions = ArtistSuggestions.latestFor(trackState.artist).ifEmpty { null }
                                         }
@@ -396,6 +400,13 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         clockMode = nowPlayingClockMode,
                                         use24HourClock = use24HourClock,
                                         showEndsAt = showEndsAt,
+                                        liveAlbumNotice = liveAlbumNotice,
+                                        onRestoreLiveAlbumSettings = { manager.restoreAfterLiveAlbum() },
+                                        onDismissLiveAlbumNotice = { manager.dismissLiveAlbumNotice() },
+                                        skippedSongNotice = skippedSongNotice,
+                                        onDismissSkippedSongNotice = { manager.dismissSkippedSongNotice() },
+                                        canReplayTrack = { manager.canReplay(it) },
+                                        onReplayTrack = { manager.replayTrack(it) },
                                         swapWhilePlaying = swapWhilePlaying && !dialogHost.isShowingDialog,
                                         onSwapWhilePlaying = {
                                             screenSlide = ScreenSlide.VERTICAL
