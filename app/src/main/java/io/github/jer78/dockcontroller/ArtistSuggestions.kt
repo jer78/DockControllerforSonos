@@ -1,6 +1,5 @@
 package io.github.jer78.dockcontroller
 
-import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -145,12 +144,12 @@ object ArtistSuggestions {
                 // Errors come back as {"error": <code>, "message": ...},
                 // sometimes with a 200 - a bad key is code 10.
                 if (!response.isSuccessful || json == null || json.has("error")) {
-                    Log.w("ArtistSuggestions", "$method HTTP ${response.code}: ${json?.optString("message")}")
+                    DebugLog.w("ArtistSuggestions", "$method HTTP ${response.code}: ${json?.optString("message")}")
                     null
                 } else json
             }
         } catch (e: Exception) {
-            Log.w("ArtistSuggestions", "$method failed: ${e.message}")
+            DebugLog.w("ArtistSuggestions", "$method failed: ${e.message}")
             null
         }
     }

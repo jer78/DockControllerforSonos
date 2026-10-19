@@ -1,6 +1,5 @@
 package io.github.jer78.dockcontroller
 
-import android.util.Log
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -107,13 +106,14 @@ class HomeAssistantManager {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                Log.e("HAManager", "Fetch Entities Failed", e)
+                DebugLog.e("HAManager", "Fetch Entities Failed", e)
                 callback(emptyList())
             }
 
             override fun onResponse(call: Call, response: Response) {
                 if (!response.isSuccessful) {
-                    Log.e("HAManager", "Fetch Entities Error: ${response.code}")
+                    DebugLog.e("HAManager", "Fetch Entities Error: ${response.code}")
+                    response.close()
                     callback(emptyList())
                     return
                 }
@@ -126,7 +126,7 @@ class HomeAssistantManager {
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e("HAManager", "Parse Entities Failed", e)
+                    DebugLog.e("HAManager", "Parse Entities Failed", e)
                 }
                 callback(entities)
             }
@@ -139,8 +139,6 @@ class HomeAssistantManager {
             return
         }
         val fullUrl = getFullUrl(url, "/api/states/$entityId")
-        Log.e("HAManager", "Fetching HA Media Player: $fullUrl")
-        
         val request = Request.Builder()
             .url(fullUrl)
             .addHeader("Authorization", "Bearer $token")
@@ -148,13 +146,14 @@ class HomeAssistantManager {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                Log.e("HAManager", "HA Media Fetch Failed", e)
+                DebugLog.e("HAManager", "HA Media Fetch Failed", e)
                 callback(TrackState())
             }
 
             override fun onResponse(call: Call, response: Response) {
                 if (!response.isSuccessful) {
-                    Log.e("HAManager", "HA Media Error: ${response.code}")
+                    DebugLog.e("HAManager", "HA Media Error: ${response.code}")
+                    response.close()
                     callback(TrackState())
                     return
                 }
@@ -169,8 +168,6 @@ class HomeAssistantManager {
                             if (picture.startsWith("http")) picture 
                             else getFullUrl(url, picture)
                         } else ""
-
-                        Log.e("HAManager", "Parsed HA State: $state, Art: $albumArtUrl")
 
                         val isPlaying = state == "playing"
                         val duration = attrs.optDouble("media_duration", 0.0)
@@ -209,7 +206,7 @@ class HomeAssistantManager {
                         return
                     }
                 } catch (e: Exception) {
-                    Log.e("HAManager", "Parse HA Media Failed", e)
+                    DebugLog.e("HAManager", "Parse HA Media Failed", e)
                 }
                 callback(TrackState())
             }
@@ -239,7 +236,7 @@ class HomeAssistantManager {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
         })
     }
 
@@ -277,6 +274,7 @@ class HomeAssistantManager {
                         }
                     }
                 } catch (e: Exception) { }
+                response.close()
                 callback("°C")
             }
         })
@@ -298,7 +296,7 @@ class HomeAssistantManager {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
         })
     }
 
@@ -315,7 +313,7 @@ class HomeAssistantManager {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
         })
     }
 
@@ -332,7 +330,7 @@ class HomeAssistantManager {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
         })
     }
 
@@ -349,7 +347,7 @@ class HomeAssistantManager {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
         })
     }
 
@@ -387,7 +385,7 @@ class HomeAssistantManager {
                                 parseEntityState(entityId, json, temperatureUnit)?.let { results[entityId] = it }
                             }
                         } catch (e: Exception) {
-                            Log.e("HAManager", "Parse $entityId failed", e)
+                            DebugLog.e("HAManager", "Parse $entityId failed", e)
                         }
                     }
                     latch.countDown()
@@ -612,7 +610,7 @@ class HomeAssistantManager {
                             json.optJSONObject("service_response")?.optJSONObject(entityId)?.optJSONArray("forecast")
                         )
                     } catch (e: Exception) {
-                        Log.e("HAManager", "Forecast $entityId/$type failed", e)
+                        DebugLog.e("HAManager", "Forecast $entityId/$type failed", e)
                         emptyList()
                     }
                 }
@@ -755,7 +753,7 @@ class HomeAssistantManager {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
         })
     }
 
@@ -772,7 +770,7 @@ class HomeAssistantManager {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
         })
     }
 
@@ -791,7 +789,7 @@ class HomeAssistantManager {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
         })
     }
 
@@ -810,7 +808,7 @@ class HomeAssistantManager {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
         })
     }
 }

@@ -32,7 +32,6 @@ data class TrackState(
     val prevArtist: String = "",
     val prevAlbum: String = "",
     val nextArtist: String = "",
-    val rawMetadata: String = "",
     val lastCommandSent: String = "",
     val groupMembers: List<GroupMemberVolume> = emptyList(),
     // Elapsed/total playback position, in seconds, as of the last poll (see
@@ -128,7 +127,6 @@ data class GridScrollPosition(val index: Int, val offset: Int, val listSize: Int
 data class SonosSpeakerGroup(
     val name: String,
     val isJoined: Boolean,
-    val ip: String,
     val model: String = ""
 )
 
@@ -138,8 +136,6 @@ data class SonosSpeakerGroup(
 // (e.g. Night Sound/Speech Enhancement only exist on soundbars) - the UI
 // hides the corresponding control rather than showing a dead toggle.
 data class SonosAudioSettings(
-    val isSoundbar: Boolean = false,
-    val hasSubwoofer: Boolean = false,
     val nightMode: Boolean? = null,
     val dialogMode: Boolean? = null,
     val bass: Int? = null,

@@ -298,11 +298,6 @@ fun MetadataDebuggerOverlay(
 
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color.Black.copy(alpha = 0.2f))
 
-                Text("SYSTEM METADATA (XML):", color = Color.DarkGray, fontWeight = FontWeight.Bold)
-                Text(trackState.rawMetadata, color = Color.DarkGray, fontSize = 12.sp)
-                
-                HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color.Black.copy(alpha = 0.2f))
-
                 Text("TEST MODE:", color = Color.Blue, fontWeight = FontWeight.Bold)
                 val fallbackCount = TvFallbackArt.imageUrls(LocalContext.current).size
                 Row(verticalAlignment = Alignment.CenterVertically) {

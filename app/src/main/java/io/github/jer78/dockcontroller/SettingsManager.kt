@@ -105,6 +105,8 @@ class SettingsManager(private val context: Context) {
         // with it (on by default, but only once there's a key).
         val LASTFM_API_KEY = stringPreferencesKey("lastfm_api_key")
         val ARTIST_SUGGESTIONS = booleanPreferencesKey("artist_suggestions")
+        // Logging to logcat for debugging over adb (see DebugLog), off by default.
+        val DEBUG_LOGGING = booleanPreferencesKey("debug_logging")
         // Stores a CoverFlowWidgetsMode's name, and the binary_sensor that
         // tells it someone's near (blank = touch only).
         val COVER_FLOW_WIDGETS_MODE = stringPreferencesKey("cover_flow_widgets_mode")
@@ -290,7 +292,7 @@ class SettingsManager(private val context: Context) {
                 entry.getString("key") to entry.getLong("at")
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            DebugLog.w("Settings", "Unexpected error", e)
             emptyList()
         }
     }
@@ -385,6 +387,12 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setArtistSuggestions(enabled: Boolean) {
         context.dataStore.edit { it[ARTIST_SUGGESTIONS] = enabled }
+    }
+
+    val debugLogging: Flow<Boolean> = context.dataStore.data.map { it[DEBUG_LOGGING] ?: false }
+
+    suspend fun setDebugLogging(enabled: Boolean) {
+        context.dataStore.edit { it[DEBUG_LOGGING] = enabled }
     }
 
     val coverFlowWidgetsMode: Flow<CoverFlowWidgetsMode> = context.dataStore.data.map { prefs ->
@@ -537,7 +545,7 @@ class SettingsManager(private val context: Context) {
         try {
             val obj = JSONObject(json)
             obj.keys().forEach { key -> map[key] = obj.getString(key) }
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) { DebugLog.w("Settings", "Unexpected error", e) }
         map
     }
 

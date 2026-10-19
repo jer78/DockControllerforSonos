@@ -1,6 +1,5 @@
 package io.github.jer78.dockcontroller
 
-import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -68,7 +67,7 @@ class HomeAssistantEvents {
                             .toString()
                     )
                     "auth_invalid" -> {
-                        Log.w("HAEvents", "Home Assistant rejected the token")
+                        DebugLog.w("HAEvents", "Home Assistant rejected the token")
                         synchronized(this@HomeAssistantEvents) { rejected = wanted }
                         webSocket.close(1000, null)
                     }
@@ -88,7 +87,7 @@ class HomeAssistantEvents {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.w("HAEvents", "WebSocket failed: ${t.message}")
+                DebugLog.w("HAEvents", "WebSocket failed: ${t.message}")
                 dropped(webSocket)
             }
 

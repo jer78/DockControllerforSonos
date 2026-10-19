@@ -1,6 +1,5 @@
 package io.github.jer78.dockcontroller
 
-import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -158,14 +157,14 @@ class TvShowLogos(private val store: TvArtworkStore) {
         try {
             httpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) return response.body?.string()
-                Log.w("TvShowLogos", "HTTP ${response.code} for ${url.substringBefore('?')}")
+                DebugLog.w("TvShowLogos", "HTTP ${response.code} for ${url.substringBefore('?')}")
                 if (response.code == 429 || response.code >= 500) throw LookupFailed()
                 return null
             }
         } catch (e: LookupFailed) {
             throw e
         } catch (e: Exception) {
-            Log.w("TvShowLogos", "Lookup failed: ${e.message}")
+            DebugLog.w("TvShowLogos", "Lookup failed: ${e.message}")
             throw LookupFailed()
         }
     }

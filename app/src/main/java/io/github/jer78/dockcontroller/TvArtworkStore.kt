@@ -1,7 +1,6 @@
 package io.github.jer78.dockcontroller
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -102,7 +101,7 @@ class TvArtworkStore private constructor(context: Context) {
             val staleKeys = stale.map { it.key }.toSet()
             _entries.update { list -> list.filter { it.key !in staleKeys } }
             persist()
-            Log.i("TvArtworkStore", "Deleted ${stale.size} TV artwork not shown in 14 days")
+            DebugLog.i("TvArtworkStore", "Deleted ${stale.size} TV artwork not shown in 14 days")
         }
         val inUse = _entries.value.flatMap { listOfNotNull(it.url, it.backgroundUrl) }.map { imageFile(it).name }.toSet()
         // Not ones written in the last hour, which may be downloading for
@@ -151,7 +150,7 @@ class TvArtworkStore private constructor(context: Context) {
                 tmp.renameTo(target)
             }
         } catch (e: Exception) {
-            Log.w("TvArtworkStore", "Couldn't download ${url.substringBefore('?')}: ${e.message}")
+            DebugLog.w("TvArtworkStore", "Couldn't download ${url.substringBefore('?')}: ${e.message}")
         }
     }
 
@@ -183,7 +182,7 @@ class TvArtworkStore private constructor(context: Context) {
             }
         }
     } catch (e: Exception) {
-        Log.e("TvArtworkStore", "Couldn't read saved TV artwork", e)
+        DebugLog.e("TvArtworkStore", "Couldn't read saved TV artwork", e)
         emptyList()
     }
 
@@ -214,7 +213,7 @@ class TvArtworkStore private constructor(context: Context) {
                 tmp.renameTo(file)
             }
         } catch (e: Exception) {
-            Log.e("TvArtworkStore", "Couldn't save TV artwork", e)
+            DebugLog.e("TvArtworkStore", "Couldn't save TV artwork", e)
         }
     }
 

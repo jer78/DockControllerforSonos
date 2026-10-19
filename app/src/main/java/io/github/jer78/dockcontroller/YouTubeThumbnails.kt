@@ -1,6 +1,5 @@
 package io.github.jer78.dockcontroller
 
-import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -107,7 +106,7 @@ class YouTubeThumbnails(
             client.newCall(Request.Builder().url(url).build()).execute().use { response ->
                 val text = response.body?.string()
                 if (response.isSuccessful) text else {
-                    Log.w("YouTubeThumbnails", "Search HTTP ${response.code}")
+                    DebugLog.w("YouTubeThumbnails", "Search HTTP ${response.code}")
                     val result = errorResult(response.code, text)
                     onSearch(result, title)
                     if (result == SearchResult.FAILED) throw SearchFailed()
@@ -117,7 +116,7 @@ class YouTubeThumbnails(
         } catch (e: SearchFailed) {
             throw e
         } catch (e: Exception) {
-            Log.w("YouTubeThumbnails", "Search failed: ${e.message}")
+            DebugLog.w("YouTubeThumbnails", "Search failed: ${e.message}")
             null
         }
         if (body == null) {

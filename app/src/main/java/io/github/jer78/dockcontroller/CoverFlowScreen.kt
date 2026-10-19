@@ -71,7 +71,6 @@ import kotlinx.coroutines.launch
 import android.text.format.DateUtils
 import androidx.compose.ui.unit.IntSize
 import java.text.Normalizer
-import java.util.Calendar
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -479,18 +478,12 @@ fun AmbientClockScreen(
         label = "fadeAlpha"
     )
 
-    var currentTime by remember { mutableStateOf(Calendar.getInstance()) }
+    // Updated as each minute turns over - the clock shows no seconds.
+    val currentTime = rememberMinuteClock()
     var clockAlignment by remember { mutableStateOf(Alignment.TopCenter) }
     var showDebugInfo by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    
-    LaunchedEffect(Unit) {
-        while (true) {
-            currentTime = Calendar.getInstance()
-            delay(1000)
-        }
-    }
-    
+
     LaunchedEffect(Unit) {
         val alignments = listOf(Alignment.TopStart, Alignment.TopCenter)
         var currentIndex = 1 

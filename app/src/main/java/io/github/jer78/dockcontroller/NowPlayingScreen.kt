@@ -126,7 +126,10 @@ fun DockDashboardUI(
     onDismissSkippedSongNotice: () -> Unit = {},
     // Replay in the Previous track's details (see SonosDashboardManager.replayTrack).
     canReplayTrack: suspend (TrackDetails) -> Boolean = { false },
-    onReplayTrack: (TrackDetails) -> Unit = {}
+    onReplayTrack: (TrackDetails) -> Unit = {},
+    // Speaker Groups or Sound Settings opening - re-reads the rooms and
+    // sound settings, which are otherwise only refreshed every few minutes.
+    onRefreshSpeakerSettings: () -> Unit = {}
 ) {
     var showDebugInfo by remember { mutableStateOf(false) }
     // A widget being held/dragged - the 3s debug hold mustn't fire then.
@@ -771,7 +774,10 @@ fun DockDashboardUI(
                         GlassIconButton(
                             icon = Icons.Default.SpeakerGroup,
                             contentDescription = "Speaker Groups",
-                            onClick = { showGroupingModal = true }
+                            onClick = {
+                                showGroupingModal = true
+                                onRefreshSpeakerSettings()
+                            }
                         )
 
                         if (hasSoundSettings) {
@@ -780,7 +786,10 @@ fun DockDashboardUI(
                             GlassIconButton(
                                 icon = Icons.Default.Tune,
                                 contentDescription = "Sound Settings",
-                                onClick = { showSoundSettings = true }
+                                onClick = {
+                                    showSoundSettings = true
+                                    onRefreshSpeakerSettings()
+                                }
                             )
                         }
                     }

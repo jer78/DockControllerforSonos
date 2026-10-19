@@ -6,19 +6,24 @@ import json
 import requests
 from urllib.parse import unquote
 
-# Persistent hardware map to fix grouping and discovery hangs
+# Speaker name (lowercased) -> IP address, so commands don't have to search
+# the network for the speaker each time.
 HARDWARE_MAP = {}
+
+def forget_speaker(name):
+    """Drops a cached address that stopped answering (the speaker got a new
+    IP, say), so the next call finds the speaker again."""
+    if name:
+        HARDWARE_MAP.pop(name.lower(), None)
 
 def get_speaker_instance(name=None):
     global HARDWARE_MAP
     if name:
         key = name.lower()
+        # Trusted without a round trip to check it - get_now_playing, called
+        # constantly, forgets it if the speaker stops answering there.
         if key in HARDWARE_MAP:
-            try:
-                device = soco.SoCo(HARDWARE_MAP[key])
-                device.get_current_transport_info()
-                return device
-            except: del HARDWARE_MAP[key]
+            return soco.SoCo(HARDWARE_MAP[key])
         try:
             device = by_name(name)
             if device:
@@ -36,7 +41,7 @@ def get_speaker_instance(name=None):
         return list(speakers)[0]
     return None
 
-def get_high_res_art(artist, album, current_uri=""):
+def get_high_res_art(current_uri=""):
     if current_uri:
         if "mzstatic.com" in current_uri:
             return re.sub(r'/\d+x\d+bb', '/600x600bb', current_uri)
@@ -178,7 +183,7 @@ def get_sonos_favorites(speaker_name=None, filter_types="albums,playlists,radio"
 
                 art = str(getattr(item, 'album_art_uri', ""))
                 if art and art.startswith('/'): art = f"http://{master.ip_address}:1400{art}"
-                art = get_high_res_art(artist, title, art)
+                art = get_high_res_art(art)
 
                 # Everything needed to play it again without Sonos's help,
                 # so the app can keep the favorite after it's removed from
@@ -327,7 +332,7 @@ def _adjacent_tracks(master, info, from_queue, shuffle):
                     "title": getattr(track, 'title', '') or '',
                     "artist": getattr(track, 'creator', '') or '',
                     "album": getattr(track, 'album', '') or '',
-                    "art": get_high_res_art('', '', getattr(track, 'album_art_uri', '') or '')
+                    "art": get_high_res_art(getattr(track, 'album_art_uri', '') or '')
                 }
 
             if 0 <= current - 1 < len(items):
@@ -435,6 +440,9 @@ def get_now_playing(speaker_name=None):
             "next_art": next_track.get("art", "")
         }
     except Exception as e:
+        # Couldn't reach it (as opposed to an odd reply) - look it up again.
+        if isinstance(e, (requests.exceptions.RequestException, OSError)):
+            forget_speaker(speaker_name)
         return {"error": str(e)}
 
 # Sonos-specific AVTransport error codes SoCo reports as just "Unknown error".
@@ -739,8 +747,7 @@ def set_group_mute(muted, speaker_name=None):
 
 def set_volume(vol, speaker_name=None):
     try:
-        device = by_name(speaker_name) if speaker_name else None
-        if not device: device = get_speaker_instance(speaker_name)
+        device = get_speaker_instance(speaker_name)
         if not device: return False
         device.volume = int(vol)
         return True
@@ -748,8 +755,7 @@ def set_volume(vol, speaker_name=None):
 
 def set_mute(muted, speaker_name=None):
     try:
-        device = by_name(speaker_name) if speaker_name else None
-        if not device: device = get_speaker_instance(speaker_name)
+        device = get_speaker_instance(speaker_name)
         if not device: return False
         device.mute = bool(muted)
         return True
@@ -889,13 +895,15 @@ def set_cross_fade(enabled, speaker_name=None):
     except: return False
 
 def get_speaker_groups(speaker_name=None):
+    """The other rooms and whether each is grouped with this one - from the
+    rooms the speaker already knows about, rather than searching the network."""
     try:
-        all_spks = soco.discover(timeout=1)
         target = get_speaker_instance(speaker_name)
         results = []
-        if all_spks and target:
+        if target:
             t_coord_name = target.group.coordinator.player_name
-            for s in all_spks:
+            for s in target.visible_zones:
+                HARDWARE_MAP[s.player_name.lower()] = s.ip_address
                 if s.player_name == target.player_name: continue
                 try:
                     model = s.get_speaker_info().get('model_name', '')
@@ -904,7 +912,6 @@ def get_speaker_groups(speaker_name=None):
                 results.append({
                     "name": s.player_name,
                     "is_joined": s.group.coordinator.player_name == t_coord_name,
-                    "ip": s.ip_address,
                     "model": model
                 })
         return results
@@ -912,8 +919,8 @@ def get_speaker_groups(speaker_name=None):
 
 def toggle_speaker_join(master_name, other_name, join=True):
     try:
-        master = by_name(master_name)
-        other = by_name(other_name)
+        master = get_speaker_instance(master_name)
+        other = get_speaker_instance(other_name)
         if join: other.join(master)
         else: other.unjoin()
         return True

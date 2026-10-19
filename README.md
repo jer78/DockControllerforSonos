@@ -11,6 +11,10 @@ for your Sonos speakers, with Home Assistant controls alongside. It runs as a
 normal app or as the device's screensaver, so it's there whenever the device
 sits on its dock.
 
+It's free and open source. If you enjoy it, you can support its development:
+
+<a href="https://www.buymeacoffee.com/jeremypercival"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="60"></a>
+
 > **Not affiliated with, endorsed by or sponsored by Sonos or Home Assistant.**
 > Sonos and Home Assistant are trademarks of their respective owners. This is
 > an independent project that talks to your own speakers and server on your
@@ -202,6 +206,12 @@ sits on its dock.
 - Dims automatically in a dark room using the light sensor, and fades Cover
   Flow and the TV screensaver to black once the lights go out (a tap shows it
   again for 30 seconds; it comes back by itself when the lights go on)
+- Light on the network: rooms and sound settings are only re-read every few
+  minutes or when you open them, and commands go straight to the speaker
+  without searching the network first
+- **Debug Logging** (Settings → Setup → Advanced) writes what the app is
+  doing to the Android log for troubleshooting with adb; it's off by default,
+  so nothing is logged otherwise
 
 ## Experimental features
 
@@ -418,6 +428,14 @@ Home Assistant icons are drawn with [Material Design
 Icons](https://pictogrammers.com/library/mdi/) by Pictogrammers, and weather
 icons are Google's [Material Symbols](https://fonts.google.com/icons), both
 under the Apache 2.0 license.
+
+## Support the project
+
+Dock Controller is free, built and tested in my spare time. If it's earned a
+place in your home, a coffee is a lovely way to say thanks and helps keep new
+features and fixes coming.
+
+<a href="https://www.buymeacoffee.com/jeremypercival"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="60"></a>
 
 ## License
 

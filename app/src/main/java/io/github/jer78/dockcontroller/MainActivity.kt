@@ -462,6 +462,10 @@ class MainActivity : ComponentActivity() {
                                 onDismissSkippedSongNotice = { manager.dismissSkippedSongNotice() },
                                 canReplayTrack = { manager.canReplay(it) },
                                 onReplayTrack = { manager.replayTrack(it) },
+                                onRefreshSpeakerSettings = {
+                                    manager.refreshSpeakerGroups()
+                                    manager.refreshAudioSettings()
+                                },
                                 swapWhilePlaying = swapWhilePlaying && !showSettings,
                                 onSwapWhilePlaying = {
                                     screenSlide = ScreenSlide.VERTICAL
@@ -525,7 +529,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) { manager.refreshAudioSettings() }
                 SettingsModal(
                     discoveredSpeakers = discoveredSpeakers,
-                    settingsManager = SettingsManager(this),
+                    settingsManager = settingsManager,
                     refreshStatus = refreshStatus,
                     refreshCount = refreshCount,
                     onRefreshFavorites = { speaker, a, p, r -> manager.refreshFavorites(a, p, r, speaker) },

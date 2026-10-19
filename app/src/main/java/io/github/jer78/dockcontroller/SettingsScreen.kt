@@ -459,6 +459,7 @@ fun SettingsModal(
     var lastFmKeyHidden by remember { mutableStateOf(false) }
     var lastFmKeyCheck by remember { mutableStateOf<ArtistSuggestions.KeyCheck?>(null) }
     var artistSuggestions by remember { mutableStateOf(true) }
+    var debugLogging by remember { mutableStateOf(false) }
     var coverFlowWidgetsMode by remember { mutableStateOf(CoverFlowWidgetsMode.NEAR) }
     var gridRecentlyPlayed by remember { mutableStateOf(true) }
     var coverFlowMotionSensor by remember { mutableStateOf("") }
@@ -551,6 +552,7 @@ fun SettingsModal(
         lastFmApiKey = settingsManager.lastFmApiKey.first()
         lastFmKeyHidden = lastFmApiKey.isNotBlank()
         artistSuggestions = settingsManager.artistSuggestions.first()
+        debugLogging = settingsManager.debugLogging.first()
         coverFlowWidgetsMode = settingsManager.coverFlowWidgetsMode.first()
         gridRecentlyPlayed = settingsManager.gridRecentlyPlayed.first()
         coverFlowMotionSensor = settingsManager.coverFlowMotionSensor.first()
@@ -750,6 +752,19 @@ fun SettingsModal(
                                     } else {
                                         SettingsToggleRow("Crossfade Between Songs", crossfade, onCrossfadeChange)
                                     }
+                                    HorizontalDivider()
+
+                                    Text("Advanced:", fontWeight = FontWeight.SemiBold)
+                                    SettingsToggleRow("Debug Logging", debugLogging) {
+                                        debugLogging = it
+                                        scope.launch { settingsManager.setDebugLogging(it) }
+                                    }
+                                    Text(
+                                        "Writes details of what the app is doing to the Android log, for troubleshooting " +
+                                            "with adb. Leave it off otherwise.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
                                 }
                             }
                         }

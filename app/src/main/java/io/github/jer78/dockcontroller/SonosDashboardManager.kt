@@ -1,7 +1,6 @@
 package io.github.jer78.dockcontroller
 
 import android.content.Context
-import android.util.Log
 import android.widget.Toast
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
@@ -15,6 +14,15 @@ class SonosDashboardManager private constructor(context: Context) {
     private val settingsManager = SettingsManager(appContext)
     private val haManager = HomeAssistantManager()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // Settings the refresh loop reads every time round, kept in memory
+    // rather than read from storage each time.
+    private val speakerSetting = settingsManager.sonosSpeaker.stateIn(scope, SharingStarted.Eagerly, "")
+    private val continueWithRandomAlbumSetting = settingsManager.continueWithRandomAlbum.stateIn(scope, SharingStarted.Eagerly, false)
+    private val preferSameGenreSetting = settingsManager.continuePreferSameGenre.stateIn(scope, SharingStarted.Eagerly, true)
+
+    // Blank until the setting has loaded, so that falls back to reading it.
+    private suspend fun currentSpeaker(): String = speakerSetting.value.ifBlank { settingsManager.sonosSpeaker.first() }
 
     private val _trackState = MutableStateFlow(TrackState())
     val trackState: StateFlow<TrackState> = _trackState.asStateFlow()
@@ -164,7 +172,9 @@ class SonosDashboardManager private constructor(context: Context) {
         private const val FORECAST_RETRY_MS = 60 * 1000L
         private const val IDLE_EVENT_FALLBACK_MS = 30000L
         private const val FAVORITES_REFRESH_INTERVAL_MS = 60 * 60 * 1000L
-        private const val GROUPS_REFRESH_INTERVAL_MS = 10000L
+        // Rooms and sound settings rarely change - also refreshed whenever
+        // Speaker Groups, Sound Settings or Settings opens.
+        private const val GROUPS_REFRESH_INTERVAL_MS = 5 * 60 * 1000L
         // The bridge pages through every favorite (100 per round trip to
         // the speaker), so large collections need longer than a single call.
         private const val FAVORITES_FETCH_TIMEOUT_MS = 20000L
@@ -254,7 +264,7 @@ class SonosDashboardManager private constructor(context: Context) {
                 bridge.callAttr("notify_change")
                 bridge.callAttr("stop_events")
             } catch (e: Exception) {
-                e.printStackTrace()
+                DebugLog.w("SonosDashboard", "Unexpected error", e)
             }
         }
     }
@@ -289,20 +299,19 @@ class SonosDashboardManager private constructor(context: Context) {
                         SonosSpeakerGroup(
                             name = map[PyObject.fromJava("name")]?.toString() ?: "",
                             isJoined = map[PyObject.fromJava("is_joined")]?.toBoolean() ?: false,
-                            ip = map[PyObject.fromJava("ip")]?.toString() ?: "",
                             model = map[PyObject.fromJava("model")]?.toString() ?: ""
                         )
                     }
                     _speakerGroups.value = groups
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    DebugLog.w("SonosDashboard", "Unexpected error", e)
                 }
             }
         }
     }
 
     // Speaker-hardware EQ/features rarely change, so this piggybacks on
-    // refreshSpeakerGroups()'s cadence (every 5th poll cycle) rather than
+    // refreshSpeakerGroups()'s cadence (GROUPS_REFRESH_INTERVAL_MS) rather than
     // hitting the speaker with extra UPnP calls every 2s.
     fun refreshAudioSettings() {
         scope.launch {
@@ -320,8 +329,6 @@ class SonosDashboardManager private constructor(context: Context) {
                         // get a real Kotlin null out of that, rather than toBoolean()/
                         // toInt() which throw trying to convert None.
                         _audioSettings.value = SonosAudioSettings(
-                            isSoundbar = map[PyObject.fromJava("is_soundbar")]?.toBoolean() ?: false,
-                            hasSubwoofer = map[PyObject.fromJava("has_subwoofer")]?.toBoolean() ?: false,
                             nightMode = map[PyObject.fromJava("night_mode")]?.toJava(Boolean::class.javaObjectType),
                             dialogMode = map[PyObject.fromJava("dialog_mode")]?.toJava(Boolean::class.javaObjectType),
                             bass = map[PyObject.fromJava("bass")]?.toJava(Int::class.javaObjectType),
@@ -332,7 +339,7 @@ class SonosDashboardManager private constructor(context: Context) {
                         )
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    DebugLog.w("SonosDashboard", "Unexpected error", e)
                 }
             }
         }
@@ -428,7 +435,7 @@ class SonosDashboardManager private constructor(context: Context) {
                         .callAttr("toggle_speaker_join", speaker, otherSpeakerName, join)
                     refreshSpeakerGroups()
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    DebugLog.w("SonosDashboard", "Unexpected error", e)
                 }
             }
         }
@@ -664,7 +671,7 @@ class SonosDashboardManager private constructor(context: Context) {
 
         while (currentCoroutineContext().isActive) {
             try {
-                val speaker = settingsManager.sonosSpeaker.first()
+                val speaker = currentSpeaker()
                 if (speaker.isNotBlank()) {
                     val now = System.currentTimeMillis()
                     if (now - lastFavoritesRefreshMs >= FAVORITES_REFRESH_INTERVAL_MS) {
@@ -775,8 +782,8 @@ class SonosDashboardManager private constructor(context: Context) {
                             val onLastTrack = pyDict[PyObject.fromJava("on_last_track")]?.toBoolean() ?: false
                             maybeContinueWithRandomAlbum(
                                 state, fromQueue, shuffled, onLastTrack, position, duration,
-                                settingsManager.continueWithRandomAlbum.first(),
-                                settingsManager.continuePreferSameGenre.first()
+                                continueWithRandomAlbumSetting.value,
+                                preferSameGenreSetting.value
                             )
                             maybeAdjustForLiveAlbum(album, fromQueue, shuffled, position, speaker)
                             // "None" is TrackState's existing "nothing to show"
@@ -893,7 +900,7 @@ class SonosDashboardManager private constructor(context: Context) {
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                DebugLog.w("SonosDashboard", "Unexpected error", e)
             }
             waitForSonosChange(pyModule)
         }
@@ -910,7 +917,7 @@ class SonosDashboardManager private constructor(context: Context) {
     // the old 2s/6s poll when they aren't (or in TV mode, whose title, art
     // and position come from Home Assistant rather than speaker events).
     private suspend fun waitForSonosChange(pyModule: PyObject) {
-        val speaker = settingsManager.sonosSpeaker.first()
+        val speaker = currentSpeaker()
         val eventsActive = speaker.isNotBlank() && try {
             pyModule.callAttr("ensure_events", speaker).toBoolean()
         } catch (e: Exception) {
@@ -1064,7 +1071,7 @@ class SonosDashboardManager private constructor(context: Context) {
                         try {
                             Python.getInstance().getModule("sonos_bridge").callAttr("notify_change")
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            DebugLog.w("SonosDashboard", "Unexpected error", e)
                         }
                     }
                 } else {
@@ -1251,7 +1258,7 @@ class SonosDashboardManager private constructor(context: Context) {
                 .callAttr("get_queue", speaker).asMap()
             val error = result[PyObject.fromJava("error")]
             if (error != null) {
-                Log.w("SonosDashboard", "Queue: $error")
+                DebugLog.w("SonosDashboard", "Queue: $error")
                 return@withContext null
             }
             val tracks = result[PyObject.fromJava("tracks")]?.asList().orEmpty().map { item ->
@@ -1264,7 +1271,7 @@ class SonosDashboardManager private constructor(context: Context) {
             }
             SonosQueue(tracks, result[PyObject.fromJava("current")]?.toInt() ?: -1).also { lastLoadedQueue = it }
         } catch (e: Exception) {
-            Log.w("SonosDashboard", "Queue failed: ${e.message}")
+            DebugLog.w("SonosDashboard", "Queue failed: ${e.message}")
             null
         }
     }
@@ -1302,7 +1309,7 @@ class SonosDashboardManager private constructor(context: Context) {
             val position = bridge.callAttr("get_queue_position", speaker).toInt()
             if (position < 0 || position == index) return@launch
             val title = lastLoadedQueue?.tracks?.getOrNull(index)?.title.orEmpty()
-            Log.i("SonosDashboard", "Queue track ${index + 1} '$title' skipped - now at ${position + 1}")
+            DebugLog.i("SonosDashboard", "Queue track ${index + 1} '$title' skipped - now at ${position + 1}")
             skippedSongNoticeJob?.cancel()
             _skippedSongNotice.value = title.ifBlank { "That song" }
             skippedSongNoticeJob = scope.launch {
@@ -1466,7 +1473,7 @@ class SonosDashboardManager private constructor(context: Context) {
                             return@playAlbum
                         }
                     }
-                    Log.w("SonosDashboard", "Replay: '${track.title}' not found on '${target.album.albumTitle}'")
+                    DebugLog.w("SonosDashboard", "Replay: '${track.title}' not found on '${target.album.albumTitle}'")
                 }
                 null -> reportError("Can't replay '${track.title}' - it's not in the queue or your favorites")
             }
@@ -1571,7 +1578,7 @@ class SonosDashboardManager private constructor(context: Context) {
         val previous = lastTvRemainingSeconds
         lastTvRemainingSeconds = remaining
         if (enabled && muted && previous != null && remaining - previous > AD_END_REMAINING_JUMP_SECONDS) {
-            Log.i("SonosDashboard", "Auto-unmute: time remaining jumped ${previous}s -> ${remaining}s")
+            DebugLog.i("SonosDashboard", "Auto-unmute: time remaining jumped ${previous}s -> ${remaining}s")
             setMute(speaker, false)
         }
     }
@@ -1623,7 +1630,7 @@ class SonosDashboardManager private constructor(context: Context) {
                     } else ""
                     val sameGenre = if (genre.isNotBlank()) candidates.filter { it.genre.equals(genre, ignoreCase = true) } else emptyList()
                     sameGenre.ifEmpty { candidates }.randomOrNull()?.let { album ->
-                        Log.i("SonosDashboard", "Album finished - continuing with '${album.albumTitle}'")
+                        DebugLog.i("SonosDashboard", "Album finished - continuing with '${album.albumTitle}'")
                         playAlbum(album)
                     }
                 }
@@ -1674,7 +1681,7 @@ class SonosDashboardManager private constructor(context: Context) {
         }
         if (crossfadeOff) _audioSettings.update { it.copy(crossfade = false) }
         if (shuffleOff || crossfadeOff) {
-            Log.i("SonosDashboard", "Live album '$album' - shuffle off: $shuffleOff, crossfade off: $crossfadeOff")
+            DebugLog.i("SonosDashboard", "Live album '$album' - shuffle off: $shuffleOff, crossfade off: $crossfadeOff")
             liveAlbumOverride = LiveAlbumNotice(album, shuffleOff, crossfadeOff)
             _liveAlbumNotice.value = liveAlbumOverride
         }

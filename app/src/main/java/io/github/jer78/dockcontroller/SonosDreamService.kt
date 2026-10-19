@@ -407,6 +407,10 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onDismissSkippedSongNotice = { manager.dismissSkippedSongNotice() },
                                         canReplayTrack = { manager.canReplay(it) },
                                         onReplayTrack = { manager.replayTrack(it) },
+                                        onRefreshSpeakerSettings = {
+                                            manager.refreshSpeakerGroups()
+                                            manager.refreshAudioSettings()
+                                        },
                                         swapWhilePlaying = swapWhilePlaying && !dialogHost.isShowingDialog,
                                         onSwapWhilePlaying = {
                                             screenSlide = ScreenSlide.VERTICAL

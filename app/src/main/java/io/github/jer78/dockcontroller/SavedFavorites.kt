@@ -1,7 +1,6 @@
 package io.github.jer78.dockcontroller
 
 import android.content.Context
-import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -68,7 +67,7 @@ class SavedFavoritesStore(context: Context) {
             }
         }
     } catch (e: Exception) {
-        Log.e("SavedFavorites", "Couldn't read saved favorites", e)
+        DebugLog.e("SavedFavorites", "Couldn't read saved favorites", e)
         emptyList()
     }
 
@@ -99,7 +98,7 @@ class SavedFavoritesStore(context: Context) {
                 tmp.renameTo(file)
             }
         } catch (e: Exception) {
-            Log.e("SavedFavorites", "Couldn't save favorites", e)
+            DebugLog.e("SavedFavorites", "Couldn't save favorites", e)
         }
     }
 }

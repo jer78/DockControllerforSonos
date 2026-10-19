@@ -1,7 +1,6 @@
 package io.github.jer78.dockcontroller
 
 import android.content.Context
-import android.util.Log
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
@@ -60,7 +59,7 @@ object MdiIcons {
             }.toMap(HashMap())
         }
     } catch (e: Exception) {
-        Log.e("MdiIcons", "Couldn't load icon names", e)
+        DebugLog.e("MdiIcons", "Couldn't load icon names", e)
         emptyMap()
     }
 
