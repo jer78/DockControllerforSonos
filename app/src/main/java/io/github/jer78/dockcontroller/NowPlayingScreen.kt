@@ -38,6 +38,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -129,7 +130,10 @@ fun DockDashboardUI(
     onReplayTrack: (TrackDetails) -> Unit = {},
     // Speaker Groups or Sound Settings opening - re-reads the rooms and
     // sound settings, which are otherwise only refreshed every few minutes.
-    onRefreshSpeakerSettings: () -> Unit = {}
+    onRefreshSpeakerSettings: () -> Unit = {},
+    // Room on the left of the bottom-left notices for an overlay the system
+    // draws there (the Pixel Tablet's Home button over the screensaver).
+    bottomStartInset: Dp = 0.dp
 ) {
     var showDebugInfo by remember { mutableStateOf(false) }
     // A widget being held/dragged - the 3s debug hold mustn't fire then.
@@ -870,7 +874,7 @@ fun DockDashboardUI(
         if (skippedSongNotice != null) lastSkippedSong = skippedSongNotice
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.align(Alignment.BottomStart).padding(24.dp)
+            modifier = Modifier.align(Alignment.BottomStart).padding(start = 24.dp + bottomStartInset, top = 24.dp, end = 24.dp, bottom = 24.dp)
         ) {
             AnimatedVisibility(
                 visible = liveAlbumNotice != null && !isTvMode,

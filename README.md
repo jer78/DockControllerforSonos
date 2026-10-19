@@ -1,7 +1,6 @@
 # Dock Controller for Sonos and Home Assistant
 
 [![Download the app](https://img.shields.io/badge/Download-Android%20app-3ddc84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/jer78/DockControllerforSonos/releases/latest)
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/jeremypercival)
 
 **New here?** See [How to install](#how-to-install): it takes about five minutes,
 no computer needed.
@@ -26,7 +25,11 @@ It's free and open source. If you enjoy it, you can support its development:
 
 | Cover Flow | Grid |
 |---|---|
-| ![Cover Flow screensaver with the clock and weather above the album covers](docs/screenshots/coverflow.jpg) | ![Grid view with the A-Z bar above the album covers](docs/screenshots/grid.jpg) |
+| ![Cover Flow screensaver with the clock and weather above the album covers](docs/screenshots/coverflow.jpg) | ![Grid view with Home Assistant widgets, the clock and the A-Z bar above the album covers](docs/screenshots/grid.jpg) |
+
+**Artist suggestions**: albums by artists like the one playing, from Last.fm
+
+![Artist suggestions: three albums by artists similar to Alice In Chains, with an Open Sonos App button](docs/screenshots/suggestions.jpg)
 
 ## Features
 

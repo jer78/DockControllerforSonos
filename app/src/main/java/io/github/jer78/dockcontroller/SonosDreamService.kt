@@ -411,6 +411,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                             manager.refreshSpeakerGroups()
                                             manager.refreshAudioSettings()
                                         },
+                                        // The Pixel Tablet's Home button, as for Cover Flow.
+                                        bottomStartInset = 96.dp,
                                         swapWhilePlaying = swapWhilePlaying && !dialogHost.isShowingDialog,
                                         onSwapWhilePlaying = {
                                             screenSlide = ScreenSlide.VERTICAL
