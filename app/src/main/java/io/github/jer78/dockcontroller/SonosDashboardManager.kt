@@ -738,6 +738,7 @@ class SonosDashboardManager private constructor(context: Context) {
                             val autoUnmute = settingsManager.autoUnmuteAfterAds.first()
                             val tmdbKey = settingsManager.tmdbApiKey.first()
                             val tvShowImages = settingsManager.tvShowImages.first()
+                            val showCast = settingsManager.tvShowCast.first()
                             val youTubeThumbs = settingsManager.youTubeThumbnails.first()
                             val youTubeKey = settingsManager.youTubeApiKey.first()
                             val youTubeQuotaReached = youTubeThumbs && settingsManager.youTubeUsage.first().quotaReached
@@ -746,6 +747,7 @@ class SonosDashboardManager private constructor(context: Context) {
                                 haManager.fetchHAMediaPlayer(url, token, haMedia) { haTrack ->
                                     maybeAutoUnmuteAfterAds(haTrack, speaker, muted, autoUnmute)
                                     val showLogo = if (tvShowImages) tvShowLogoFor(haTrack, tmdbKey) else null
+                                    val cast = if (showCast) tvCastFor(haTrack, tmdbKey) else emptyList()
                                     val art = haTrack.albumArtUrl.ifBlank {
                                         if (youTubeThumbs) youTubeThumbnailFor(haTrack, youTubeKey, youTubeQuotaReached) ?: "" else ""
                                     }
@@ -756,6 +758,7 @@ class SonosDashboardManager private constructor(context: Context) {
                                         albumArtUrl = art,
                                         seriesTitle = haTrack.seriesTitle,
                                         tvShowLogo = showLogo,
+                                        tvCast = cast,
                                         isPlaying = haTrack.isPlaying,
                                         prevTrack = "None",
                                         nextTrack = "None",
@@ -777,6 +780,7 @@ class SonosDashboardManager private constructor(context: Context) {
                                     albumArtUrl = "",
                                     seriesTitle = "",
                                     tvShowLogo = null,
+                                    tvCast = emptyList(),
                                     isPlaying = true,
                                     groupMembers = memberVolumes,
                                     positionSeconds = 0,
@@ -842,6 +846,7 @@ class SonosDashboardManager private constructor(context: Context) {
                                 albumArtUrl = art,
                                 seriesTitle = "",
                                 tvShowLogo = null,
+                                tvCast = emptyList(),
                                 appName = "",
                                 appId = "",
                                 contentId = "",
@@ -963,6 +968,27 @@ class SonosDashboardManager private constructor(context: Context) {
 
     private val tvArtwork = TvArtworkStore.getInstance(appContext)
     private val tvShowLogos = TvShowLogos(tvArtwork)
+    private val tvShowCast = TvShowCast.getInstance(appContext)
+
+    // The cast of the TV show in this HA track, for the TV screensaver, if
+    // one's recognised and already looked up - the season's own (from TMDB,
+    // with a key) and this episode's guest stars when its season and episode
+    // are in the title. Otherwise starts the lookup and fills it in once it
+    // arrives, if that show is still on.
+    private fun tvCastFor(track: TrackState, tmdbKey: String): List<CastMember> {
+        val show = detectTvShowName(track.title, track.seriesTitle, track.artist, track.album) ?: return emptyList()
+        val seasonEpisode = detectSeasonEpisode(track.title, track.artist, track.album)
+        tvShowCast.cached(show, seasonEpisode, tmdbKey)?.let { return it }
+        if (tvShowCast.claimLookup(show, seasonEpisode, tmdbKey)) {
+            scope.launch {
+                val cast = tvShowCast.lookUp(show, seasonEpisode, tmdbKey) ?: return@launch
+                _trackState.update {
+                    if (_isTvMode.value && detectTvShowName(it.title, it.seriesTitle, it.artist, it.album) == show) it.copy(tvCast = cast) else it
+                }
+            }
+        }
+        return emptyList()
+    }
 
     // The logo for the TV show in this HA track, if one's recognised and
     // already looked up. Otherwise starts the lookup and fills it in once

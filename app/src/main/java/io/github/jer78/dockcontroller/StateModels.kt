@@ -54,6 +54,9 @@ data class TrackState(
     // TV mode: the recognised show's title logo, shown in place of the
     // artwork (see TvShowLogos).
     val tvShowLogo: TvShowLogo? = null,
+    // TV mode: the recognised show's cast, for the TV screensaver (see
+    // TvShowCast) - empty until looked up, or when it's turned off.
+    val tvCast: List<CastMember> = emptyList(),
     // TV mode: which app the HA media player says is showing, and what it's
     // playing - reported differently (or not at all) by each integration,
     // e.g. Cast gives YouTube's video ID as media_content_id.

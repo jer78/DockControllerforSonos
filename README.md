@@ -70,6 +70,11 @@ It's free and open source. If you enjoy it, you can support its development:
 - Experimental: a spectrum analyzer behind the screen, in the app only (see
   [Spectrum Analyzer](#spectrum-analyzer) below)
 - Swipe left, right or down to go to Cover Flow
+- **Ambient drift**: every minute it's left untouched, the blurred background
+  slowly zooms and pans to a new framing while everything on it glides a
+  little, so the screen feels alive and nothing sits in one place for hours
+- Long song titles (and the artist and album line under them) scroll across
+  now and then instead of being cut off
 - **Cover Flow between songs**: while an album plays, Now Playing hands over
   to Cover Flow or the grid (already scrolling) after 20 seconds, and comes
   back each time a new song starts. It waits while you're using the screen.
@@ -179,7 +184,20 @@ It's free and open source. If you enjoy it, you can support its development:
   matched the wrong show), or delete them all. Artwork not shown for 14 days
   is deleted by itself to save space
 - Pick one fallback image for when there's no artwork, or rotate through them
-- Drops into a TV screensaver after a configurable delay
+- Drops into a TV screensaver after a configurable delay, whether the show
+  is playing or paused; a tap brings Now Playing back, and the delay starts
+  over
+- **The show's cast**: until the TV screensaver starts, every minute Now
+  Playing is left untouched the cast takes a turn in place of what's on,
+  then what's on comes back (a touch brings it straight back); the TV
+  screensaver takes turns between the two as well. Five at a time, each with
+  their photo, name and who they play, plus the episode's guest stars when
+  the title says which episode it is. With a TMDB key (the one for show
+  logos) it's the cast of the season that's on; without one, the show's
+  current cast from TVmaze (no key needed). Saved on the device with the
+  photos and refreshed weekly; **Saved TV Cast** (Settings → Home Assistant)
+  lists each show's, to delete one or all. Turn it off with **Show Cast in
+  TV Screensaver**
 - Experimental: Auto-Unmute After Commercials and YouTube Thumbnails (see
   below)
 
@@ -327,7 +345,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.41.apk`). It's about 55 MB.
+   `DockController-v1.0.42.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -358,7 +376,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.41.apk
+adb install -r DockController-v1.0.42.apk
 ```
 
 Every release is signed with the same key. If Android says **App not
@@ -455,6 +473,13 @@ own music library, AirPlay and Spotify Connect.
 - **Sonos's explicit-content setting can't be read.** Sonos doesn't let other
   apps see it, so when Sonos skips a song you picked, the app can only say
   it's probably explicit.
+- **The TV cast is only the season's own with a TMDB key.** Without one, it
+  comes from TVmaze, which only lists a show's cast as it is now, so an
+  older season can show actors who joined later. Either way, the season's
+  cast and guest stars need the title to say which season and episode it is,
+  guest stars are only shown when the service has them for that episode,
+  and reality shows often list just the host. Only shows the app recognises
+  (the same ones that get a logo or poster) have a cast.
 - **Swiping up or down in the screensaver can open Android's own menus.**
   Over the screensaver, Android (and the Pixel Tablet's hub mode) uses
   vertical swipes for the notification shade and its own controls, so

@@ -441,6 +441,8 @@ fun SettingsModal(
     val youTubeUsage by remember { settingsManager.youTubeUsage }.collectAsState(initial = null)
     val savedTvArtwork by TvArtworkStore.getInstance(LocalContext.current).entries.collectAsState()
     var showSavedTvArtwork by remember { mutableStateOf(false) }
+    val savedTvCast by TvShowCast.getInstance(LocalContext.current).shows.collectAsState()
+    var showSavedTvCast by remember { mutableStateOf(false) }
     var use24HourClock by remember { mutableStateOf(true) }
     var coverFlowReflection by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_REFLECTION_DEFAULT) }
     var coverFlowGlassTable by remember { mutableFloatStateOf(SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT) }
@@ -465,6 +467,7 @@ fun SettingsModal(
     var coverFlowMotionSensor by remember { mutableStateOf("") }
     var autoUnmuteAfterAds by remember { mutableStateOf(false) }
     var tvShowImages by remember { mutableStateOf(true) }
+    var tvShowCast by remember { mutableStateOf(true) }
     var continueWithRandomAlbum by remember { mutableStateOf(false) }
     var continuePreferSameGenre by remember { mutableStateOf(true) }
     var nowPlayingHideNextUp by remember { mutableStateOf(false) }
@@ -558,6 +561,7 @@ fun SettingsModal(
         coverFlowMotionSensor = settingsManager.coverFlowMotionSensor.first()
         autoUnmuteAfterAds = settingsManager.autoUnmuteAfterAds.first()
         tvShowImages = settingsManager.tvShowImages.first()
+        tvShowCast = settingsManager.tvShowCast.first()
         continueWithRandomAlbum = settingsManager.continueWithRandomAlbum.first()
         continuePreferSameGenre = settingsManager.continuePreferSameGenre.first()
         tvFallbackImage = settingsManager.tvFallbackImage.first()
@@ -1330,6 +1334,18 @@ fun SettingsModal(
                                         fontSize = 12.sp,
                                         color = Color.Gray
                                     )
+                                    SettingsToggleRow("Show Cast in TV Screensaver", tvShowCast) {
+                                        tvShowCast = it
+                                        scope.launch { settingsManager.setTvShowCast(it) }
+                                    }
+                                    Text(
+                                        "Now Playing and the TV screensaver take turns showing the show's cast with their " +
+                                            "photos - plus the episode's guest stars when the title says which episode it is. " +
+                                            "With a TMDB key (below), it's the cast of the season that's on; without one, " +
+                                            "the show's current cast from TVmaze.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
                                     if (tvShowImages) {
                                         SecretField(
                                             value = tmdbApiKey,
@@ -1351,6 +1367,13 @@ fun SettingsModal(
                                         colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f), contentColor = Color.White)
                                     ) {
                                         Text("Saved TV Artwork (${savedTvArtwork.size})")
+                                    }
+                                    Button(
+                                        onClick = { showSavedTvCast = true },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f), contentColor = Color.White)
+                                    ) {
+                                        Text("Saved TV Cast (${savedTvCast.size})")
                                     }
 
                                     HorizontalDivider()
@@ -1475,5 +1498,8 @@ fun SettingsModal(
 
     if (showSavedTvArtwork) {
         SavedTvArtworkDialog(onDismiss = { showSavedTvArtwork = false })
+    }
+    if (showSavedTvCast) {
+        SavedTvCastDialog(onDismiss = { showSavedTvCast = false })
     }
 }

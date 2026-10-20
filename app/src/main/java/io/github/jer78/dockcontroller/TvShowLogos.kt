@@ -58,6 +58,24 @@ fun detectTvShowName(title: String, seriesTitle: String, artist: String = "", al
     return null
 }
 
+// The season and episode numbers from an "S2 E3" or "Season 28, Ep. 41"
+// marker in any of these (title, artist, album, ...), or null.
+private val SEASON_EPISODE_NUMBERS = Regex(
+    """\bS(\d{1,2})\s*[·.:\-_ ]?\s*E(\d{1,4})\b|\bSeason\s*(\d{1,2})\W{0,3}(?:Episode|Ep\.?)\s*(\d{1,4})\b""",
+    RegexOption.IGNORE_CASE
+)
+
+fun detectSeasonEpisode(vararg texts: String): Pair<Int, Int>? {
+    for (text in texts) {
+        val match = SEASON_EPISODE_NUMBERS.find(text) ?: continue
+        val (s1, e1, s2, e2) = match.destructured
+        val season = (s1.ifBlank { s2 }).toIntOrNull() ?: continue
+        val episode = (e1.ifBlank { e2 }).toIntOrNull() ?: continue
+        return season to episode
+    }
+    return null
+}
+
 // Separators left dangling at either end ("The Traitors Canada -") make the
 // logo searches find nothing, so they're trimmed off whichever way the name
 // was found. Titles can use non-breaking spaces and Unicode dashes or minus

@@ -261,15 +261,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            LaunchedEffect(isTvMode, trackState.isPlaying, tvScreensaverDelaySeconds) {
-                if (isTvMode && trackState.isPlaying) {
+            // TV mode: the TV screensaver after the set delay on Now Playing,
+            // playing or paused - a paused show used to sit on Now Playing
+            // indefinitely. Keyed on isTvAmbientMode too, so bringing Now
+            // Playing back with a tap starts the wait over (it used to stay).
+            LaunchedEffect(isTvMode, isTvAmbientMode, tvScreensaverDelaySeconds) {
+                if (!isTvMode) {
+                    isTvAmbientMode = false
+                } else if (!isTvAmbientMode) {
                     delay(tvScreensaverDelaySeconds * 1000L) // user-configurable TV screensaver delay
                     isTvAmbientMode = true
-                } else {
-                    // Not in TV mode, or TV mode but paused - go back to (or stay on)
-                    // the now-playing screen instead of the screensaver.
-                    isTvAmbientMode = false
                 }
+            }
+            // A pause shows Now Playing first, so it's clear the show is paused.
+            LaunchedEffect(trackState.isPlaying) {
+                if (isTvMode && !trackState.isPlaying) isTvAmbientMode = false
             }
 
             LaunchedEffect(isAmbientMode, isTvAmbientMode, swappedWhilePlaying) {

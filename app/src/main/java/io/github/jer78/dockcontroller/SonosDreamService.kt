@@ -230,15 +230,17 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                         }
                     }
 
-                    LaunchedEffect(isTvMode, trackState.isPlaying, tvScreensaverDelaySeconds) {
-                        if (isTvMode && trackState.isPlaying) {
+                    // TV screensaver timing - see MainActivity.
+                    LaunchedEffect(isTvMode, isTvAmbientMode, tvScreensaverDelaySeconds) {
+                        if (!isTvMode) {
+                            isTvAmbientMode = false
+                        } else if (!isTvAmbientMode) {
                             delay(tvScreensaverDelaySeconds * 1000L) // user-configurable TV screensaver delay
                             isTvAmbientMode = true
-                        } else {
-                            // Not in TV mode, or TV mode but paused - go back to (or stay on)
-                            // the now-playing screen instead of the screensaver.
-                            isTvAmbientMode = false
                         }
+                    }
+                    LaunchedEffect(trackState.isPlaying) {
+                        if (isTvMode && !trackState.isPlaying) isTvAmbientMode = false
                     }
 
                     // Cover Flow / TV Ambient run most of the time here - back

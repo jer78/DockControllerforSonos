@@ -15,14 +15,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 
+// The TV screensaver: what's on, fading to a new place on the screen every
+// 10 seconds (so nothing burns in). With the show's cast known (see
+// TvShowCast), it takes turns with them: after a couple of moves, up to
+// CAST_PAGES_PER_TURN pages of CAST_PER_PAGE people fade in, each for
+// CAST_PAGE_MS - the next ones on the following turn - then back to what's on.
 @Composable
 fun TvAmbientScreen(
     trackState: TrackState,
@@ -32,6 +39,8 @@ fun TvAmbientScreen(
     val artworkUrl = TvFallbackArt.rememberArtworkUrl(isTvMode = true, albumArtUrl = trackState.albumArtUrl)
     var alignment by remember { mutableStateOf(Alignment.Center) }
     var visible by remember { mutableStateOf(true) }
+    var castPage by remember { mutableStateOf<List<CastMember>?>(null) }
+    val currentCast by rememberUpdatedState(trackState.tvCast)
 
     LaunchedEffect(Unit) {
         val alignments = listOf(
@@ -39,13 +48,37 @@ fun TvAmbientScreen(
             Alignment.CenterStart, Alignment.Center, Alignment.CenterEnd,
             Alignment.BottomStart, Alignment.BottomCenter, Alignment.BottomEnd
         )
-        while (true) {
-            delay(10_000)
+        // A row of cards is wide, so it only moves up and down.
+        val castAlignments = listOf(Alignment.TopCenter, Alignment.Center, Alignment.BottomCenter)
+        var nextPage = 0
+        suspend fun fadeTo(move: () -> Unit) {
             visible = false
-            delay(1000)
-            alignment = alignments.random()
+            delay(2000)
+            move()
             visible = true
+        }
+        while (true) {
+            repeat(2) {
+                delay(10_000)
+                fadeTo { alignment = alignments.random() }
+            }
             delay(10_000)
+            val pages = currentCast.chunked(CAST_PER_PAGE)
+            if (pages.isNotEmpty()) {
+                repeat(minOf(CAST_PAGES_PER_TURN, pages.size)) {
+                    val page = pages[nextPage % pages.size]
+                    nextPage++
+                    fadeTo {
+                        castPage = page
+                        alignment = castAlignments.random()
+                    }
+                    delay(CAST_PAGE_MS)
+                }
+                fadeTo {
+                    castPage = null
+                    alignment = alignments.random()
+                }
+            }
         }
     }
 
@@ -61,6 +94,15 @@ fun TvAmbientScreen(
             enter = fadeIn(tween(2000)),
             exit = fadeOut(tween(2000))
         ) {
+            val page = castPage
+            if (page != null) {
+                CastPage(
+                    show = detectTvShowName(trackState.title, trackState.seriesTitle, trackState.artist, trackState.album)
+                        ?: trackState.title,
+                    cast = page
+                )
+                return@AnimatedVisibility
+            }
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.padding(60.dp)
@@ -121,3 +163,99 @@ fun TvAmbientScreen(
         }
     }
 }
+
+// One page of the show's cast (TV screensaver, and TV mode's Now Playing): a
+// heading, then a card for each person - their photo, name, and who they
+// play - rising into place one after another.
+@Composable
+fun CastPage(show: String, cast: List<CastMember>) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(horizontal = 48.dp, vertical = 60.dp)
+    ) {
+        Text(
+            text = show.uppercase(),
+            color = Color.White.copy(alpha = 0.45f),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 3.sp
+        )
+        Text(
+            text = "Starring",
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 30.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(28.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+            cast.forEachIndexed { index, member ->
+                CastCard(member, index)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CastCard(member: CastMember, index: Int) {
+    val entrance = remember(member) { Animatable(0f) }
+    LaunchedEffect(member) {
+        delay(400L + index * 180L)
+        entrance.animateTo(1f, tween(900, easing = FastOutSlowInEasing))
+    }
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .width(170.dp)
+            .graphicsLayer {
+                alpha = entrance.value
+                translationY = (1f - entrance.value) * 60.dp.toPx()
+            }
+    ) {
+        Card(
+            shape = RoundedCornerShape(14.dp),
+            elevation = CardDefaults.cardElevation(16.dp),
+            modifier = Modifier.width(170.dp).aspectRatio(0.71f)
+        ) {
+            AsyncImage(
+                model = member.imageUrl,
+                contentDescription = member.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.06f))
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(
+            member.name,
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        val role = when {
+            member.guest && member.character.isNotBlank() -> "Guest star · ${member.character}"
+            member.guest -> "Guest star"
+            member.character.isNotBlank() -> "as ${member.character}"
+            else -> ""
+        }
+        if (role.isNotBlank()) {
+            Text(
+                role,
+                color = Color.White.copy(alpha = 0.5f),
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+// The cast shown at a time, how many pages each turn, and how long each stays.
+const val CAST_PER_PAGE = 5
+const val CAST_PAGES_PER_TURN = 2
+const val CAST_PAGE_MS = 12_000L
+// How often TV mode's Now Playing, left untouched, gives the cast a turn
+// until the TV screensaver takes over.
+const val CAST_TURN_INTERVAL_MS = 60_000L

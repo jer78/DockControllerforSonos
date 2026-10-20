@@ -8,6 +8,8 @@ import android.view.WindowManager
 import java.util.function.Consumer
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -39,6 +41,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Shape
@@ -65,6 +68,8 @@ import androidx.palette.graphics.Palette
 import coil.imageLoader
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -139,6 +144,83 @@ fun ReturnForNextSongEffect(trackState: TrackState, swapped: Boolean, onReturn: 
         lastSong = song
         if (swapped) currentOnReturn()
     }
+}
+
+// Now Playing's ambient drift: once it's been left untouched for
+// DRIFT_INTERVAL_MS, the blurred background slowly re-frames (zooms and
+// pans) while everything on top glides a few dp to the next point on a
+// small loop, both easing over DRIFT_MOVE_MS - and again each interval after.
+// Keeps the screen feeling alive and stops anything sitting in one place
+// for hours (screen burn-in). Still between moves, so it costs nothing then.
+class AmbientDrift {
+    // dp, for everything on top of the background.
+    val contentX = Animatable(0f)
+    val contentY = Animatable(0f)
+    // The background's zoom, and its pan as a fraction of its size.
+    val backgroundScale = Animatable(DRIFT_FRAMES[0].scale)
+    val backgroundPanX = Animatable(0f)
+    val backgroundPanY = Animatable(0f)
+    var frame = 0
+
+    // For everything on top of the background.
+    val contentModifier: Modifier = Modifier.graphicsLayer {
+        translationX = contentX.value.dp.toPx()
+        translationY = contentY.value.dp.toPx()
+    }
+
+    val backgroundModifier: Modifier = Modifier.graphicsLayer {
+        scaleX = backgroundScale.value
+        scaleY = backgroundScale.value
+        translationX = backgroundPanX.value * size.width
+        translationY = backgroundPanY.value * size.height
+    }
+}
+
+private class DriftFrame(val x: Float, val y: Float, val scale: Float, val panX: Float, val panY: Float)
+
+// Content offsets (dp) and background framings, visited in turn. The pans
+// stay within what each zoom leaves spare, so no edge ever shows.
+private val DRIFT_FRAMES = listOf(
+    DriftFrame(0f, 0f, 1.10f, 0f, 0f),
+    DriftFrame(12f, -8f, 1.16f, 0.025f, -0.02f),
+    DriftFrame(6f, 12f, 1.12f, -0.02f, 0.025f),
+    DriftFrame(-12f, 8f, 1.18f, 0.02f, 0.02f),
+    DriftFrame(-8f, -12f, 1.12f, -0.025f, -0.015f),
+    DriftFrame(10f, 4f, 1.15f, 0.015f, -0.025f)
+)
+private const val DRIFT_INTERVAL_MS = 60_000L
+private const val DRIFT_MOVE_MS = 4_000
+
+// Now Playing's title lines: scroll across now and then when they don't fit
+// (and stay put when they do), rather than being cut off with "...".
+@OptIn(ExperimentalFoundationApi::class)
+fun Modifier.nowPlayingMarquee(): Modifier = basicMarquee(
+    iterations = Int.MAX_VALUE,
+    initialDelayMillis = 3_000,
+    delayMillis = 4_000,
+    velocity = 40.dp
+)
+
+// restartKey: anything that should restart the wait, like a touch.
+@Composable
+fun rememberAmbientDrift(restartKey: Any): AmbientDrift {
+    val drift = remember { AmbientDrift() }
+    LaunchedEffect(restartKey) {
+        while (true) {
+            delay(DRIFT_INTERVAL_MS)
+            drift.frame = (drift.frame + 1) % DRIFT_FRAMES.size
+            val next = DRIFT_FRAMES[drift.frame]
+            val spec = tween<Float>(DRIFT_MOVE_MS, easing = FastOutSlowInEasing)
+            coroutineScope {
+                launch { drift.contentX.animateTo(next.x, spec) }
+                launch { drift.contentY.animateTo(next.y, spec) }
+                launch { drift.backgroundScale.animateTo(next.scale, spec) }
+                launch { drift.backgroundPanX.animateTo(next.panX, spec) }
+                launch { drift.backgroundPanY.animateTo(next.panY, spec) }
+            }
+        }
+    }
+    return drift
 }
 
 fun formatClockTime(time: Calendar, use24HourClock: Boolean): String =

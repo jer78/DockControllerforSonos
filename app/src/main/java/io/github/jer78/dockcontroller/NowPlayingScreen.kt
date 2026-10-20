@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -178,6 +179,38 @@ fun DockDashboardUI(
     // Only queued albums (not radio or TV), and never with a panel open. A
     // touch or a new song starts the wait over.
     var touches by remember { mutableIntStateOf(0) }
+    // Every minute untouched, the background re-frames and everything on
+    // it glides a little (see AmbientDrift) - TV and music alike.
+    val drift = rememberAmbientDrift(touches)
+    // TV mode, until the TV screensaver takes over (which can be many
+    // minutes): every CAST_TURN_INTERVAL_MS untouched, the show's cast (see
+    // TvShowCast) takes a turn in place of what's on, a page or two of it,
+    // then what's on comes back. A touch brings it straight back.
+    var castPage by remember { mutableStateOf<List<CastMember>?>(null) }
+    val currentCast by rememberUpdatedState(trackState.tvCast)
+    LaunchedEffect(touches, isTvMode) {
+        castPage = null
+        if (!isTvMode) return@LaunchedEffect
+        var nextPage = 0
+        while (true) {
+            delay(CAST_TURN_INTERVAL_MS)
+            val pages = currentCast.chunked(CAST_PER_PAGE)
+            if (pages.isEmpty()) continue
+            repeat(minOf(CAST_PAGES_PER_TURN, pages.size)) {
+                castPage = pages[nextPage++ % pages.size]
+                delay(CAST_PAGE_MS)
+            }
+            castPage = null
+        }
+    }
+    val castAlpha by animateFloatAsState(
+        targetValue = if (castPage != null) 1f else 0f,
+        animationSpec = tween(1500, easing = FastOutSlowInEasing),
+        label = "tvCastTurn"
+    )
+    // Kept while it fades away.
+    var lastCastPage by remember { mutableStateOf<List<CastMember>?>(null) }
+    if (castPage != null) lastCastPage = castPage
     val panelOpen = showDebugInfo || showTvDebug || showGroupingModal || openHaEntity != null ||
         showSoundSettings || showQueue || previousTrackDetails != null || reorderingWidget
     val albumPlaying = swapWhilePlaying && !isTvMode && trackState.isPlaying && trackState.shuffleAvailable
@@ -241,6 +274,7 @@ fun DockDashboardUI(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
+                    .then(drift.backgroundModifier)
                     .then(if (backgroundBlur > 0.dp) Modifier.blur(backgroundBlur) else Modifier)
                     .alpha(0.55f)
             )
@@ -268,6 +302,7 @@ fun DockDashboardUI(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .then(drift.contentModifier)
                 .padding(24.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -284,6 +319,7 @@ fun DockDashboardUI(
         Row(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
+                .then(drift.contentModifier)
                 .padding(24.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -315,6 +351,9 @@ fun DockDashboardUI(
         Row(
             modifier = Modifier
                 .fillMaxSize()
+                .then(drift.contentModifier)
+                // Fades out while the cast takes its turn (TV mode).
+                .graphicsLayer { alpha = 1f - castAlpha }
                 .padding(horizontal = 48.dp, vertical = 70.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -549,15 +588,17 @@ fun DockDashboardUI(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                // Too long to fit, the title (and the line under it) scroll
+                // across now and then rather than being cut off.
                 Text(
                     text = trackState.title,
                     fontSize = 36.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = Color.White,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    modifier = Modifier.nowPlayingMarquee()
                 )
-                
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(top = 4.dp)
@@ -567,8 +608,7 @@ fun DockDashboardUI(
                         fontSize = 20.sp,
                         color = Color.White.copy(alpha = 0.8f),
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
+                        modifier = Modifier.weight(1f, fill = false).nowPlayingMarquee()
                     )
                 }
 
@@ -865,6 +905,24 @@ fun DockDashboardUI(
             )
         }
 
+        // The cast's turn (TV mode), where what's on was.
+        val shownCastPage = lastCastPage
+        if (castAlpha > 0f && shownCastPage != null) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(drift.contentModifier)
+                    .graphicsLayer { alpha = castAlpha }
+            ) {
+                CastPage(
+                    show = detectTvShowName(trackState.title, trackState.seriesTitle, trackState.artist, trackState.album)
+                        ?: trackState.title,
+                    cast = shownCastPage
+                )
+            }
+        }
+
         // A live album: what the app turned off for it, and a button to
         // turn it back on. Kept while it animates away.
         // Below it, a song picked from the queue that Sonos skipped.
@@ -874,7 +932,10 @@ fun DockDashboardUI(
         if (skippedSongNotice != null) lastSkippedSong = skippedSongNotice
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.align(Alignment.BottomStart).padding(start = 24.dp + bottomStartInset, top = 24.dp, end = 24.dp, bottom = 24.dp)
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .then(drift.contentModifier)
+                .padding(start = 24.dp + bottomStartInset, top = 24.dp, end = 24.dp, bottom = 24.dp)
         ) {
             AnimatedVisibility(
                 visible = liveAlbumNotice != null && !isTvMode,

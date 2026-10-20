@@ -2,7 +2,9 @@ package io.github.jer78.dockcontroller
 
 import android.text.format.Formatter
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,11 +12,14 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -138,6 +143,140 @@ fun SavedTvArtworkDialog(onDismiss: () -> Unit) {
                 TextButton(onClick = { confirmDeleteAll = false }) { Text("Cancel") }
             }
         )
+    }
+}
+
+// Settings > Home Assistant > Saved TV Cast: each show whose cast the TV
+// screensaver has saved, as one entry - its regular cast and every episode's
+// guest stars together. Deleting one has it looked up again next time it's on.
+@Composable
+fun SavedTvCastDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val store = remember { TvShowCast.getInstance(context) }
+    val shows by store.shows.collectAsState()
+    val scope = rememberCoroutineScope()
+    var confirmDeleteAll by remember { mutableStateOf(false) }
+    var sizeOnDisk by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(shows) {
+        sizeOnDisk = withContext(Dispatchers.IO) { store.sizeOnDisk() }
+    }
+
+    SettingsGlassDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.fillMaxWidth(0.8f).widthIn(max = 720.dp),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Saved TV Cast", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(onClick = { confirmDeleteAll = true }, enabled = shows.isNotEmpty()) {
+                    Text("Delete All", color = if (shows.isNotEmpty()) TvArtworkDeleteColor else Color.Gray)
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "The cast of each show the TV screensaver has shown, with their photos, saved on this device " +
+                        "so each show is only looked up once (and again each week, for cast changes). Delete one to " +
+                        "have it looked up again the next time it's on. A show not on for 14 days is deleted by itself.",
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
+                Text(
+                    "${shows.size} show${if (shows.size == 1) "" else "s"} · ${Formatter.formatShortFileSize(context, sizeOnDisk)}",
+                    fontWeight = FontWeight.SemiBold
+                )
+                HorizontalDivider()
+                if (shows.isEmpty()) {
+                    Text(
+                        "Nothing saved yet. A show's cast is saved here once it's on in TV mode.",
+                        fontSize = 14.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.5f).dp)
+                    ) {
+                        items(shows, key = { it.key }) { show ->
+                            SavedTvCastRow(
+                                show = show,
+                                onDelete = { scope.launch(Dispatchers.IO) { store.deleteShow(show.key) } }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+    )
+
+    if (confirmDeleteAll) {
+        DockAlertDialog(
+            onDismissRequest = { confirmDeleteAll = false },
+            title = { Text("Delete all saved TV cast?") },
+            text = { Text("Every show's cast will be looked up again the next time it's on.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDeleteAll = false
+                    scope.launch(Dispatchers.IO) { store.deleteAll() }
+                }) {
+                    Text("Delete All", color = TvArtworkDeleteColor, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteAll = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+// A few of the show's people, overlapping, then its name and how many.
+@Composable
+private fun SavedTvCastRow(show: SavedShowCast, onDelete: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+    ) {
+        Box(Modifier.width(100.dp).height(56.dp)) {
+            show.previewImageUrls.forEachIndexed { index, url ->
+                AsyncImage(
+                    model = url,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .offset(x = (index * 26).dp)
+                        .size(48.dp)
+                        .align(Alignment.CenterStart)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .border(2.dp, Color(0xFF2C2C30), CircleShape)
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                show.name,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                "${show.people} ${if (show.people == 1) "person" else "people"} · Last shown " +
+                    DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(show.lastUsedMs)),
+                fontSize = 12.sp,
+                color = Color.Gray,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        IconButton(onClick = onDelete) {
+            Icon(Icons.Default.Delete, contentDescription = "Delete ${show.name}'s cast", tint = TvArtworkDeleteColor)
+        }
     }
 }
 

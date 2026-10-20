@@ -119,6 +119,9 @@ class SettingsManager(private val context: Context) {
         // TV mode: replace Home Assistant's artwork with the show's logo or
         // poster from TMDB / TVmaze (see TvShowLogos). Off uses HA's images.
         val TV_SHOW_IMAGES = booleanPreferencesKey("tv_show_images")
+        // TV mode: the TV screensaver takes turns showing the show's cast
+        // (see TvShowCast). On by default.
+        val TV_SHOW_CAST = booleanPreferencesKey("tv_show_cast")
         // Experimental: TV mode artwork for YouTube videos, from the video
         // ID, or found with the optional YouTube Data API key (see
         // YouTubeThumbnails).
@@ -419,6 +422,12 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setTvShowImages(enabled: Boolean) {
         context.dataStore.edit { it[TV_SHOW_IMAGES] = enabled }
+    }
+
+    val tvShowCast: Flow<Boolean> = context.dataStore.data.map { it[TV_SHOW_CAST] ?: true }
+
+    suspend fun setTvShowCast(enabled: Boolean) {
+        context.dataStore.edit { it[TV_SHOW_CAST] = enabled }
     }
 
     val youTubeThumbnails: Flow<Boolean> = context.dataStore.data.map { it[YOUTUBE_THUMBNAILS] ?: false }
