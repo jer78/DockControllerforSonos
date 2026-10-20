@@ -9,6 +9,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
@@ -39,6 +40,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Color
@@ -1648,14 +1650,35 @@ private fun CoverGrid(
     val endless = showLetterBar && albums.size > 24
     val itemCount = if (endless) albums.size * GRID_LOOP_COPIES else albums.size
 
+    // A tapped album out at the front, like Cover Flow's centered one (its
+    // index, where its place in the grid is, and how far out it is): a tap
+    // on it plays it, its X deletes it, and a tap anywhere else - or
+    // OPENED_HOLD_MS untouched - puts it back. The grid holds still meanwhile.
+    var openedIndex by remember { mutableStateOf<Int?>(null) }
+    var openedBounds by remember { mutableStateOf(Rect.Zero) }
+    val openProgress = remember { Animatable(0f) }
+    var openedTouches by remember { mutableIntStateOf(0) }
+    fun putBackOpened() {
+        scope.launch {
+            openProgress.animateTo(0f, tween(FEATURE_FLIP_MS, easing = FastOutSlowInEasing))
+            openedIndex = null
+        }
+    }
+    LaunchedEffect(openedIndex, openedTouches) {
+        if (openedIndex == null) return@LaunchedEffect
+        delay(OPENED_HOLD_MS)
+        openProgress.animateTo(0f, tween(FEATURE_FLIP_MS, easing = FastOutSlowInEasing))
+        openedIndex = null
+    }
+
     // Any touch stops the drift and brings the A-Z bar back; it starts
     // again once the grid has been left alone for a while.
     var lastTouch by remember { mutableLongStateOf(0L) }
     var drifting by remember { mutableStateOf(false) }
     val driftPxPerSecond = with(LocalDensity.current) { GridDriftSpeed.toPx() }
-    LaunchedEffect(autoScroll, endless, albums, lastTouch) {
+    LaunchedEffect(autoScroll, endless, albums, lastTouch, openedIndex) {
         drifting = false
-        if (!autoScroll || !endless) return@LaunchedEffect
+        if (!autoScroll || !endless || openedIndex != null) return@LaunchedEffect
         delay(if (driftAtOnce && lastTouch == 0L) START_SCROLLING_DELAY_MS else GRID_DRIFT_DELAY_MS)
         drifting = true
         onDriftStart()
@@ -1750,7 +1773,14 @@ private fun CoverGrid(
             contentPadding = PaddingValues(start = 48.dp, end = 48.dp, top = GridTop, bottom = animatedBottom),
             horizontalArrangement = Arrangement.spacedBy(18.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                // Softly blurred behind an album opened by a tap, as it
+                // comes out (Android 12 and up - just dimmed before that).
+                .graphicsLayer {
+                    val radius = OpenedBlur.toPx() * if (openedIndex != null) openProgress.value else 0f
+                    renderEffect = if (radius > 0f) BlurEffect(radius, radius) else null
+                }
         ) {
             items(itemCount) { index ->
                 val album = albums[index % albums.size]
@@ -1761,7 +1791,7 @@ private fun CoverGrid(
                     label = "letterHighlight"
                 )
                 // Out at the front: its place is left empty, just the frame.
-                val featuredOut = index == featuredIndex
+                val featuredOut = index == featuredIndex || index == openedIndex
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
@@ -1769,11 +1799,23 @@ private fun CoverGrid(
                         .onGloballyPositioned {
                             bounds = it.boundsInWindow()
                             if (index == featuredIndex) featuredBounds = bounds
+                            if (index == openedIndex) openedBounds = bounds
                         }
                         .border(1.dp, Color.White.copy(alpha = 0.1f), RectangleShape)
                         .border(3.dp, GridHighlightGold.copy(alpha = highlightAlpha), RectangleShape)
                         .combinedClickable(
-                            onClick = { onPlay(album, bounds) },
+                            // Out to the front first, like Cover Flow's
+                            // centered album - played from there.
+                            onClick = {
+                                if (openedIndex == null) {
+                                    openedIndex = index
+                                    openedBounds = bounds
+                                    scope.launch {
+                                        openProgress.snapTo(0f)
+                                        openProgress.animateTo(1f, tween(FEATURE_FLIP_MS, easing = FastOutSlowInEasing))
+                                    }
+                                }
+                            },
                             onLongClick = onLongPress?.let { longPress -> { longPress(album) } }
                         )
                 ) {
@@ -1834,7 +1876,31 @@ private fun CoverGrid(
                 areaBottom = gridSize.height - with(LocalDensity.current) { animatedBottom.toPx() },
                 areaWidth = gridSize.width.toFloat(),
                 progress = featureProgress.value,
-                onPlay = { onPlay(it, featuredBounds) }
+                onPlay = { album, coverBounds -> onPlay(album, coverBounds) }
+            )
+        }
+
+        openedIndex?.let { index ->
+            val album = albums[index % albums.size]
+            FeaturedRecentAlbum(
+                album = album,
+                playedAt = recentlyPlayed[favoriteKey(album)],
+                playingNow = nowPlayingKey != null && favoriteKey(album) == nowPlayingKey,
+                from = openedBounds.translate(-gridOrigin),
+                areaTop = with(LocalDensity.current) { GridTop.toPx() },
+                areaBottom = gridSize.height - with(LocalDensity.current) { animatedBottom.toPx() },
+                areaWidth = gridSize.width.toFloat(),
+                progress = openProgress.value,
+                onPlay = { picked, coverBounds -> onPlay(picked, coverBounds) },
+                opened = true,
+                onDelete = onLongPress?.let { delete ->
+                    {
+                        delete(album)
+                        putBackOpened()
+                    }
+                },
+                onPutBack = { putBackOpened() },
+                onTouch = { openedTouches++ }
             )
         }
 
@@ -1890,11 +1956,19 @@ private val GridLetterBarTop = 150.dp
 // it stays there.
 private const val FEATURE_FLIP_MS = 900
 private const val FEATURE_HOLD_MS = 3_000L
+// How long an album opened by a tap stays out untouched before going back.
+private const val OPENED_HOLD_MS = 20_000L
+// ...and how much the grid behind it is blurred.
+private val OpenedBlur = 12.dp
 
-// The drifting grid's recently played favorite on its way to or from the
-// front (progress 0 = in its place at from, 1 = at the front): growing and
-// turning over once as it goes, over a dimmed grid, with when it was last
-// played underneath once it's there. A tap plays it.
+// A grid album on its way to or from the front (progress 0 = in its place
+// at from, 1 = at the front): growing and turning over once as it goes, over
+// a dimmed grid, with its title, artist and when it was last played
+// underneath once it's there. A tap on it plays it (with where the cover is,
+// for the flight to Now Playing). Either a recently played favorite the
+// drifting grid brings out by itself, or one opened by a tap - which, like
+// Cover Flow's centered album, shows a play button and an X to delete it,
+// and goes back on a tap anywhere off it.
 @Composable
 private fun FeaturedRecentAlbum(
     album: AlbumHistoryItem,
@@ -1906,37 +1980,94 @@ private fun FeaturedRecentAlbum(
     areaBottom: Float,
     areaWidth: Float,
     progress: Float,
-    onPlay: (AlbumHistoryItem) -> Unit
+    onPlay: (AlbumHistoryItem, Rect) -> Unit,
+    opened: Boolean = false,
+    onDelete: (() -> Unit)? = null,
+    onPutBack: () -> Unit = {},
+    // Any touch while opened, to keep it out a while longer.
+    onTouch: () -> Unit = {}
 ) {
     val density = LocalDensity.current
-    val captionRoom = with(density) { 84.dp.toPx() }
+    val captionRoom = with(density) { 104.dp.toPx() }
     val frontSize = minOf(from.width * 2.2f, areaBottom - areaTop - captionRoom).coerceAtLeast(from.width)
     val frontLeft = (areaWidth - frontSize) / 2f
     val frontTop = areaTop + (areaBottom - areaTop - frontSize - captionRoom) / 2f
     val size = lerp(from.width, frontSize, progress)
     val left = lerp(from.left, frontLeft, progress)
     val top = lerp(from.top, frontTop, progress)
+    // The buttons only once it's (nearly) at the front.
+    val buttonsAlpha = if (opened) ((progress - 0.85f) / 0.15f).coerceIn(0f, 1f) else 0f
+    var coverBounds by remember { mutableStateOf(Rect.Zero) }
 
     Box(
         Modifier
             .fillMaxSize()
             .graphicsLayer { alpha = progress }
-            .background(Color.Black.copy(alpha = 0.45f))
+            // Darker behind one opened by a tap, so it stands out more.
+            .background(Color.Black.copy(alpha = if (opened) 0.7f else 0.45f))
+            .then(
+                if (opened) {
+                    Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        onTouch()
+                        onPutBack()
+                    }
+                } else Modifier
+            )
     )
-    AsyncImage(
-        model = album.artUrl,
-        contentDescription = album.albumTitle,
-        contentScale = ContentScale.Crop,
+    Box(
+        contentAlignment = Alignment.Center,
         modifier = Modifier
             .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
             .size(with(density) { size.toDp() })
+            .onGloballyPositioned { coverBounds = it.boundsInWindow() }
             .graphicsLayer {
                 rotationY = 360f * progress
                 cameraDistance = 16f * density.density
                 shadowElevation = 24.dp.toPx() * progress
             }
-            .clickable { onPlay(album) }
-    )
+            .clickable {
+                onTouch()
+                onPlay(album, coverBounds)
+            }
+    ) {
+        AsyncImage(
+            model = album.artUrl,
+            contentDescription = album.albumTitle,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+        if (opened) {
+            // Cover Flow's play button and X, a little smaller to suit.
+            Surface(
+                color = Color.Black.copy(alpha = 0.7f),
+                shape = CircleShape,
+                modifier = Modifier.size(96.dp).alpha(buttonsAlpha)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Play",
+                    tint = Color.White,
+                    modifier = Modifier.padding(20.dp).fillMaxSize()
+                )
+            }
+            if (onDelete != null) {
+                IconButton(
+                    onClick = {
+                        onTouch()
+                        onDelete()
+                    },
+                    enabled = buttonsAlpha > 0.5f,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(12.dp)
+                        .alpha(buttonsAlpha)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.White)
+                }
+            }
+        }
+    }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
@@ -1954,6 +2085,15 @@ private fun FeaturedRecentAlbum(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        if (album.artist.isNotBlank()) {
+            Text(
+                album.artist,
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 16.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         if (playingNow) {
             Text("Now Playing", color = Color.White.copy(alpha = 0.7f), fontSize = 15.sp, maxLines = 1)
         } else if (playedAt != null) {

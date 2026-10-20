@@ -95,10 +95,12 @@ It's free and open source. If you enjoy it, you can support its development:
   are new
 - **Grid view**: the button beside it swaps the 3D carousel for a grid of
   album covers, several rows deep, that scrolls left and right - much
-  quicker for finding one album among all your favorites. Tap a cover to
-  play it, or long-press it to delete it (after a confirmation). Left alone,
-  it drifts slowly sideways, and picks up where it was after a trip to Now
-  Playing
+  quicker for finding one album among all your favorites. Tap a cover and
+  it flips out to the front over a dimmed, softly blurred grid, with its
+  title and artist: tap it again to play it, or its X to delete it (after a
+  confirmation), like Cover Flow's centered album; a tap anywhere else puts
+  it back. Left alone, it drifts slowly sideways, and picks up where it was
+  after a trip to Now Playing
 - **Recently played** in the grid: as it drifts, each of your last 5
   favorites played flips out to the front for a few seconds, saying when it
   was last played (or Now Playing, if it's the album playing), then flips
@@ -290,7 +292,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.38.apk`). It's about 55 MB.
+   `DockController-v1.0.40.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -321,7 +323,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.38.apk
+adb install -r DockController-v1.0.40.apk
 ```
 
 Every release is signed with the same key. If Android says **App not
