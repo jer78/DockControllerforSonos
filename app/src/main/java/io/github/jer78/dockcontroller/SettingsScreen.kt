@@ -975,6 +975,15 @@ fun SettingsModal(
                                         swapWhilePlaying = it
                                         scope.launch { settingsManager.setSwapWhilePlaying(it) }
                                     }
+                                    if (!swapWhilePlaying) {
+                                        Text(
+                                            "Off: while music plays, Now Playing stays on screen - in the screensaver too, " +
+                                                "possibly for hours. On OLED screens, a picture left still that long can burn " +
+                                                "in. LCD screens, like the Pixel Tablet's, aren't affected.",
+                                            fontSize = 12.sp,
+                                            color = Color(0xFFFFA726)
+                                        )
+                                    }
                                     HorizontalDivider()
 
                                     Text("Artist Suggestions:", fontWeight = FontWeight.SemiBold)
@@ -1117,12 +1126,15 @@ fun SettingsModal(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Text("Spectrum Analyzer", fontWeight = FontWeight.SemiBold)
+                                            Text("Spectrum Analyzer (Experimental)", fontWeight = FontWeight.SemiBold)
                                             Text(
                                                 text = if (showSpectrumAnalyzer && !micPermissionGranted) {
                                                     "Needs microphone access - tap to grant"
                                                 } else {
-                                                    "Uses the mic to show a live visualizer behind Now Playing while music plays. Not calibrated, just for looks."
+                                                    "Uses the microphone to show a live visualizer behind Now Playing while music plays. " +
+                                                        "Nothing is recorded or sent anywhere, but Android shows its microphone indicator " +
+                                                        "while it's on. Only in the app, never the screensaver, so the microphone isn't " +
+                                                        "left on all day. Not calibrated, just for looks."
                                                 },
                                                 fontSize = 11.sp,
                                                 color = if (showSpectrumAnalyzer && !micPermissionGranted) Color(0xFFFFA726) else Color.Gray

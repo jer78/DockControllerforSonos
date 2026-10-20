@@ -475,7 +475,11 @@ fun AlarmDialog(
     val id = alarm.entityId
     val disarmed = alarm.state == "disarmed"
     val available = alarm.state != "unavailable" && alarm.state != "unknown"
-    val needsCode = alarm.codeFormat != null && available && (!disarmed || alarm.codeArmRequired)
+    // From the screensaver over a locked tablet, disarming waits for the
+    // tablet to be unlocked (see DeviceUnlockGate); arming doesn't.
+    val unlockGate = LocalDeviceUnlockGate.current
+    val needsTabletUnlock = !disarmed && available && unlockGate?.isLocked() == true
+    val needsCode = alarm.codeFormat != null && available && (!disarmed || alarm.codeArmRequired) && !needsTabletUnlock
     val textCode = alarm.codeFormat == "text"
     var code by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
@@ -547,6 +551,14 @@ fun AlarmDialog(
                         if (row.size == 1) Spacer(Modifier.weight(1f))
                     }
                 }
+            } else if (needsTabletUnlock) {
+                Text(
+                    "Unlock this tablet first to disarm ${alarm.name}.",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    textAlign = TextAlign.Center
+                )
+                UnlockTabletButton(modifier = Modifier.fillMaxWidth()) { unlockGate?.requestUnlock() }
             } else {
                 AlarmActionButton("Disarm", "shield-off", AlarmPendingColor, enabled = ready, modifier = Modifier.fillMaxWidth()) {
                     send(HaCommand.DisarmAlarm(id, sentCode))

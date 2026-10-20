@@ -67,13 +67,15 @@ It's free and open source. If you enjoy it, you can support its development:
   non-live album starts
 - Optional clock, in music mode, TV mode or both. In TV mode it sits above
   the show's title and takes turns with the time the show will end
-- Optional spectrum analyzer behind the screen (or just over the artwork),
-  driven by the microphone
+- Experimental: a spectrum analyzer behind the screen, in the app only (see
+  [Spectrum Analyzer](#spectrum-analyzer) below)
 - Swipe left, right or down to go to Cover Flow
 - **Cover Flow between songs**: while an album plays, Now Playing hands over
   to Cover Flow or the grid (already scrolling) after 20 seconds, and comes
   back each time a new song starts. It waits while you're using the screen.
-  On by default; Settings → Now Playing → Show Cover Flow Between Songs
+  On by default; Settings → Now Playing → Show Cover Flow Between Songs.
+  Turned off, Now Playing can stay on screen for hours, which Settings warns
+  can burn in on OLED screens (LCD screens like the Pixel Tablet's are fine)
 
 **Cover Flow**
 - A 3D carousel of albums standing on a glass table, shown when music is
@@ -101,11 +103,18 @@ It's free and open source. If you enjoy it, you can support its development:
   confirmation), like Cover Flow's centered album; a tap anywhere else puts
   it back. Left alone, it drifts slowly sideways, and picks up where it was
   after a trip to Now Playing
+- **Track lists**: an album out at the front in the grid, or centered in
+  Cover Flow, has a **Tracks** button beside its X once its songs are known.
+  It turns the cover over to show them over a blurred copy of the cover; tap
+  one to play the album from that song. Apple Music albums have their songs
+  straight away (from Apple's catalog); others once they've played once (see
+  [Known limitations](#known-limitations))
 - **Recently played** in the grid: as it drifts, each of your last 5
   favorites played flips out to the front for a few seconds, saying when it
   was last played (or Now Playing, if it's the album playing), then flips
-  back into its place (Settings → Cover Flow /
-  Grid → Show Recently Played)
+  back into its place. Tap it while it's out and it stays, with the same
+  play, X and Tracks buttons as an album you tapped yourself, and the grid
+  holds still (Settings → Cover Flow / Grid → Show Recently Played)
 - **A-Z bar** above the grid: tap a letter, or drag along the bar, to jump
   straight to it. In Cover Flow it slides up along the bottom while you swipe
   through the albums, with the track cards stepping aside for it
@@ -120,7 +129,8 @@ It's free and open source. If you enjoy it, you can support its development:
   narrows as you type
 - Cover Flow always opens on all favorites in the carousel
 - Tap an album to play it, or tap its X to delete it (after a
-  confirmation). A favorite still on Sonos is deleted from Sonos too
+  confirmation). A favorite still on Sonos is deleted from Sonos too. Its
+  **Tracks** button turns it over to its track list, as in the grid
 - If a favorite that's no longer on Sonos won't play (say the music service
   removed the album), the app asks whether to delete it or keep it
 - Previous, Now Playing and Next Up cards along the bottom, each of which
@@ -191,7 +201,10 @@ It's free and open source. If you enjoy it, you can support its development:
 - Lock: lock or unlock, always behind a confirmation pop-up, with a number
   pad for locks that need a code. The pop-up waits for Home Assistant's
   answer and says "Incorrect code" if the code was wrong. Codes are never
-  saved - each one is sent to Home Assistant once and then forgotten
+  saved - each one is sent to Home Assistant once and then forgotten. In the
+  screensaver over a locked tablet, unlocking first asks you to unlock the
+  tablet (as Google's hub mode does), so nobody walking past can open the
+  door; locking is still one tap
 - Weather: the current condition and temperature; tap for a near
   full-screen forecast with every detail the entity reports (feels like,
   humidity, wind, pressure, UV, ...), hourly with a temperature curve, and
@@ -205,7 +218,8 @@ It's free and open source. If you enjoy it, you can support its development:
   while it's running
 - Alarm panel: arm (home, away, night, ...) or disarm, with a number pad or
   keyboard for the code (wrong codes are reported, as for locks); pulses
-  amber while arming and red when triggered
+  amber while arming and red when triggered. Like unlocking, disarming from
+  the screensaver over a locked tablet asks you to unlock the tablet first
 
 **Everywhere**
 - Instant updates: changes on your speakers and in Home Assistant show up
@@ -214,7 +228,9 @@ It's free and open source. If you enjoy it, you can support its development:
   from it; Settings opens in the app, where it scrolls properly
 - Dims automatically in a dark room using the light sensor, and fades Cover
   Flow and the TV screensaver to black once the lights go out (a tap shows it
-  again for 30 seconds; it comes back by itself when the lights go on)
+  again for 30 seconds; it comes back by itself when the lights go on). While
+  it's black, Cover Flow and the grid stop moving, picking up again once the
+  screen lights up
 - Light on the network: rooms and sound settings are only re-read every few
   minutes or when you open them, and commands go straight to the speaker
   without searching the network first
@@ -224,7 +240,26 @@ It's free and open source. If you enjoy it, you can support its development:
 
 ## Experimental features
 
-These work, but may not suit every TV or service. Turn them on in Settings.
+These work, but may not suit every TV, service or setup. Turn them on in
+Settings.
+
+### Spectrum Analyzer
+
+A live visualizer of the music behind Now Playing (or just over the artwork),
+in a choice of colours. Turn it on in **Settings → Now Playing**.
+
+- **How it works**: it listens through the tablet's microphone and splits the
+  sound into frequency bands as the bars. Nothing is recorded, saved or sent
+  anywhere, and it only listens while music is playing. It isn't calibrated,
+  it's just for looks.
+- **Only in the app, never in the screensaver - on purpose.** The screensaver
+  can be on screen all day, and running the visualizer there would keep the
+  microphone open the whole time: Android would show its microphone
+  indicator constantly, and the tablet would spend power and warmth
+  listening to a room nobody's watching. In the app it only runs while
+  you're looking at Now Playing.
+- **What it needs**: microphone permission, which the app asks for when you
+  turn it on.
 
 ### Auto-Unmute After Commercials
 
@@ -292,7 +327,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.40.apk`). It's about 55 MB.
+   `DockController-v1.0.41.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -323,7 +358,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.40.apk
+adb install -r DockController-v1.0.41.apk
 ```
 
 Every release is signed with the same key. If Android says **App not
@@ -401,6 +436,32 @@ own music library, AirPlay and Spotify Connect.
 - A favorite that's no longer on Sonos is played from the link the app saved
   when it was. If the music service changes or removes the album, that link
   can stop working; the app then offers to delete it.
+- **Track lists before an album has played are Apple Music only.** Apple's
+  catalog can be looked up without signing in, so Apple Music albums show
+  their songs straight away. Albums from other services (Spotify, Amazon
+  Music, ...) and playlists only get a **Tracks** button once they've
+  played from Sonos for a moment, when the app saves the songs from the
+  Sonos queue. Radio stations never have one. Apple's list can occasionally
+  differ from what Sonos plays (say, a bonus track in another country); the
+  Sonos queue's list replaces it once the album has played.
+- **Picking a song from a track list starts the album first**, then jumps to
+  the song once Sonos has queued it, so the first song can be heard for a
+  moment.
+- **Genres** (the genre filter and Prefer Same Genre) are only known for
+  Apple Music albums, again from Apple's catalog.
+- **Artist suggestions can't be played directly.** Only Sonos Favorites can
+  be played from the app, so a suggestion has to be added in the Sonos app
+  first.
+- **Sonos's explicit-content setting can't be read.** Sonos doesn't let other
+  apps see it, so when Sonos skips a song you picked, the app can only say
+  it's probably explicit.
+- **Swiping up or down in the screensaver can open Android's own menus.**
+  Over the screensaver, Android (and the Pixel Tablet's hub mode) uses
+  vertical swipes for the notification shade and its own controls, so
+  scrolling a long list there - a track list, the queue, a Home Assistant
+  pop-up - can pull those down instead. For anything that needs scrolling,
+  it's best to open the app (Settings already opens there for this reason).
+  Sideways swipes, like moving through Cover Flow or the grid, work fine.
 
 ## Building from source
 

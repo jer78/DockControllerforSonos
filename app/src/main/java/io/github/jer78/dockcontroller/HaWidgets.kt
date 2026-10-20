@@ -554,6 +554,27 @@ private fun LockWidget(lock: HaLockState, onClick: () -> Unit) {
     }
 }
 
+// In place of Unlock or Disarm while the screensaver is over a locked
+// tablet: opens the app, which Android shows once the tablet is unlocked.
+@Composable
+fun UnlockTabletButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Surface(
+        color = Color.White,
+        shape = RoundedCornerShape(20.dp),
+        modifier = modifier.clip(RoundedCornerShape(20.dp)).clickable(onClick = onClick)
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(vertical = 14.dp)
+        ) {
+            Icon(Icons.Default.LockOpen, contentDescription = null, tint = Color.Black, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Unlock tablet", color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
 // Tapping a lock widget never acts straight away - this pop-up is the
 // confirmation, naming the lock and what will happen, and only the
 // Lock/Unlock button sends anything to Home Assistant. A lock that needs a
@@ -576,6 +597,10 @@ fun LockConfirmDialog(
         else -> LockUnlockedColor
     }
     val canAct = !lock.isMoving && lock.state != "unavailable"
+    // From the screensaver over a locked tablet, unlocking waits for the
+    // tablet to be unlocked (see DeviceUnlockGate); locking doesn't.
+    val unlockGate = LocalDeviceUnlockGate.current
+    val needsTabletUnlock = willUnlock && unlockGate?.isLocked() == true
     var code by remember { mutableStateOf("") }
     val codeRegex = remember(lock.codeFormat) { lock.codeFormat?.let { runCatching { Regex(it) }.getOrNull() } }
     val codeOk = !lock.requiresCode || (code.isNotEmpty() && codeRegex?.matches(code) != false)
@@ -584,7 +609,7 @@ fun LockConfirmDialog(
     var failedWithCode by remember { mutableStateOf(false) }
 
     GlassDialog(onDismissRequest = onDismiss) {
-        GlassCard(modifier = Modifier.width(if (lock.requiresCode && canAct) 720.dp else 380.dp)) {
+        GlassCard(modifier = Modifier.width(if (lock.requiresCode && canAct && !needsTabletUnlock) 720.dp else 380.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(24.dp),
@@ -620,6 +645,7 @@ fun LockConfirmDialog(
                         when {
                             lock.isMoving -> "Wait for the lock to finish before changing it."
                             lock.state == "unavailable" -> "Home Assistant can't reach this lock right now."
+                            needsTabletUnlock -> "Unlock this tablet first to unlock ${lock.name}."
                             lock.requiresCode -> "Enter the code to ${actionLabel.lowercase()} ${lock.name}."
                             else -> "$actionLabel ${lock.name}?"
                         },
@@ -648,7 +674,9 @@ fun LockConfirmDialog(
                                 modifier = Modifier.padding(vertical = 16.dp)
                             )
                         }
-                        if (canAct) {
+                        if (canAct && needsTabletUnlock) {
+                            UnlockTabletButton(modifier = Modifier.weight(1f)) { unlockGate?.requestUnlock() }
+                        } else if (canAct) {
                             val ready = codeOk && !sending
                             Surface(
                                 color = actionColor.copy(alpha = if (ready) 1f else 0.35f),
@@ -691,7 +719,7 @@ fun LockConfirmDialog(
                     }
                 }
 
-                if (lock.requiresCode && canAct) {
+                if (lock.requiresCode && canAct && !needsTabletUnlock) {
                     PinPad(code = code, onCodeChange = {
                         code = it
                         failure = null

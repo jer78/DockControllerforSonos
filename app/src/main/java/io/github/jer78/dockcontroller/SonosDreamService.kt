@@ -1,11 +1,9 @@
 package io.github.jer78.dockcontroller
 
-import android.Manifest
+import android.app.KeyguardManager
 import android.content.Intent
 import android.view.KeyEvent
-import android.content.pm.PackageManager
 import android.service.dreams.DreamService
-import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -99,7 +97,10 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
             setViewTreeSavedStateRegistryOwner(this@SonosDreamService)
             
             setContent {
-                CompositionLocalProvider(LocalInWindowDialogHost provides dialogHost) {
+                CompositionLocalProvider(
+                    LocalInWindowDialogHost provides dialogHost,
+                    LocalDeviceUnlockGate provides unlockGate
+                ) {
                     val trackState by manager.trackState.collectAsState()
                     val haState by manager.haState.collectAsState()
                     val isTvMode by manager.isTvMode.collectAsState()
@@ -110,12 +111,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     val albumHistory by manager.albumHistory.collectAsState()
                     val speakerGroups by manager.speakerGroups.collectAsState()
                     val refreshStatus by manager.favoritesRefreshStatus.collectAsState()
-                    val showSpectrumAnalyzer by settingsManager.showSpectrumAnalyzer.collectAsState(initial = false)
-                    val spectrumColorScheme by settingsManager.spectrumColorScheme.collectAsState(initial = SpectrumColorScheme.RAINBOW)
-                    val spectrumHeightPercent by settingsManager.spectrumHeightPercent.collectAsState(initial = 1f)
                     val musicBackgroundBlur by settingsManager.musicBackgroundBlur.collectAsState(initial = SettingsManager.BACKGROUND_BLUR_DEFAULT)
                     val tvBackgroundBlur by settingsManager.tvBackgroundBlur.collectAsState(initial = SettingsManager.BACKGROUND_BLUR_SAME_AS_MUSIC)
-                    val spectrumConfineToAlbumArt by settingsManager.spectrumConfineToAlbumArt.collectAsState(initial = false)
                     val use24HourClock by settingsManager.use24HourClock.collectAsState(initial = true)
                     val coverFlowReflection by settingsManager.coverFlowReflection.collectAsState(initial = SettingsManager.COVER_FLOW_REFLECTION_DEFAULT)
                     val coverFlowGlassTable by settingsManager.coverFlowGlassTable.collectAsState(initial = SettingsManager.COVER_FLOW_GLASS_TABLE_DEFAULT)
@@ -136,18 +133,16 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     val tvScreensaverDelaySeconds by settingsManager.tvScreensaverDelaySeconds.collectAsState(
                         initial = SettingsManager.TV_SCREENSAVER_DELAY_DEFAULT_SECONDS
                     )
-                    // A dream is the wrong place to prompt for a runtime permission - only
-                    // shown here if it was already granted from the main app's Settings.
-                    val micPermissionGranted = remember {
-                        ContextCompat.checkSelfPermission(
-                            this@SonosDreamService, Manifest.permission.RECORD_AUDIO
-                        ) == PackageManager.PERMISSION_GRANTED
-                    }
+                    // No spectrum analyzer here: it would keep the microphone on
+                    // (and Android's mic indicator lit) all the while the
+                    // screensaver shows music - it's in the app only.
 
                     val swapWhilePlaying by settingsManager.swapWhilePlaying.collectAsState(initial = true)
 
                     var isAmbientMode by remember { mutableStateOf(false) }
                     var isTvAmbientMode by remember { mutableStateOf(false) }
+                    // The dark-room blackout has the screen fully black - see MainActivity.
+                    var screenBlack by remember { mutableStateOf(false) }
                     // On Cover Flow because of Show Cover Flow Between Songs,
                     // rather than idle - see MainActivity.
                     var swappedWhilePlaying by remember { mutableStateOf(false) }
@@ -348,6 +343,13 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         } else emptyList(),
                                         canReplayTrack = { manager.canReplay(it) },
                                         onReplayTrack = { manager.replayTrack(it) },
+                                        paused = screenBlack,
+                                        loadAlbumTracks = { manager.albumTracks(it) },
+                                        onPlayAlbumTrack = { album, track, rect ->
+                                            transitionSourceRect = rect
+                                            transitioningAlbum = album
+                                            manager.playAlbumFromTrack(album, track)
+                                        },
                                         onShowSuggestions = {
                                             suggestions = ArtistSuggestions.latestFor(trackState.artist).ifEmpty { null }
                                         }
@@ -380,14 +382,8 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                                         onHaCommand = { manager.sendHaCommand(it) },
                                         onReorderHaWidgets = { manager.reorderHaWidgets(it) },
                                         onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
-                                        showSpectrumAnalyzer = showSpectrumAnalyzer,
-                                        micPermissionGranted = micPermissionGranted,
-                                        onRequestMicPermission = { requestMicPermissionViaApp() },
-                                        spectrumColorScheme = spectrumColorScheme,
-                                        spectrumHeightPercent = spectrumHeightPercent,
                                         musicBackgroundBlur = musicBackgroundBlur,
                                         tvBackgroundBlur = tvBackgroundBlur,
-                                        spectrumConfineToAlbumArt = spectrumConfineToAlbumArt,
                                         audioSettings = audioSettings,
                                         onToggleNightMode = { manager.toggleNightMode() },
                                         onToggleDialogMode = { manager.toggleDialogMode() },
@@ -479,7 +475,7 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     // Flow / TV Ambient there (see DarkRoomBlackout) - over
                     // any pop-up too, since a screensaver runs unattended
                     // all night.
-                    DarkRoomBlackout(idle = isAmbientMode || isTvAmbientMode, window = window)
+                    DarkRoomBlackout(idle = isAmbientMode || isTvAmbientMode, window = window, onFullyBlack = { screenBlack = it })
                 }
             }
         }
@@ -499,21 +495,9 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
         }
     }
 
-    // A dream can't show the runtime permission prompt, so hand off to the
-    // app, which asks straight away (see MainActivity.EXTRA_REQUEST_MIC).
-    // CLEAR_TOP + SINGLE_TOP so an already-running app gets the request via
-    // onNewIntent instead of just being brought forward without it.
-    private fun requestMicPermissionViaApp() {
-        startActivity(
-            Intent(this, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .putExtra(MainActivity.EXTRA_REQUEST_MIC, true)
-        )
-        finish()
-    }
-
-    // Same hand-off as requestMicPermissionViaApp: a dream's window doesn't
-    // scroll reliably, so Settings opens in the app instead.
+    // A dream's window doesn't scroll reliably, so Settings opens in the app
+    // instead. CLEAR_TOP + SINGLE_TOP so an already-running app gets the
+    // request via onNewIntent instead of just being brought forward without it.
     private fun openSettingsViaApp() {
         startActivity(
             Intent(this, MainActivity::class.java)
@@ -521,6 +505,23 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                 .putExtra(MainActivity.EXTRA_OPEN_SETTINGS, true)
         )
         finish()
+    }
+
+    // Unlocking a lock or disarming an alarm from here needs the tablet
+    // unlocked first: opening the app makes Android ask for it, and the
+    // action can then be done there.
+    private val unlockGate by lazy {
+        val keyguard = getSystemService(KeyguardManager::class.java)
+        DeviceUnlockGate(
+            isLocked = { keyguard?.isKeyguardLocked == true },
+            requestUnlock = {
+                startActivity(
+                    Intent(this, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                )
+                finish()
+            }
+        )
     }
 
     // From artist suggestions - the dream steps aside for it, like Settings.

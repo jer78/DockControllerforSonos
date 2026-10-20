@@ -90,9 +90,11 @@ class AmbientBrightnessController(context: Context) : SensorEventListener {
 // screensaver doesn't light up the room all night. It comes back by itself
 // when the lights go on; a tap brings it back for PEEK_MS without waking
 // anything underneath. Also applies the dark-room dimming to [window] - the
-// one place the window's brightness is set.
+// one place the window's brightness is set. onFullyBlack hears when the
+// screen is fully black and when it lights up again, so what's underneath
+// can stop moving meanwhile (nothing can see it).
 @Composable
-fun DarkRoomBlackout(idle: Boolean, window: Window) {
+fun DarkRoomBlackout(idle: Boolean, window: Window, onFullyBlack: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     val controller = remember { AmbientBrightnessController(context) }
     DisposableEffect(Unit) {
@@ -120,6 +122,8 @@ fun DarkRoomBlackout(idle: Boolean, window: Window) {
     // Down to the lowest backlight only once fully black, and back up
     // before it fades in.
     val fullyBlack = blackedOut && blackAlpha == 1f
+    val currentOnFullyBlack by rememberUpdatedState(onFullyBlack)
+    LaunchedEffect(fullyBlack) { currentOnFullyBlack(fullyBlack) }
     LaunchedEffect(brightness, fullyBlack) {
         val attributes = window.attributes
         attributes.screenBrightness = if (fullyBlack) WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF else brightness

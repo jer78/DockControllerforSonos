@@ -8,6 +8,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 
 class SonosDashboardManager private constructor(context: Context) {
     private val appContext = context.applicationContext
@@ -64,7 +65,25 @@ class SonosDashboardManager private constructor(context: Context) {
     // SavedFavorites) - the source both lists above are built from, and
     // what Settings > Favorites manages. Changes go through savedLock, so a
     // refresh and a delete can't overwrite each other.
-    private val savedFavoritesStore = SavedFavoritesStore(appContext)
+    private val savedFavoritesStore = SavedFavoritesStore(appContext).also { AlbumTracks.init(appContext) }
+
+    // Favorites whose track list has been saved from the queue this session
+    // (see maybeSaveAlbumTracks).
+    private val tracksSavedThisSession = ConcurrentHashMap.newKeySet<String>()
+
+    // While a favorite plays from the queue, saves its track list for the
+    // back of its cover - once a session, after it's been playing a moment
+    // so the queue has filled. Only this album's songs, in case more is
+    // queued after it; a playlist's are all its own.
+    private fun maybeSaveAlbumTracks(favorite: AlbumHistoryItem, playingAlbum: String) {
+        val key = favoriteKey(favorite)
+        if (!tracksSavedThisSession.add(key)) return
+        scope.launch {
+            val queue = loadQueue()?.tracks.orEmpty()
+            val tracks = if (favorite.kind == "playlist") queue else queue.filter { it.album.equals(playingAlbum, ignoreCase = true) }
+            if (tracks.isEmpty()) tracksSavedThisSession.remove(key) else AlbumTracks.saveFromQueue(favorite, tracks)
+        }
+    }
     private val savedLock = kotlinx.coroutines.sync.Mutex()
     private var savedLoaded = false
     private val _savedFavorites = MutableStateFlow<List<AlbumHistoryItem>>(emptyList())
@@ -161,6 +180,8 @@ class SonosDashboardManager private constructor(context: Context) {
         private const val SKIPPED_SONG_NOTICE_MS = 20_000L
         // Half-second looks for a replayed track in a just-started album's queue.
         private const val REPLAY_QUEUE_TRIES = 10
+        // How far into a favorite's song before its track list is saved.
+        private const val TRACK_LIST_SAVE_AFTER_SECONDS = 15
         private const val IDLE_POLL_INTERVAL_MS = 6000L
         private const val ACTIVE_HA_POLL_INTERVAL_MS = 5000L
         private const val IDLE_HA_POLL_INTERVAL_MS = 15000L
@@ -867,6 +888,9 @@ class SonosDashboardManager private constructor(context: Context) {
                                 val match = matchPlayingFavorite(favorites, album, artist)
                                 if (match != null) {
                                     if (state == "PLAYING") markFavoritePlayed(match)
+                                    if (state == "PLAYING" && fromQueue && position >= TRACK_LIST_SAVE_AFTER_SECONDS) {
+                                        maybeSaveAlbumTracks(match, album)
+                                    }
                                     // Keyed by the album's service ID, not
                                     // playUri: Sonos favorite IDs ("FV:2/<n>")
                                     // aren't guaranteed stable across
@@ -1266,7 +1290,8 @@ class SonosDashboardManager private constructor(context: Context) {
                 QueueTrack(
                     title = map[PyObject.fromJava("title")]?.toString() ?: "",
                     artist = map[PyObject.fromJava("artist")]?.toString() ?: "",
-                    duration = map[PyObject.fromJava("duration")]?.toString() ?: ""
+                    duration = map[PyObject.fromJava("duration")]?.toString() ?: "",
+                    album = map[PyObject.fromJava("album")]?.toString() ?: ""
                 )
             }
             SonosQueue(tracks, result[PyObject.fromJava("current")]?.toInt() ?: -1).also { lastLoadedQueue = it }
@@ -1463,20 +1488,34 @@ class SonosDashboardManager private constructor(context: Context) {
         scope.launch {
             when (val target = findReplayTarget(track)) {
                 is ReplayTarget.InQueue -> playQueueTrack(target.index)
-                // The new queue takes a moment to fill.
-                is ReplayTarget.OnFavorite -> playAlbum(target.album) {
-                    repeat(REPLAY_QUEUE_TRIES) {
-                        delay(500)
-                        val index = indexInQueue(loadQueue(), track)
-                        if (index >= 0) {
-                            playQueueTrack(index)
-                            return@playAlbum
-                        }
-                    }
-                    DebugLog.w("SonosDashboard", "Replay: '${track.title}' not found on '${target.album.albumTitle}'")
-                }
+                is ReplayTarget.OnFavorite -> playAlbum(target.album) { jumpToTrack(track, target.album) }
                 null -> reportError("Can't replay '${track.title}' - it's not in the queue or your favorites")
             }
+        }
+    }
+
+    // Once a just-started album's queue has filled (it takes a moment),
+    // plays the given track from it.
+    private suspend fun jumpToTrack(track: TrackDetails, album: AlbumHistoryItem) {
+        repeat(REPLAY_QUEUE_TRIES) {
+            delay(500)
+            val index = indexInQueue(loadQueue(), track)
+            if (index >= 0) {
+                playQueueTrack(index)
+                return
+            }
+        }
+        DebugLog.w("SonosDashboard", "'${track.title}' not found on '${album.albumTitle}'")
+    }
+
+    // A favorite's track list, for the back of its cover in Cover Flow and
+    // the grid (see AlbumTracks). Null when it isn't known.
+    suspend fun albumTracks(album: AlbumHistoryItem): List<QueueTrack>? = AlbumTracks.tracksFor(album)
+
+    // A track picked from the back of a cover: the album from that track on.
+    fun playAlbumFromTrack(album: AlbumHistoryItem, track: QueueTrack) {
+        playAlbum(album, askIfUnplayable = true) {
+            jumpToTrack(TrackDetails(title = track.title, artist = track.artist, album = album.albumTitle, artUrl = ""), album)
         }
     }
 

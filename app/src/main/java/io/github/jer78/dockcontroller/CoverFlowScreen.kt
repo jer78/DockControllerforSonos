@@ -336,7 +336,15 @@ fun AmbientClockScreen(
     onShowSuggestions: () -> Unit = {},
     // Replay in the Previous track's details (see SonosDashboardManager.replayTrack).
     canReplayTrack: suspend (TrackDetails) -> Boolean = { false },
-    onReplayTrack: (TrackDetails) -> Unit = {}
+    onReplayTrack: (TrackDetails) -> Unit = {},
+    // The screen is fully black (see DarkRoomBlackout): the grid stops
+    // drifting and Cover Flow stops cycling until it lights up again.
+    paused: Boolean = false,
+    // A favorite's track list for the back of its cover (Cover Flow's
+    // centered album, the grid's opened one), and playing it from a song
+    // picked there, with where the cover is.
+    loadAlbumTracks: suspend (AlbumHistoryItem) -> List<QueueTrack>? = { null },
+    onPlayAlbumTrack: (AlbumHistoryItem, QueueTrack, Rect) -> Unit = { _, _, _ -> }
 ) {
     var isFadingOut by remember { mutableStateOf(false) }
     var scrollAtOnce by remember { mutableStateOf(startScrolling) }
@@ -557,9 +565,26 @@ fun AmbientClockScreen(
         }
     }
 
-    LaunchedEffect(shownAlbums, isUserInteracting, isDragged, pendingFavoriteDelete, isGridView, letterPicks) {
+    // The centered album turned over by its Tracks button to show its track
+    // list (its pager page): Cover Flow stops cycling meanwhile. It turns
+    // back by its own button, on a swipe to another album, or after
+    // FLIPPED_HOLD_MS untouched.
+    var flippedPage by remember { mutableStateOf<Int?>(null) }
+    var flippedTouches by remember { mutableIntStateOf(0) }
+    LaunchedEffect(flippedPage, flippedTouches) {
+        if (flippedPage == null) return@LaunchedEffect
+        delay(FLIPPED_HOLD_MS)
+        flippedPage = null
+    }
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.currentPage }.collect { page ->
+            if (flippedPage != null && page != flippedPage) flippedPage = null
+        }
+    }
+
+    LaunchedEffect(shownAlbums, isUserInteracting, isDragged, pendingFavoriteDelete, isGridView, letterPicks, paused, flippedPage) {
         if (isUserInteracting || isDragged || letterPicks > 0) scrollAtOnce = false
-        if (shownAlbums.isNotEmpty() && pendingFavoriteDelete == null && !isGridView) {
+        if (shownAlbums.isNotEmpty() && pendingFavoriteDelete == null && !isGridView && !paused && flippedPage == null) {
             while (true) {
                 // Just long enough to slide in first.
                 delay(if (scrollAtOnce) START_SCROLLING_DELAY_MS else 8000)
@@ -729,7 +754,7 @@ fun AmbientClockScreen(
                 },
                 onLongPress = { pendingFavoriteDelete = it },
                 // The same rules as Cover Flow's own auto-advance.
-                autoScroll = !searchOpen && pendingFavoriteDelete == null,
+                autoScroll = !searchOpen && pendingFavoriteDelete == null && !paused,
                 driftAtOnce = scrollAtOnce,
                 onDriftStart = {
                     autoScrolls++
@@ -745,6 +770,11 @@ fun AmbientClockScreen(
                             (it.albumTitle.contains(trackState.album, ignoreCase = true) ||
                                 trackState.album.contains(it.albumTitle, ignoreCase = true))
                     }
+                },
+                loadTracks = loadAlbumTracks,
+                onPlayTrack = { album, track, bounds ->
+                    isFadingOut = true
+                    onPlayAlbumTrack(album, track, bounds)
                 },
                 modifier = Modifier.fillMaxSize().alpha(fadeAlpha)
             )
@@ -875,7 +905,19 @@ fun AmbientClockScreen(
                             DisposableEffect(page) {
                                 onDispose { cardBoundsByPage.remove(page) }
                             }
-                            val isPlayable = abs(pageOffset) < 0.2f && showLabels && !isFadingOut
+                            val isFlipped = flippedPage == page
+                            val isPlayable = abs(pageOffset) < 0.2f && (showLabels || isFlipped) && !isFadingOut
+                            // Its track list, for the back - looked up once it's
+                            // the centered album (see AlbumTracks).
+                            var tracks by remember(albumItem) { mutableStateOf<List<QueueTrack>?>(null) }
+                            LaunchedEffect(albumItem, isPlayable) {
+                                if (isPlayable && tracks == null) tracks = loadAlbumTracks(albumItem)
+                            }
+                            val flip by animateFloatAsState(
+                                targetValue = if (isFlipped) 180f else 0f,
+                                animationSpec = tween(600, easing = FastOutSlowInEasing),
+                                label = "coverFlowFlip"
+                            )
                             // Square corners, matching the square-edged
                             // reflection on the glass table below.
                             Card(
@@ -883,6 +925,10 @@ fun AmbientClockScreen(
                                 elevation = CardDefaults.cardElevation(24.dp),
                                 modifier = Modifier
                                     .fillMaxSize()
+                                    .graphicsLayer {
+                                        this.rotationY = flip
+                                        cameraDistance = 15f * density
+                                    }
                                     .border(1.dp, Color.White.copy(alpha = 0.1f), RectangleShape)
                                     .onGloballyPositioned {
                                         cardBounds = it.boundsInWindow()
@@ -896,7 +942,7 @@ fun AmbientClockScreen(
                                         // win at their own exact positions,
                                         // since they're nested clickables
                                         // that consume the tap first.
-                                        if (isPlayable) {
+                                        if (isPlayable && !isFlipped) {
                                             Modifier.clickable {
                                                 isFadingOut = true
                                                 onPlayAlbum(albumItem, cardBounds)
@@ -904,7 +950,22 @@ fun AmbientClockScreen(
                                         } else Modifier
                                     )
                             ) {
-                                Box(contentAlignment = Alignment.Center) {
+                                val backTracks = tracks
+                                if (flip > 90f && backTracks != null) {
+                                    // Drawn turned round, so it reads the
+                                    // right way once flipped.
+                                    AlbumTracksBack(
+                                        album = albumItem,
+                                        tracks = backTracks,
+                                        onPlayTrack = { track ->
+                                            isFadingOut = true
+                                            onPlayAlbumTrack(albumItem, track, cardBounds)
+                                        },
+                                        onFlipBack = { flippedPage = null },
+                                        onTouch = { flippedTouches++ },
+                                        modifier = Modifier.graphicsLayer { this.rotationY = 180f }
+                                    )
+                                } else Box(contentAlignment = Alignment.Center) {
                                     AsyncImage(
                                         model = albumItem.artUrl,
                                         contentDescription = null,
@@ -912,7 +973,7 @@ fun AmbientClockScreen(
                                         modifier = Modifier.fillMaxSize()
                                     )
 
-                                    if (isPlayable) {
+                                    if (isPlayable && !isFlipped) {
                                         Surface(
                                             color = Color.Black.copy(alpha = 0.7f),
                                             shape = CircleShape,
@@ -930,20 +991,25 @@ fun AmbientClockScreen(
                                             )
                                         }
 
-                                        IconButton(
-                                            onClick = {
-                                                pendingFavoriteDelete = albumItem
-                                            },
-                                            modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(16.dp)
-                                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
                                         ) {
-                                            Icon(
-                                                Icons.Default.Close,
-                                                contentDescription = "Remove",
-                                                tint = Color.White
-                                            )
+                                            if (!tracks.isNullOrEmpty()) {
+                                                AlbumTracksButton(onClick = { flippedPage = page })
+                                            }
+                                            IconButton(
+                                                onClick = {
+                                                    pendingFavoriteDelete = albumItem
+                                                },
+                                                modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Close,
+                                                    contentDescription = "Remove",
+                                                    tint = Color.White
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1606,6 +1672,9 @@ private fun CoverGrid(
     recentlyPlayed: Map<String, Long> = emptyMap(),
     // The favoriteKey of the one playing now, which says so instead.
     nowPlayingKey: String? = null,
+    // An opened album's track list, and playing it from a picked song.
+    loadTracks: suspend (AlbumHistoryItem) -> List<QueueTrack>? = { null },
+    onPlayTrack: (AlbumHistoryItem, QueueTrack, Rect) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val animatedBottom by animateDpAsState(bottomPadding, tween(400), label = "gridBottom")
@@ -1743,6 +1812,23 @@ private fun CoverGrid(
     }
     var gridOrigin by remember { mutableStateOf(Offset.Zero) }
     var gridSize by remember { mutableStateOf(IntSize.Zero) }
+    // Where the recently played album out at the front is on screen.
+    var featuredCoverBounds by remember { mutableStateOf(Rect.Zero) }
+
+    // A touch on the recently played album out at the front opens it right
+    // there, as if it had been tapped in the grid - play, X and Tracks, the
+    // grid held still. Done as the finger lands, since any touch otherwise
+    // sends it back into the grid.
+    fun openFeatured(index: Int) {
+        val from = featureProgress.value
+        openedIndex = index
+        openedBounds = featuredBounds
+        featuredIndex = null
+        scope.launch {
+            openProgress.snapTo(from)
+            openProgress.animateTo(1f, tween(FEATURE_FLIP_MS, easing = FastOutSlowInEasing))
+        }
+    }
 
     Box(
         modifier = modifier
@@ -1752,7 +1838,11 @@ private fun CoverGrid(
             }
             .pointerInput(Unit) {
                 awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val featured = featuredIndex
+                    if (featured != null && openedIndex == null && featuredCoverBounds.contains(down.position + gridOrigin)) {
+                        openFeatured(featured)
+                    }
                     lastTouch = System.currentTimeMillis()
                 }
             }
@@ -1876,7 +1966,10 @@ private fun CoverGrid(
                 areaBottom = gridSize.height - with(LocalDensity.current) { animatedBottom.toPx() },
                 areaWidth = gridSize.width.toFloat(),
                 progress = featureProgress.value,
-                onPlay = { album, coverBounds -> onPlay(album, coverBounds) }
+                // Opened rather than played (normally already done as the
+                // finger landed - see openFeatured).
+                onPlay = { _, _ -> if (openedIndex == null) openFeatured(index) },
+                onCoverBounds = { featuredCoverBounds = it }
             )
         }
 
@@ -1900,7 +1993,9 @@ private fun CoverGrid(
                     }
                 },
                 onPutBack = { putBackOpened() },
-                onTouch = { openedTouches++ }
+                onTouch = { openedTouches++ },
+                loadTracks = loadTracks,
+                onPlayTrack = onPlayTrack
             )
         }
 
@@ -1960,6 +2055,9 @@ private const val FEATURE_HOLD_MS = 3_000L
 private const val OPENED_HOLD_MS = 20_000L
 // ...and how much the grid behind it is blurred.
 private val OpenedBlur = 12.dp
+// How long Cover Flow's centered album stays turned over to its track list
+// untouched.
+private const val FLIPPED_HOLD_MS = 30_000L
 
 // A grid album on its way to or from the front (progress 0 = in its place
 // at from, 1 = at the front): growing and turning over once as it goes, over
@@ -1985,7 +2083,12 @@ private fun FeaturedRecentAlbum(
     onDelete: (() -> Unit)? = null,
     onPutBack: () -> Unit = {},
     // Any touch while opened, to keep it out a while longer.
-    onTouch: () -> Unit = {}
+    onTouch: () -> Unit = {},
+    // Its track list, and playing it from a song picked off the back.
+    loadTracks: suspend (AlbumHistoryItem) -> List<QueueTrack>? = { null },
+    onPlayTrack: (AlbumHistoryItem, QueueTrack, Rect) -> Unit = { _, _, _ -> },
+    // Where the cover is on screen, as it moves.
+    onCoverBounds: (Rect) -> Unit = {}
 ) {
     val density = LocalDensity.current
     val captionRoom = with(density) { 104.dp.toPx() }
@@ -2014,56 +2117,89 @@ private fun FeaturedRecentAlbum(
                 } else Modifier
             )
     )
+    // Opened by a tap: its track list, once known (see AlbumTracks), for the
+    // back of the cover - turned round by the Tracks button beside the X.
+    var tracks by remember(album) { mutableStateOf<List<QueueTrack>?>(null) }
+    LaunchedEffect(album, opened) { if (opened) tracks = loadTracks(album) }
+    var showingBack by remember(album) { mutableStateOf(false) }
+    val flip by animateFloatAsState(if (showingBack) 180f else 0f, tween(600, easing = FastOutSlowInEasing), label = "coverFlip")
+
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
             .size(with(density) { size.toDp() })
-            .onGloballyPositioned { coverBounds = it.boundsInWindow() }
+            .onGloballyPositioned {
+                coverBounds = it.boundsInWindow()
+                onCoverBounds(coverBounds)
+            }
             .graphicsLayer {
-                rotationY = 360f * progress
+                rotationY = 360f * progress + flip
                 cameraDistance = 16f * density.density
                 shadowElevation = 24.dp.toPx() * progress
             }
-            .clickable {
+            .clickable(enabled = !showingBack) {
                 onTouch()
                 onPlay(album, coverBounds)
             }
     ) {
-        AsyncImage(
-            model = album.artUrl,
-            contentDescription = album.albumTitle,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
-        )
-        if (opened) {
-            // Cover Flow's play button and X, a little smaller to suit.
-            Surface(
-                color = Color.Black.copy(alpha = 0.7f),
-                shape = CircleShape,
-                modifier = Modifier.size(96.dp).alpha(buttonsAlpha)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Play",
-                    tint = Color.White,
-                    modifier = Modifier.padding(20.dp).fillMaxSize()
-                )
-            }
-            if (onDelete != null) {
-                IconButton(
-                    onClick = {
-                        onTouch()
-                        onDelete()
-                    },
-                    enabled = buttonsAlpha > 0.5f,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(12.dp)
-                        .alpha(buttonsAlpha)
-                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+        val backTracks = tracks
+        if (flip > 90f && backTracks != null) {
+            // Drawn turned round, so it reads the right way once flipped.
+            AlbumTracksBack(
+                album = album,
+                tracks = backTracks,
+                onPlayTrack = { onPlayTrack(album, it, coverBounds) },
+                onFlipBack = {
+                    onTouch()
+                    showingBack = false
+                },
+                onTouch = onTouch,
+                modifier = Modifier.graphicsLayer { rotationY = 180f }
+            )
+        } else {
+            AsyncImage(
+                model = album.artUrl,
+                contentDescription = album.albumTitle,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            if (opened) {
+                // Cover Flow's play button and X, a little smaller to suit.
+                Surface(
+                    color = Color.Black.copy(alpha = 0.7f),
+                    shape = CircleShape,
+                    modifier = Modifier.size(96.dp).alpha(buttonsAlpha)
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.White)
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = "Play",
+                        tint = Color.White,
+                        modifier = Modifier.padding(20.dp).fillMaxSize()
+                    )
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp).alpha(buttonsAlpha)
+                ) {
+                    if (!tracks.isNullOrEmpty()) {
+                        AlbumTracksButton(onClick = {
+                            onTouch()
+                            showingBack = true
+                        })
+                    }
+                    if (onDelete != null) {
+                        IconButton(
+                            onClick = {
+                                onTouch()
+                                onDelete()
+                            },
+                            enabled = buttonsAlpha > 0.5f,
+                            modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.White)
+                        }
+                    }
                 }
             }
         }

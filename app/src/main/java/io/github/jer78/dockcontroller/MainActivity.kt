@@ -71,11 +71,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun handleMicRequestIntent(intent: Intent?) {
-        if (intent?.getBooleanExtra(EXTRA_REQUEST_MIC, false) == true) {
-            intent.removeExtra(EXTRA_REQUEST_MIC)
-            requestMicPermission()
-        }
+    private fun handleScreensaverIntent(intent: Intent?) {
         if (intent?.getBooleanExtra(EXTRA_OPEN_SETTINGS, false) == true) {
             intent.removeExtra(EXTRA_OPEN_SETTINGS)
             openSettingsRequested = true
@@ -84,7 +80,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleMicRequestIntent(intent)
+        handleScreensaverIntent(intent)
     }
 
     override fun onResume() {
@@ -95,9 +91,6 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        // Set by SonosDreamService, which can't show a permission prompt
-        // itself, to have the app ask for the mic as soon as it opens.
-        const val EXTRA_REQUEST_MIC = "request_mic"
         // Set by SonosDreamService, whose Settings can't be scrolled inside
         // the screensaver, to have the app open Settings as soon as it opens.
         const val EXTRA_OPEN_SETTINGS = "open_settings"
@@ -123,7 +116,7 @@ class MainActivity : ComponentActivity() {
         }
         
         manager.startPolling()
-        handleMicRequestIntent(intent)
+        handleScreensaverIntent(intent)
 
         setContent {
             val trackState by manager.trackState.collectAsState()
@@ -169,6 +162,9 @@ class MainActivity : ComponentActivity() {
             var showSettings by remember { mutableStateOf(false) }
             var isAmbientMode by remember { mutableStateOf(false) }
             var isTvAmbientMode by remember { mutableStateOf(false) }
+            // The dark-room blackout has the screen fully black - Cover Flow and
+            // the grid hold still meanwhile (see DarkRoomBlackout).
+            var screenBlack by remember { mutableStateOf(false) }
             // On Cover Flow because of Show Cover Flow Between Songs, rather
             // than idle - so the screen stays on and Sonos is polled at the
             // normal rate, to catch the next song.
@@ -397,6 +393,13 @@ class MainActivity : ComponentActivity() {
                                 } else emptyList(),
                                 canReplayTrack = { manager.canReplay(it) },
                                 onReplayTrack = { manager.replayTrack(it) },
+                                paused = screenBlack,
+                                loadAlbumTracks = { manager.albumTracks(it) },
+                                onPlayAlbumTrack = { album, track, rect ->
+                                    transitionSourceRect = rect
+                                    transitioningAlbum = album
+                                    manager.playAlbumFromTrack(album, track)
+                                },
                                 onShowSuggestions = {
                                     suggestions = ArtistSuggestions.latestFor(trackState.artist).ifEmpty { null }
                                 }
@@ -515,7 +518,7 @@ class MainActivity : ComponentActivity() {
 
                 // Dims the screen in a dark room, and blacks out Cover Flow /
                 // TV Ambient there (see DarkRoomBlackout).
-                DarkRoomBlackout(idle = isAmbientMode || isTvAmbientMode, window = window)
+                DarkRoomBlackout(idle = isAmbientMode || isTvAmbientMode, window = window, onFullyBlack = { screenBlack = it })
             }
 
             val refreshStatus by manager.favoritesRefreshStatus.collectAsState()

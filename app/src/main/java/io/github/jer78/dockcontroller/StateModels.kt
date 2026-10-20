@@ -14,7 +14,7 @@ enum class ScreenSlide { VERTICAL, FROM_LEFT, FROM_RIGHT }
 
 // The Sonos queue, for Now Playing's song picker. duration is "4:12", or
 // blank when the service doesn't say.
-data class QueueTrack(val title: String, val artist: String, val duration: String)
+data class QueueTrack(val title: String, val artist: String, val duration: String, val album: String = "")
 
 data class SonosQueue(val tracks: List<QueueTrack>, val currentIndex: Int)
 

@@ -667,6 +667,7 @@ def get_queue(speaker_name=None, limit=500):
             tracks.append({
                 "title": getattr(track, 'title', '') or '',
                 "artist": getattr(track, 'creator', '') or '',
+                "album": getattr(track, 'album', '') or '',
                 "duration": _short_duration(duration)
             })
         return {"tracks": tracks, "current": current}

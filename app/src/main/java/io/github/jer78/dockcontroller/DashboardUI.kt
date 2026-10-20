@@ -112,6 +112,15 @@ fun dockScreenTransitionSpec(slide: ScreenSlide): AnimatedContentTransitionScope
     }
 }
 
+// The screensaver runs over the lock screen, so there unlocking a lock or
+// disarming an alarm first needs the tablet unlocked (other actions don't),
+// like Google's own hub mode. isLocked says whether it is right now;
+// requestUnlock opens the app, which Android only shows once it's unlocked.
+// Null in the app, which is only ever on screen unlocked.
+class DeviceUnlockGate(val isLocked: () -> Boolean, val requestUnlock: () -> Unit)
+
+val LocalDeviceUnlockGate = compositionLocalOf<DeviceUnlockGate?> { null }
+
 // Settings > Now Playing > Show Cover Flow Between Songs: how long an album
 // plays on Now Playing before it hands over to Cover Flow / the grid (see
 // DockDashboardUI).
