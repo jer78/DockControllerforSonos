@@ -31,6 +31,10 @@ It's free and open source. If you enjoy it, you can support its development:
 
 ![Artist suggestions: three albums by artists similar to Alice In Chains, with an Open Sonos App button](docs/screenshots/suggestions.jpg)
 
+**TV mode**: what's on the TV through the soundbar, with the show's poster and when it ends
+
+![TV mode showing The Amazing Race's poster, the season and episode, an ENDS AT time and the time remaining](docs/screenshots/tvmode.jpg)
+
 ## Features
 
 **Now Playing**
