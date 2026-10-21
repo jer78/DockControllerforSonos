@@ -29,6 +29,10 @@ data class SavedTvArtwork(
     // there are any (see imageUrl/backgroundImageUrl).
     val url: String,
     val backgroundUrl: String? = null,
+    // A TMDB logo's poster, for the TV screensaver. posterLookedUp is false
+    // for TMDB logos saved before posters were, so they're looked up again.
+    val posterUrl: String? = null,
+    val posterLookedUp: Boolean = true,
     // Width / height of a poster, so the artwork card can take its shape.
     val aspectRatio: Float = 16f / 9f,
     // Whether TMDB was asked too (a key was set), so adding a key later
@@ -79,6 +83,7 @@ class TvArtworkStore private constructor(context: Context) {
     fun save(entry: SavedTvArtwork) {
         download(entry.url)
         entry.backgroundUrl?.let { download(it) }
+        entry.posterUrl?.let { download(it) }
         _entries.update { list -> listOf(entry) + list.filter { it.key != entry.key } }
         persist()
     }
@@ -103,7 +108,7 @@ class TvArtworkStore private constructor(context: Context) {
             persist()
             DebugLog.i("TvArtworkStore", "Deleted ${stale.size} TV artwork not shown in 14 days")
         }
-        val inUse = _entries.value.flatMap { listOfNotNull(it.url, it.backgroundUrl) }.map { imageFile(it).name }.toSet()
+        val inUse = _entries.value.flatMap { it.imageUrls() }.map { imageFile(it).name }.toSet()
         // Not ones written in the last hour, which may be downloading for
         // artwork about to be saved.
         dir.listFiles()
@@ -128,8 +133,11 @@ class TvArtworkStore private constructor(context: Context) {
         url = imageUrl(entry.url),
         kind = if (entry.source == SavedTvArtwork.Source.TMDB_LOGO) TvShowLogo.Kind.TRANSPARENT_LOGO else TvShowLogo.Kind.POSTER,
         aspectRatio = entry.aspectRatio,
-        backgroundUrl = entry.backgroundUrl?.let { imageUrl(it) }
+        backgroundUrl = entry.backgroundUrl?.let { imageUrl(it) },
+        posterUrl = entry.posterUrl?.let { imageUrl(it) }
     )
+
+    private fun SavedTvArtwork.imageUrls() = listOfNotNull(url, backgroundUrl, posterUrl)
 
     // Named after the URL, so the same image is only stored once.
     private fun imageFile(url: String): File {
@@ -156,8 +164,8 @@ class TvArtworkStore private constructor(context: Context) {
 
     // Only images no other entry still uses.
     private fun deleteImages(removed: SavedTvArtwork) {
-        val stillUsed = _entries.value.flatMap { listOfNotNull(it.url, it.backgroundUrl) }.toSet()
-        listOfNotNull(removed.url, removed.backgroundUrl)
+        val stillUsed = _entries.value.flatMap { it.imageUrls() }.toSet()
+        removed.imageUrls()
             .filter { it !in stillUsed }
             .forEach { imageFile(it).delete() }
     }
@@ -174,6 +182,8 @@ class TvArtworkStore private constructor(context: Context) {
                     source = source,
                     url = o.optString("url"),
                     backgroundUrl = o.optString("background").ifBlank { null },
+                    posterUrl = o.optString("poster").ifBlank { null },
+                    posterLookedUp = o.optBoolean("poster_looked_up"),
                     aspectRatio = o.optDouble("aspect", 16.0 / 9.0).toFloat(),
                     withTmdbKey = o.optBoolean("with_tmdb_key"),
                     savedAtMs = o.optLong("saved_at"),
@@ -198,6 +208,8 @@ class TvArtworkStore private constructor(context: Context) {
                         .put("source", it.source.name)
                         .put("url", it.url)
                         .put("background", it.backgroundUrl ?: "")
+                        .put("poster", it.posterUrl ?: "")
+                        .put("poster_looked_up", it.posterLookedUp)
                         .put("aspect", it.aspectRatio.toDouble())
                         .put("with_tmdb_key", it.withTmdbKey)
                         .put("saved_at", it.savedAtMs)

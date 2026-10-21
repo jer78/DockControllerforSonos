@@ -176,7 +176,8 @@ It's free and open source. If you enjoy it, you can support its development:
   show's title logo in place of the artwork, from TMDB with a free API key
 - Without a TMDB key, or for shows TMDB has no logo for, the show's TVmaze
   poster is shown instead, with the artwork reshaped to fit it, and the
-  show's TVmaze background (when it has one) behind the screen
+  show's TVmaze background (when it has one) behind the screen. With a TMDB
+  key, the show's TMDB backdrop goes behind the screen instead
 - Turn off **Replace TV Show Images** to keep the images Home Assistant sends
 - Logos, posters and YouTube thumbnails are saved on the device once found,
   so each show is only looked up once. **Saved TV Artwork** (Settings > Home
@@ -186,7 +187,8 @@ It's free and open source. If you enjoy it, you can support its development:
 - Pick one fallback image for when there's no artwork, or rotate through them
 - Drops into a TV screensaver after a configurable delay, whether the show
   is playing or paused; a tap brings Now Playing back, and the delay starts
-  over
+  over. With **Replace TV Show Images** on, the screensaver shows the show's
+  poster (from TMDB or TVmaze), or its TMDB logo when there's no poster
 - **The show's cast**: until the TV screensaver starts, every minute Now
   Playing is left untouched the cast takes a turn in place of what's on,
   then what's on comes back (a touch brings it straight back); the TV
@@ -249,6 +251,11 @@ It's free and open source. If you enjoy it, you can support its development:
   again for 30 seconds; it comes back by itself when the lights go on). While
   it's black, Cover Flow and the grid stop moving, picking up again once the
   screen lights up
+- Sleeps when it's off the dock with the screen off: after 30 seconds it
+  stops talking to your speakers and Home Assistant, and picks up again the
+  moment the screen comes on or it's back on the dock. On the dock it keeps
+  running with the screen off. The spectrum analyzer's microphone and the
+  light sensor stop whenever the app can't be seen
 - Light on the network: rooms and sound settings are only re-read every few
   minutes or when you open them, and commands go straight to the speaker
   without searching the network first
@@ -345,7 +352,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.42.apk`). It's about 55 MB.
+   `DockController-v1.0.43.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -376,7 +383,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.42.apk
+adb install -r DockController-v1.0.43.apk
 ```
 
 Every release is signed with the same key. If Android says **App not

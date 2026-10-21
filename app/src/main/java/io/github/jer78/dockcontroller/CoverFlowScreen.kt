@@ -1756,7 +1756,13 @@ private fun CoverGrid(
         var lastFrame = 0L
         while (true) {
             val now = withFrameNanos { it }
-            if (lastFrame != 0L) gridState.scrollBy((now - lastFrame) / 1_000_000_000f * driftPxPerSecond)
+            // No frames come while the screen's off or the app's in the
+            // background, so the gap since the last one can be hours -
+            // scrolling that far in one go laid out every album along the
+            // way and froze the app (ANR) when it came back. A long gap
+            // counts as one ordinary step, so the drift just carries on.
+            val elapsedNanos = (now - lastFrame).coerceAtMost(MAX_DRIFT_STEP_NANOS)
+            if (lastFrame != 0L) gridState.scrollBy(elapsedNanos / 1_000_000_000f * driftPxPerSecond)
             lastFrame = now
             // Well before the copies run out, jump back by a whole number
             // of lists and columns - the same albums in the same places, so
@@ -2253,6 +2259,8 @@ private const val GRID_DRIFT_DELAY_MS = 8_000L
 // ...or, with startScrolling, just long enough for the screen to slide in.
 private const val START_SCROLLING_DELAY_MS = 1_000L
 private val GridDriftSpeed = 24.dp
+// The most one frame of drift can cover (0.1 s), however long since the last.
+private const val MAX_DRIFT_STEP_NANOS = 100_000_000L
 
 // The A-Z bar's gold border round the picked letter's albums.
 private val GridHighlightGold = Color(0xFFFFC94D)

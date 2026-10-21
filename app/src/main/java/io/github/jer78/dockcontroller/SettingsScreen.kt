@@ -1327,7 +1327,8 @@ fun SettingsModal(
                                     Text(
                                         if (tvShowImages) {
                                             "When a TV show is playing, its title logo from TMDB replaces the artwork " +
-                                                "(with a free key from themoviedb.org), or else its poster from TVmaze."
+                                                "(with a free key from themoviedb.org), or else its poster from TVmaze. " +
+                                                "The TV screensaver shows the show's poster."
                                         } else {
                                             "Off: TV mode shows the images Home Assistant sends."
                                         },

@@ -97,8 +97,10 @@ class AmbientBrightnessController(context: Context) : SensorEventListener {
 fun DarkRoomBlackout(idle: Boolean, window: Window, onFullyBlack: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     val controller = remember { AmbientBrightnessController(context) }
-    DisposableEffect(Unit) {
-        controller.start()
+    // The light sensor only runs while the screen can be seen.
+    val visible = isScreenVisible()
+    DisposableEffect(visible) {
+        if (visible) controller.start()
         onDispose { controller.stop() }
     }
     val brightness by controller.brightness.collectAsState()

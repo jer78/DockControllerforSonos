@@ -14,13 +14,25 @@ import java.util.concurrent.TimeUnit
 // or, from TVmaze, the show's poster.
 // aspectRatio: the image's width / height, for a poster, so the artwork
 // card can take its shape. backgroundUrl: the show's background image
-// (TVmaze), shown behind the whole screen in place of the blurred artwork.
+// (TVmaze, or TMDB's backdrop), shown behind the whole screen in place of
+// the blurred artwork.
+// posterUrl: alongside a TMDB logo, the show's TMDB poster, for the TV
+// screensaver (a POSTER's own url is its poster).
 data class TvShowLogo(
     val url: String,
     val kind: Kind,
     val aspectRatio: Float = 16f / 9f,
-    val backgroundUrl: String? = null
+    val backgroundUrl: String? = null,
+    val posterUrl: String? = null
 ) {
+    // The poster the TV screensaver shows, and its width / height.
+    val screensaverPoster: Pair<String, Float>?
+        get() = when {
+            kind == Kind.POSTER -> url to aspectRatio
+            posterUrl != null -> posterUrl to TMDB_POSTER_ASPECT
+            else -> null
+        }
+
     enum class Kind {
         // A cut-out PNG (TMDB) that sits on the artwork.
         TRANSPARENT_LOGO,
@@ -28,6 +40,9 @@ data class TvShowLogo(
         POSTER
     }
 }
+
+// TMDB's posters are 2:3.
+private const val TMDB_POSTER_ASPECT = 2f / 3f
 
 // "S2 E3", "S02E03", "S2 · E3", "Season 2 Episode 3", "Season 28, Ep. 41".
 private const val SEASON_EPISODE =
@@ -117,14 +132,19 @@ class TvShowLogos(private val store: TvArtworkStore) {
 
     // A saved TVmaze poster from before a TMDB key was added doesn't count,
     // so the show gets a look at TMDB's logos.
-    fun cached(show: String, tmdbKey: String): TvShowLogo? =
+    private fun saved(show: String, tmdbKey: String): SavedTvArtwork? =
         store.get(storeKey(show))
             ?.takeUnless { tmdbKey.isNotBlank() && !it.withTmdbKey && it.source == SavedTvArtwork.Source.TVMAZE_POSTER }
-            ?.let { store.logoFor(it) }
 
-    // True when a lookup should start now; callers then call lookUp().
+    fun cached(show: String, tmdbKey: String): TvShowLogo? = saved(show, tmdbKey)?.let { store.logoFor(it) }
+
+    // True when a lookup should start now; callers then call lookUp(). A
+    // TMDB logo saved before posters were is still shown while it's looked
+    // up again for its poster and background.
     fun claimLookup(show: String, tmdbKey: String): Boolean {
-        if (cached(show, tmdbKey) != null) return false
+        val saved = saved(show, tmdbKey)
+        val wantsPoster = saved?.source == SavedTvArtwork.Source.TMDB_LOGO && !saved.posterLookedUp && tmdbKey.isNotBlank()
+        if (saved != null && !wantsPoster) return false
         val key = missKey(show, tmdbKey)
         val miss = misses[key]
         if (miss != null && System.currentTimeMillis() - miss.atMs < miss.retryMs) return false
@@ -155,6 +175,7 @@ class TvShowLogos(private val store: TvArtworkStore) {
                 else SavedTvArtwork.Source.TVMAZE_POSTER,
                 url = logo.url,
                 backgroundUrl = logo.backgroundUrl,
+                posterUrl = logo.posterUrl,
                 aspectRatio = logo.aspectRatio,
                 withTmdbKey = tmdbKey.isNotBlank()
             )
@@ -202,7 +223,8 @@ class TvShowLogos(private val store: TvArtworkStore) {
     private fun fromTmdb(show: String, tmdbKey: String): TvShowLogo? {
         val results = tmdbGet("/search/tv", mapOf("query" to show, "include_adult" to "false"), tmdbKey)
             ?.optJSONArray("results") ?: return null
-        val id = results.optJSONObject(0)?.optInt("id") ?: return null
+        val match = results.optJSONObject(0) ?: return null
+        val id = match.optInt("id")
         val logos = tmdbGet("/tv/$id/images", mapOf("include_image_language" to "en,null"), tmdbKey)
             ?.optJSONArray("logos") ?: return null
         // English first, then language-neutral, each by votes. SVG logos
@@ -214,7 +236,16 @@ class TvShowLogos(private val store: TvArtworkStore) {
                     .thenByDescending { it.optDouble("vote_average", 0.0) }
             )
             .firstOrNull() ?: return null
-        return TvShowLogo("https://image.tmdb.org/t/p/w500${best.optString("file_path")}", TvShowLogo.Kind.TRANSPARENT_LOGO)
+        // The show's poster (for the TV screensaver) and backdrop (behind
+        // Now Playing) come with the search.
+        fun image(field: String, size: String) = match.optString(field).takeIf { it.startsWith("/") }
+            ?.let { "https://image.tmdb.org/t/p/$size$it" }
+        return TvShowLogo(
+            "https://image.tmdb.org/t/p/w500${best.optString("file_path")}",
+            TvShowLogo.Kind.TRANSPARENT_LOGO,
+            backgroundUrl = image("backdrop_path", "w1280"),
+            posterUrl = image("poster_path", "w780")
+        )
     }
 
     // The show's poster - the main one first - plus its background, if it

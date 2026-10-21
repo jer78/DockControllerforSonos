@@ -17,6 +17,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -107,7 +108,38 @@ fun TvAmbientScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.padding(60.dp)
             ) {
-                if (artworkUrl.isNotBlank()) {
+                // With "Replace TV Show Images" on, the show's poster (TVmaze,
+                // or TMDB's alongside its logo) in its own shape, else the
+                // TMDB logo on its own, else HA's artwork.
+                val showLogo = trackState.tvShowLogo
+                val poster = showLogo?.screensaverPoster
+                if (poster != null) {
+                    val (posterUrl, aspect) = poster
+                    Card(
+                        shape = RoundedCornerShape(12.dp),
+                        elevation = CardDefaults.cardElevation(20.dp),
+                        // Room left for the title and progress bar on a short screen.
+                        modifier = Modifier
+                            .height(minOf(380, LocalConfiguration.current.screenHeightDp / 2).dp)
+                            .aspectRatio(aspect)
+                    ) {
+                        AsyncImage(
+                            model = posterUrl,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(24.dp))
+                } else if (showLogo != null) {
+                    AsyncImage(
+                        model = showLogo.url,
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.width(420.dp).height(200.dp)
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                } else if (artworkUrl.isNotBlank()) {
                     Card(
                         shape = RoundedCornerShape(12.dp),
                         elevation = CardDefaults.cardElevation(20.dp),
@@ -127,13 +159,17 @@ fun TvAmbientScreen(
                     color = Color.White.copy(alpha = 0.7f),
                     fontSize = 32.sp,
                     fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = trackState.artist,
                     color = Color.White.copy(alpha = 0.5f),
                     fontSize = 22.sp,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
 
                 // Radio/live streams and anything the source can't time

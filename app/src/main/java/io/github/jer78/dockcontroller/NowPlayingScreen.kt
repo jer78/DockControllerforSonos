@@ -155,8 +155,11 @@ fun DockDashboardUI(
     DisposableEffect(Unit) {
         onDispose { spectrumAnalyzer.stop() }
     }
-    LaunchedEffect(showSpectrumAnalyzer, micPermissionGranted, trackState.isPlaying) {
-        if (showSpectrumAnalyzer && micPermissionGranted && trackState.isPlaying) {
+    // Not while the screen's off or the app's in the background - nobody
+    // can see it, and Android hands a background app silence anyway.
+    val visible = isScreenVisible()
+    LaunchedEffect(showSpectrumAnalyzer, micPermissionGranted, trackState.isPlaying, visible) {
+        if (showSpectrumAnalyzer && micPermissionGranted && trackState.isPlaying && visible) {
             spectrumAnalyzer.start(this)
         } else {
             spectrumAnalyzer.stop()
@@ -263,8 +266,8 @@ fun DockDashboardUI(
                 )
             }
     ) {
-        // A recognised TV show's own background image, when TVmaze has one,
-        // replaces the artwork - blurred the same way.
+        // A recognised TV show's own background image, when TVmaze or TMDB
+        // has one, replaces the artwork - blurred the same way.
         val backgroundBlur = (if (isTvMode && tvBackgroundBlur >= 0f) tvBackgroundBlur else musicBackgroundBlur).dp
         val backgroundUrl = trackState.tvShowLogo?.backgroundUrl?.takeIf { isTvMode } ?: artworkUrl
         if (backgroundUrl.isNotBlank()) {

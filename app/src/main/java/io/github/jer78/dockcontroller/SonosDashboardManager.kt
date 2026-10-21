@@ -168,6 +168,7 @@ class SonosDashboardManager private constructor(context: Context) {
 
     companion object {
         private const val ACTIVE_POLL_INTERVAL_MS = 2000L
+        private const val ASLEEP_AFTER_MS = 30_000L
         private const val RECENTLY_PLAYED_COUNT = 5
         private const val PLAYED_TODAY_MS = 24 * 60 * 60 * 1000L
         // "Live" as a word in the album title: "(Live)", "Live at Leeds",
@@ -246,8 +247,42 @@ class SonosDashboardManager private constructor(context: Context) {
     // onCreate, never again on resume.
     private var activeHostCount = 0
 
+    // Off the dock with the screen off, nothing's shown, so polling (and the
+    // speaker and Home Assistant subscriptions) pauses until either changes
+    // - see UndockedSleep. After ASLEEP_AFTER_MS, so a quick press of the
+    // power button doesn't drop and redo the subscriptions; waking is
+    // immediate. Main thread only, like start/stopPolling.
+    private val undockedSleep = UndockedSleep(appContext)
+    private var asleep = false
+
+    init {
+        scope.launch(Dispatchers.Main) {
+            undockedSleep.canSleep.collectLatest { canSleep ->
+                if (canSleep) delay(ASLEEP_AFTER_MS)
+                setAsleep(canSleep)
+            }
+        }
+    }
+
+    private fun setAsleep(value: Boolean) {
+        if (asleep == value) return
+        asleep = value
+        DebugLog.i("SonosDashboard", if (value) "Off the dock with the screen off - sleeping" else "Waking up")
+        if (value) pausePolling() else if (activeHostCount > 0) resumePolling()
+    }
+
     fun startPolling() {
         activeHostCount++
+        if (!asleep) resumePolling()
+    }
+
+    fun stopPolling() {
+        activeHostCount = (activeHostCount - 1).coerceAtLeast(0)
+        if (activeHostCount > 0) return
+        pausePolling()
+    }
+
+    private fun resumePolling() {
         if (pollingJob != null) return
         scope.launch {
             _favoriteArtistCache.value = settingsManager.favoriteArtistCache.first()
@@ -271,9 +306,8 @@ class SonosDashboardManager private constructor(context: Context) {
         }
     }
 
-    fun stopPolling() {
-        activeHostCount = (activeHostCount - 1).coerceAtLeast(0)
-        if (activeHostCount > 0) return
+    private fun pausePolling() {
+        if (pollingJob == null) return
         pollingJob?.cancel()
         pollingJob = null
         haEvents.stop()
