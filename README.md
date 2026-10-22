@@ -35,13 +35,15 @@ It's free and open source. If you enjoy it, you can support its development:
 
 ![TV mode showing The Amazing Race's poster, the season and episode, an ENDS AT time and the time remaining](docs/screenshots/tvmode.jpg)
 
-**NHL games** (experimental): the live matchup in place of the artwork, the penalties being served, and a summary of the goals at each intermission
+**NHL games** (experimental): the live matchup in place of the artwork, goals and the penalties being served, and a summary of the goals at each intermission
 
 | Now Playing | Intermission |
 |---|---|
 | ![Now Playing during Panthers vs. Senators: the two teams' logos on their colours, 1-1, 2nd period with 15:58 left](docs/screenshots/nhl-nowplaying.jpg) | ![2nd intermission summary: Florida 1, Ottawa 3, with each goal's scorer, assists, time and the score it made](docs/screenshots/nhl-intermission.jpg) |
 
-![Penalties: a misconduct and two offsetting fighting majors, each with the team's logo, the player's photo, the call, their penalty minutes and the time left](docs/screenshots/nhl-penalties.jpg)
+| Goal | Penalties |
+|---|---|
+| ![Goal: a huge GOAL! beside Ottawa's logo, the 1-4 score, the scorer's photo, season stats and both assists](docs/screenshots/nhl-goal.jpg) | ![Penalties: a misconduct and two offsetting fighting majors, each with the team's logo, the player's photo, the call, their penalty minutes and the time left](docs/screenshots/nhl-penalties.jpg) |
 
 ## Features
 
