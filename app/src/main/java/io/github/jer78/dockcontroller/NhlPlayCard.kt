@@ -223,29 +223,33 @@ private fun AnimatedTitle(text: String, main: Color, second: Color, logoUrl: Str
 private fun lighten(color: Color): Color =
     if (color.red + color.green + color.blue < 0.6f) lerp(color, Color.White, 0.55f) else color
 
-// The away logo, the score and the home logo, with the period's clock and
-// the power play underneath.
+// Like the summary's: each side's logo with its score beside it, big, and
+// between them the teams, the period's clock and the power play.
 @Composable
 private fun MatchupLine(score: NhlScore, subtitle: String?) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TeamLogo(score.awayLogo, 64.dp)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TeamLogo(score.awayLogo, 88.dp)
+        SummaryScore(score.awayScore, Modifier.padding(start = 16.dp), size = 72)
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 40.dp)) {
             Text(
-                "${score.awayAbbrev} ${score.awayScore}  –  ${score.homeScore} ${score.homeAbbrev}",
-                color = Color.White,
-                fontSize = 34.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 20.dp)
+                "${score.awayAbbrev}  ·  ${score.homeAbbrev}",
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 2.sp
             )
-            TeamLogo(score.homeLogo, 64.dp)
+            Text(
+                listOfNotNull(subtitle, rememberPeriodText(score)).filter { it.isNotBlank() }.joinToString("  ·  "),
+                color = Color.White.copy(alpha = 0.8f),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            score.powerPlay?.let {
+                Text(it.uppercase(), color = PenaltyColor, fontSize = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            }
         }
-        Text(
-            listOfNotNull(subtitle, rememberPeriodText(score), score.powerPlay)
-                .filter { it.isNotBlank() }.joinToString("  ·  "),
-            color = Color.White.copy(alpha = 0.65f),
-            fontSize = 18.sp,
-            fontWeight = FontWeight.SemiBold
-        )
+        SummaryScore(score.homeScore, Modifier.padding(end = 16.dp), size = 72)
+        TeamLogo(score.homeLogo, 88.dp)
     }
 }
 
@@ -346,6 +350,16 @@ private fun PenaltyBody(penalty: NhlCard.Penalty) {
     Column(verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 18.dp)) {
         calls.forEach { call ->
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // The penalized team's logo, then the player.
+                val logo = when (call.teamAbbrev) {
+                    penalty.score.homeAbbrev -> penalty.score.homeLogo
+                    penalty.score.awayAbbrev -> penalty.score.awayLogo
+                    else -> ""
+                }
+                if (logo.isNotBlank()) {
+                    TeamLogo(logo, if (big) 110.dp else if (compact) 56.dp else 72.dp)
+                    Spacer(Modifier.width(if (compact) 14.dp else 20.dp))
+                }
                 Headshot((call.player ?: call.servedBy)?.headshotUrl.orEmpty(), if (big) 150.dp else if (compact) 76.dp else 96.dp)
                 Spacer(Modifier.width(24.dp))
                 Column(Modifier.weight(1f)) {
@@ -535,9 +549,10 @@ private fun SummaryCard(summary: NhlCard.Summary) {
     }
 }
 
+// A side's score beside its logo, big.
 @Composable
-private fun SummaryScore(goals: Int, modifier: Modifier = Modifier) {
-    Text(goals.toString(), color = Color.White, fontSize = 88.sp, fontWeight = FontWeight.Black, modifier = modifier)
+private fun SummaryScore(goals: Int, modifier: Modifier = Modifier, size: Int = 88) {
+    Text(goals.toString(), color = Color.White, fontSize = size.sp, fontWeight = FontWeight.Black, modifier = modifier)
 }
 
 // One goal in a summary: when, the scorer (their season total) and the
