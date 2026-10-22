@@ -231,8 +231,11 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                     }
 
                     // TV screensaver timing - see MainActivity.
-                    LaunchedEffect(isTvMode, isTvAmbientMode, tvScreensaverDelaySeconds) {
-                        if (!isTvMode) {
+                    // Not while an NHL game being followed is on (see NhlGameWatcher) -
+                    // its goals and penalties are shown over Now Playing instead.
+                    val nhlGameOn by manager.nhlGameOn.collectAsState()
+                    LaunchedEffect(isTvMode, isTvAmbientMode, tvScreensaverDelaySeconds, nhlGameOn) {
+                        if (!isTvMode || nhlGameOn) {
                             isTvAmbientMode = false
                         } else if (!isTvAmbientMode) {
                             delay(tvScreensaverDelaySeconds * 1000L) // user-configurable TV screensaver delay
@@ -274,152 +277,159 @@ class SonosDreamService : DreamService(), LifecycleOwner, ViewModelStoreOwner, S
                         LaunchedEffect(currentScreen) {
                             if (currentScreen == DockScreen.NOW_PLAYING) screenSlide = ScreenSlide.VERTICAL
                         }
-                        AnimatedContent(
-                            targetState = currentScreen,
-                            transitionSpec = dockScreenTransitionSpec(screenSlide),
-                            modifier = Modifier.fillMaxSize(),
-                            label = "screenTransition"
-                        ) { screen ->
-                            when (screen) {
-                                DockScreen.SUGGESTIONS -> {
-                                    // Kept while it animates away, after suggestions is cleared.
-                                    val shown = remember { suggestions.orEmpty() }
-                                    val sonosApp = remember { sonosAppLaunchIntent(this@SonosDreamService) }
-                                    SuggestionsScreen(
-                                        suggestions = shown,
-                                        playingArtist = trackState.artist,
-                                        onDone = { closeSuggestions() },
-                                        onOpenSonosApp = sonosApp?.let { intent -> { openSonosApp(intent) } }
-                                    )
+                        // The NHL game on TV's goals, penalties and summaries slide in over
+                        // the screen, full screen (see NhlGameWatcher).
+                        val nhlCard by manager.nhlCard.collectAsState()
+                        NhlPlayScreenHost(nhlCard.takeIf { isTvMode }, onClose = manager::dismissNhlCard) {
+                            AnimatedContent(
+                                targetState = currentScreen,
+                                transitionSpec = dockScreenTransitionSpec(screenSlide),
+                                modifier = Modifier.fillMaxSize(),
+                                label = "screenTransition"
+                            ) { screen ->
+                                when (screen) {
+                                    DockScreen.SUGGESTIONS -> {
+                                        // Kept while it animates away, after suggestions is cleared.
+                                        val shown = remember { suggestions.orEmpty() }
+                                        val sonosApp = remember { sonosAppLaunchIntent(this@SonosDreamService) }
+                                        SuggestionsScreen(
+                                            suggestions = shown,
+                                            playingArtist = trackState.artist,
+                                            onDone = { closeSuggestions() },
+                                            onOpenSonosApp = sonosApp?.let { intent -> { openSonosApp(intent) } }
+                                        )
+                                    }
+                                    DockScreen.TV_AMBIENT -> {
+                                        TvAmbientScreen(
+                                            trackState = trackState,
+                                            onWakeUp = { isTvAmbientMode = false }
+                                        )
+                                    }
+                                    DockScreen.COVER_FLOW -> {
+                                        AmbientClockScreen(
+                                            albumHistory = albumHistory,
+                                            trackState = trackState,
+                                            onPlayAlbum = { album, rect ->
+                                                transitionSourceRect = rect
+                                                transitioningAlbum = album
+                                                manager.playAlbum(album, askIfUnplayable = true)
+                                            },
+                                            onWakeUp = { isAmbientMode = false },
+                                            use24HourClock = use24HourClock,
+                                            reflectionStrength = coverFlowReflection,
+                                            glassTableStrength = coverFlowGlassTable,
+                                            sideLightStrength = coverFlowSideLight,
+                                            onDeleteFavorite = { manager.deleteFavoriteEverywhere(it) },
+                                            initialCenterAlbum = manager.coverFlowCenterAlbum,
+                                            onCenterAlbumChanged = { manager.coverFlowCenterAlbum = it },
+                                            initialGridPosition = manager.coverFlowGridPosition,
+                                            onGridPositionChanged = { manager.coverFlowGridPosition = it },
+                                            hidePrevious = coverFlowHidePrevious,
+                                            hideNextUp = coverFlowHideNextUp,
+                                            hideNowPlaying = coverFlowHideNowPlaying,
+                                            weather = haState.firstWeather(),
+                                            gridView = coverFlowGridView,
+                                            onGridViewChange = { grid -> settingsScope.launch { settingsManager.setCoverFlowGridView(grid) } },
+                                            sortByArtist = coverFlowSortByArtist,
+                                            onSortChange = { byArtist -> settingsScope.launch { settingsManager.setCoverFlowSortByArtist(byArtist) } },
+                                            onRefreshFavorites = { onResult -> manager.refreshSavedFavorites(onResult) },
+                                            isRefreshingFavorites = refreshStatus.startsWith("Starting"),
+                                            // Clear of the Pixel Tablet's Home button and
+                                            // status line, which hub mode draws over the
+                                            // screensaver.
+                                            bottomStartInset = 96.dp,
+                                            topEndInset = 32.dp,
+                                            haState = haState,
+                                            widgetsMode = coverFlowWidgetsMode,
+                                            onHaCommand = { manager.sendHaCommand(it) },
+                                            onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
+                                            onReorderHaWidgets = { manager.reorderHaWidgets(it) },
+                                            recentlyPlayed = recentlyPlayed,
+                                            showRecentlyPlayed = gridRecentlyPlayed,
+                                            startScrolling = swappedWhilePlaying,
+                                            suggestions = if (artistSuggestions && lastFmApiKey.isNotBlank()) {
+                                                ArtistSuggestions.latestFor(trackState.artist)
+                                            } else emptyList(),
+                                            canReplayTrack = { manager.canReplay(it) },
+                                            onReplayTrack = { manager.replayTrack(it) },
+                                            paused = screenBlack,
+                                            loadAlbumTracks = { manager.albumTracks(it) },
+                                            onPlayAlbumTrack = { album, track, rect ->
+                                                transitionSourceRect = rect
+                                                transitioningAlbum = album
+                                                manager.playAlbumFromTrack(album, track)
+                                            },
+                                            onShowSuggestions = {
+                                                suggestions = ArtistSuggestions.latestFor(trackState.artist).ifEmpty { null }
+                                            }
+                                        )
+                                    }
+                                    DockScreen.NOW_PLAYING -> {
+                                        val nhlScore by manager.nhlScore.collectAsState()
+                                        DockDashboardUI(
+                                            trackState = trackState,
+                                            haState = haState,
+                                            isTvMode = isTvMode,
+                                            nhlScore = nhlScore,
+                                            currentVolume = currentVolume,
+                                            onCommand = { action -> manager.sendSonosAction(action) },
+                                            onVolumeChange = { vol -> manager.setSonosVolume(vol) },
+                                            onSpeakerVolumeChange = { name, vol -> manager.setSpeakerVolume(name, vol) },
+                                            onToggleMute = { manager.toggleMute() },
+                                            onToggleShuffle = { manager.toggleShuffle() },
+                                            onCycleRepeat = { manager.cycleRepeat() },
+                                            coverFlowGridView = coverFlowGridView,
+                                            onLoadQueue = { manager.loadQueue() },
+                                            onPlayQueueTrack = { manager.playQueueTrack(it) },
+                                            onSeek = { manager.seekTo(it) },
+                                            onEnterAmbient = { slide -> screenSlide = slide; isAmbientMode = true; transitioningAlbum = null },
+                                            albumHistory = albumHistory,
+                                            // Settings can't be scrolled inside a dream,
+                                            // so it opens in the app instead.
+                                            onOpenSettings = { openSettingsViaApp() },
+                                            speakerGroups = speakerGroups,
+                                            onToggleJoin = { name, join -> manager.toggleSpeakerJoin(name, join) },
+                                            onAlbumArtPositioned = { nowPlayingArtRect = it },
+                                            onHaCommand = { manager.sendHaCommand(it) },
+                                            onReorderHaWidgets = { manager.reorderHaWidgets(it) },
+                                            onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
+                                            musicBackgroundBlur = musicBackgroundBlur,
+                                            tvBackgroundBlur = tvBackgroundBlur,
+                                            audioSettings = audioSettings,
+                                            onToggleNightMode = { manager.toggleNightMode() },
+                                            onToggleDialogMode = { manager.toggleDialogMode() },
+                                            onSetBass = { manager.setBass(it) },
+                                            onSetTreble = { manager.setTreble(it) },
+                                            onSetLoudness = { manager.setLoudness(it) },
+                                            onToggleSubEnabled = { manager.toggleSubEnabled() },
+                                            hidePrevious = nowPlayingHidePrevious,
+                                            hideNextUp = nowPlayingHideNextUp,
+                                            clockMode = nowPlayingClockMode,
+                                            use24HourClock = use24HourClock,
+                                            showEndsAt = showEndsAt,
+                                            liveAlbumNotice = liveAlbumNotice,
+                                            onRestoreLiveAlbumSettings = { manager.restoreAfterLiveAlbum() },
+                                            onDismissLiveAlbumNotice = { manager.dismissLiveAlbumNotice() },
+                                            skippedSongNotice = skippedSongNotice,
+                                            onDismissSkippedSongNotice = { manager.dismissSkippedSongNotice() },
+                                            canReplayTrack = { manager.canReplay(it) },
+                                            onReplayTrack = { manager.replayTrack(it) },
+                                            onRefreshSpeakerSettings = {
+                                                manager.refreshSpeakerGroups()
+                                                manager.refreshAudioSettings()
+                                            },
+                                            // The Pixel Tablet's Home button, as for Cover Flow.
+                                            bottomStartInset = 96.dp,
+                                            swapWhilePlaying = swapWhilePlaying && !dialogHost.isShowingDialog,
+                                            onSwapWhilePlaying = {
+                                                screenSlide = ScreenSlide.VERTICAL
+                                                swappedWhilePlaying = true
+                                                isAmbientMode = true
+                                            }
+                                        )
+                                    }
                                 }
-                                DockScreen.TV_AMBIENT -> {
-                                    TvAmbientScreen(
-                                        trackState = trackState,
-                                        onWakeUp = { isTvAmbientMode = false }
-                                    )
-                                }
-                                DockScreen.COVER_FLOW -> {
-                                    AmbientClockScreen(
-                                        albumHistory = albumHistory,
-                                        trackState = trackState,
-                                        onPlayAlbum = { album, rect ->
-                                            transitionSourceRect = rect
-                                            transitioningAlbum = album
-                                            manager.playAlbum(album, askIfUnplayable = true)
-                                        },
-                                        onWakeUp = { isAmbientMode = false },
-                                        use24HourClock = use24HourClock,
-                                        reflectionStrength = coverFlowReflection,
-                                        glassTableStrength = coverFlowGlassTable,
-                                        sideLightStrength = coverFlowSideLight,
-                                        onDeleteFavorite = { manager.deleteFavoriteEverywhere(it) },
-                                        initialCenterAlbum = manager.coverFlowCenterAlbum,
-                                        onCenterAlbumChanged = { manager.coverFlowCenterAlbum = it },
-                                        initialGridPosition = manager.coverFlowGridPosition,
-                                        onGridPositionChanged = { manager.coverFlowGridPosition = it },
-                                        hidePrevious = coverFlowHidePrevious,
-                                        hideNextUp = coverFlowHideNextUp,
-                                        hideNowPlaying = coverFlowHideNowPlaying,
-                                        weather = haState.firstWeather(),
-                                        gridView = coverFlowGridView,
-                                        onGridViewChange = { grid -> settingsScope.launch { settingsManager.setCoverFlowGridView(grid) } },
-                                        sortByArtist = coverFlowSortByArtist,
-                                        onSortChange = { byArtist -> settingsScope.launch { settingsManager.setCoverFlowSortByArtist(byArtist) } },
-                                        onRefreshFavorites = { onResult -> manager.refreshSavedFavorites(onResult) },
-                                        isRefreshingFavorites = refreshStatus.startsWith("Starting"),
-                                        // Clear of the Pixel Tablet's Home button and
-                                        // status line, which hub mode draws over the
-                                        // screensaver.
-                                        bottomStartInset = 96.dp,
-                                        topEndInset = 32.dp,
-                                        haState = haState,
-                                        widgetsMode = coverFlowWidgetsMode,
-                                        onHaCommand = { manager.sendHaCommand(it) },
-                                        onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
-                                        onReorderHaWidgets = { manager.reorderHaWidgets(it) },
-                                        recentlyPlayed = recentlyPlayed,
-                                        showRecentlyPlayed = gridRecentlyPlayed,
-                                        startScrolling = swappedWhilePlaying,
-                                        suggestions = if (artistSuggestions && lastFmApiKey.isNotBlank()) {
-                                            ArtistSuggestions.latestFor(trackState.artist)
-                                        } else emptyList(),
-                                        canReplayTrack = { manager.canReplay(it) },
-                                        onReplayTrack = { manager.replayTrack(it) },
-                                        paused = screenBlack,
-                                        loadAlbumTracks = { manager.albumTracks(it) },
-                                        onPlayAlbumTrack = { album, track, rect ->
-                                            transitionSourceRect = rect
-                                            transitioningAlbum = album
-                                            manager.playAlbumFromTrack(album, track)
-                                        },
-                                        onShowSuggestions = {
-                                            suggestions = ArtistSuggestions.latestFor(trackState.artist).ifEmpty { null }
-                                        }
-                                    )
-                                }
-                                DockScreen.NOW_PLAYING -> {
-                                    DockDashboardUI(
-                                        trackState = trackState,
-                                        haState = haState,
-                                        isTvMode = isTvMode,
-                                        currentVolume = currentVolume,
-                                        onCommand = { action -> manager.sendSonosAction(action) },
-                                        onVolumeChange = { vol -> manager.setSonosVolume(vol) },
-                                        onSpeakerVolumeChange = { name, vol -> manager.setSpeakerVolume(name, vol) },
-                                        onToggleMute = { manager.toggleMute() },
-                                        onToggleShuffle = { manager.toggleShuffle() },
-                                        onCycleRepeat = { manager.cycleRepeat() },
-                                        coverFlowGridView = coverFlowGridView,
-                                        onLoadQueue = { manager.loadQueue() },
-                                        onPlayQueueTrack = { manager.playQueueTrack(it) },
-                                        onSeek = { manager.seekTo(it) },
-                                        onEnterAmbient = { slide -> screenSlide = slide; isAmbientMode = true; transitioningAlbum = null },
-                                        albumHistory = albumHistory,
-                                        // Settings can't be scrolled inside a dream,
-                                        // so it opens in the app instead.
-                                        onOpenSettings = { openSettingsViaApp() },
-                                        speakerGroups = speakerGroups,
-                                        onToggleJoin = { name, join -> manager.toggleSpeakerJoin(name, join) },
-                                        onAlbumArtPositioned = { nowPlayingArtRect = it },
-                                        onHaCommand = { manager.sendHaCommand(it) },
-                                        onReorderHaWidgets = { manager.reorderHaWidgets(it) },
-                                        onHaCommandWithResult = { command, onResult -> manager.sendHaCommand(command, onResult) },
-                                        musicBackgroundBlur = musicBackgroundBlur,
-                                        tvBackgroundBlur = tvBackgroundBlur,
-                                        audioSettings = audioSettings,
-                                        onToggleNightMode = { manager.toggleNightMode() },
-                                        onToggleDialogMode = { manager.toggleDialogMode() },
-                                        onSetBass = { manager.setBass(it) },
-                                        onSetTreble = { manager.setTreble(it) },
-                                        onSetLoudness = { manager.setLoudness(it) },
-                                        onToggleSubEnabled = { manager.toggleSubEnabled() },
-                                        hidePrevious = nowPlayingHidePrevious,
-                                        hideNextUp = nowPlayingHideNextUp,
-                                        clockMode = nowPlayingClockMode,
-                                        use24HourClock = use24HourClock,
-                                        showEndsAt = showEndsAt,
-                                        liveAlbumNotice = liveAlbumNotice,
-                                        onRestoreLiveAlbumSettings = { manager.restoreAfterLiveAlbum() },
-                                        onDismissLiveAlbumNotice = { manager.dismissLiveAlbumNotice() },
-                                        skippedSongNotice = skippedSongNotice,
-                                        onDismissSkippedSongNotice = { manager.dismissSkippedSongNotice() },
-                                        canReplayTrack = { manager.canReplay(it) },
-                                        onReplayTrack = { manager.replayTrack(it) },
-                                        onRefreshSpeakerSettings = {
-                                            manager.refreshSpeakerGroups()
-                                            manager.refreshAudioSettings()
-                                        },
-                                        // The Pixel Tablet's Home button, as for Cover Flow.
-                                        bottomStartInset = 96.dp,
-                                        swapWhilePlaying = swapWhilePlaying && !dialogHost.isShowingDialog,
-                                        onSwapWhilePlaying = {
-                                            screenSlide = ScreenSlide.VERTICAL
-                                            swappedWhilePlaying = true
-                                            isAmbientMode = true
-                                        }
-                                    )
-                                }
-                            }
+                        }
                         }
 
                         // Error Flash Box

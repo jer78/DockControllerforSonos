@@ -116,6 +116,14 @@ class SettingsManager(private val context: Context) {
         // player's time remaining jumps up - a sign a commercial break just
         // ended (see SonosDashboardManager.maybeAutoUnmuteAfterAds).
         val AUTO_UNMUTE_AFTER_ADS = booleanPreferencesKey("auto_unmute_after_ads")
+        // Experimental: in TV mode, a "Team vs Team" title is matched to
+        // today's NHL game, and its goals and penalties are shown as they
+        // happen (see NhlGames). Off by default.
+        val NHL_PLAY_ALERTS = booleanPreferencesKey("nhl_play_alerts")
+        // How long the NHL game's updates are held back, to match a stream
+        // that runs behind (see NhlGameWatcher). 0 by default.
+        val NHL_PLAY_DELAY_SECONDS = intPreferencesKey("nhl_play_delay_seconds")
+        const val NHL_PLAY_DELAY_MAX_SECONDS = 120
         // TV mode: replace Home Assistant's artwork with the show's logo or
         // poster from TMDB / TVmaze (see TvShowLogos). Off uses HA's images.
         val TV_SHOW_IMAGES = booleanPreferencesKey("tv_show_images")
@@ -416,6 +424,18 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setAutoUnmuteAfterAds(enabled: Boolean) {
         context.dataStore.edit { it[AUTO_UNMUTE_AFTER_ADS] = enabled }
+    }
+
+    val nhlPlayAlerts: Flow<Boolean> = context.dataStore.data.map { it[NHL_PLAY_ALERTS] ?: false }
+
+    suspend fun setNhlPlayAlerts(enabled: Boolean) {
+        context.dataStore.edit { it[NHL_PLAY_ALERTS] = enabled }
+    }
+
+    val nhlPlayDelaySeconds: Flow<Int> = context.dataStore.data.map { it[NHL_PLAY_DELAY_SECONDS] ?: 0 }
+
+    suspend fun setNhlPlayDelaySeconds(seconds: Int) {
+        context.dataStore.edit { it[NHL_PLAY_DELAY_SECONDS] = seconds.coerceIn(0, NHL_PLAY_DELAY_MAX_SECONDS) }
     }
 
     val tvShowImages: Flow<Boolean> = context.dataStore.data.map { it[TV_SHOW_IMAGES] ?: true }

@@ -35,6 +35,12 @@ It's free and open source. If you enjoy it, you can support its development:
 
 ![TV mode showing The Amazing Race's poster, the season and episode, an ENDS AT time and the time remaining](docs/screenshots/tvmode.jpg)
 
+**NHL games** (experimental): the live matchup in place of the artwork, and a summary of the goals at each intermission
+
+| Now Playing | Intermission |
+|---|---|
+| ![Now Playing during Panthers vs. Senators: the two teams' logos on their colours, 1-1, 2nd period with 15:58 left](docs/screenshots/nhl-nowplaying.jpg) | ![2nd intermission summary: Florida 1, Ottawa 3, with each goal's scorer, assists, time and the score it made](docs/screenshots/nhl-intermission.jpg) |
+
 ## Features
 
 **Now Playing**
@@ -331,6 +337,37 @@ Experimental**.
   Google. Restricting the key to the YouTube Data API v3 in Google Cloud
   is recommended.
 
+### NHL Goals & Penalties
+
+Watching an NHL game in TV mode? The dock follows it live. Turn it on in
+**Settings → Home Assistant → Experimental**.
+
+- **How it works**: when what's on has "vs" in it ("Panthers vs.
+  Senators", "Florida vs Ottawa", "FLA vs OTT"), it's matched to one of
+  today's NHL games by team name, city or abbreviation. The game's
+  play-by-play is then checked every 10 seconds.
+- **Now Playing**: the artwork becomes the matchup - both teams' logos on
+  their colours, the score, the period and its clock, and who's on the
+  power play with its time left.
+- **Goals**: the screen slides over to a full-screen **GOAL!** in the
+  scoring team's colours, with the scorer's photo, their goals this season
+  and season stats, and the assists.
+- **Penalties**: every penalty still being served, each with the player,
+  the call, who drew it, their penalty minutes and a countdown.
+- **Intermissions and the final**: a summary of the goals so far, then
+  each side's goals once it's over.
+- Each stays up until the next goal or penalty, the penalties end, or you
+  tap the X. The TV screensaver holds off while the game's on.
+- **Delay**: the NHL's data often arrives before a streaming broadcast
+  shows the play, so a goal can appear before you see it. Set **Delay**
+  (up to 2 minutes) to hold everything back by about how far behind your
+  stream runs.
+- **Limits**: this uses the NHL's own unofficial web API - free and
+  without a key, but undocumented, so it can change or stop working at
+  any time. It isn't affiliated with or endorsed by the NHL; team names,
+  logos and player photos belong to the NHL and its teams, and are loaded
+  from the NHL's site while a game is on, not included in the app.
+
 ## What you need
 
 - An Android tablet or phone running Android 8 or newer. **It has only been
@@ -352,7 +389,7 @@ Do all of this **on the tablet itself**.
 1. **Download the app.** On the tablet, open the
    [latest release page](https://github.com/jer78/DockControllerforSonos/releases/latest).
    Scroll down to **Assets** and tap the file ending in **.apk** (for example
-   `DockController-v1.0.43.apk`). It's about 55 MB.
+   `DockController-v1.0.44.apk`). It's about 55 MB.
 2. **If Chrome warns you about the file** ("This type of file can harm your
    device"), tap **Download anyway**.
 3. **Open the file.** When the download finishes, tap **Open** in the message
@@ -383,7 +420,7 @@ number** seven times, then Settings → System → Developer options), connect i
 by USB, and run:
 
 ```
-adb install -r DockController-v1.0.43.apk
+adb install -r DockController-v1.0.44.apk
 ```
 
 Every release is signed with the same key. If Android says **App not

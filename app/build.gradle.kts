@@ -12,8 +12,8 @@ android {
         applicationId = "io.github.jer78.dockcontroller"
         minSdk = 26
         targetSdk = 35
-        versionCode = 44
-        versionName = "1.0.43"
+        versionCode = 45
+        versionName = "1.0.44"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -84,11 +84,13 @@ dependencies {
     // album-art spectrum color scheme, and Extended Icons
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.coil.compose)
+    implementation(libs.coil.svg)
     implementation(libs.okhttp)
     implementation(libs.androidx.palette.ktx)
     implementation(libs.androidx.material.icons.extended)
 
     testImplementation(libs.junit)
+    testImplementation(libs.org.json)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }

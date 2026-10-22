@@ -1,0 +1,22 @@
+{
+ "games": [
+  {
+   "id": 2026020141,
+   "gameState": "LIVE",
+   "awayTeam": {
+    "id": 28,
+    "name": {
+     "default": "Sharks"
+    },
+    "abbrev": "SJS"
+   },
+   "homeTeam": {
+    "id": 8,
+    "name": {
+     "default": "Canadiens"
+    },
+    "abbrev": "MTL"
+   }
+  }
+ ]
+}

@@ -61,6 +61,8 @@ fun DockDashboardUI(
     trackState: TrackState,
     haState: HAState,
     isTvMode: Boolean,
+    // The followed NHL game's score, shown in place of the artwork (TV mode).
+    nhlScore: NhlScore? = null,
     currentVolume: Float,
     onCommand: (String) -> Unit,
     onVolumeChange: (Float) -> Unit,
@@ -435,7 +437,10 @@ fun DockDashboardUI(
                             }
                     ) {
                         val showLogo = trackState.tvShowLogo
-                        if (isTvMode && showLogo != null) {
+                        if (isTvMode && nhlScore != null) {
+                            // The NHL game on TV: the matchup, live.
+                            NhlMatchupArt(nhlScore)
+                        } else if (isTvMode && showLogo != null) {
                             TvShowLogoArt(logo = showLogo, artworkUrl = artworkUrl, showName = trackState.seriesTitle)
                         } else if (artworkUrl.isNotBlank()) {
                             AsyncImage(
@@ -541,6 +546,11 @@ fun DockDashboardUI(
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
+                }
+
+                // The NHL game on TV's power play, under the matchup.
+                if (isTvMode && nhlScore?.powerPlay != null) {
+                    NhlPowerPlayPill(nhlScore, Modifier.align(Alignment.CenterHorizontally).padding(top = 16.dp))
                 }
             }
 

@@ -1,0 +1,39 @@
+{
+ "featuredStats": {
+  "season": 20262027,
+  "regularSeason": {
+   "subSeason": {
+    "assists": 3,
+    "gameWinningGoals": 0,
+    "gamesPlayed": 7,
+    "goals": 0,
+    "otGoals": 0,
+    "pim": 4,
+    "plusMinus": -5,
+    "points": 3,
+    "powerPlayGoals": 0,
+    "powerPlayPoints": 1,
+    "shootingPctg": 0.0,
+    "shorthandedGoals": 0,
+    "shorthandedPoints": 0,
+    "shots": 11
+   },
+   "career": {
+    "assists": 287,
+    "gameWinningGoals": 29,
+    "gamesPlayed": 811,
+    "goals": 122,
+    "otGoals": 7,
+    "pim": 564,
+    "plusMinus": 86,
+    "points": 409,
+    "powerPlayGoals": 42,
+    "powerPlayPoints": 128,
+    "shootingPctg": 0.0641,
+    "shorthandedGoals": 2,
+    "shorthandedPoints": 9,
+    "shots": 1902
+   }
+  }
+ }
+}

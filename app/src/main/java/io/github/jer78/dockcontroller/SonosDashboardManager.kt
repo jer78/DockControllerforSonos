@@ -310,6 +310,7 @@ class SonosDashboardManager private constructor(context: Context) {
         if (pollingJob == null) return
         pollingJob?.cancel()
         pollingJob = null
+        nhlWatcher.stop()
         haEvents.stop()
         // The poll loop may be blocked in wait_for_change - wake it so it
         // sees the cancellation now, and drop the speaker subscriptions.
@@ -773,6 +774,8 @@ class SonosDashboardManager private constructor(context: Context) {
                             val tmdbKey = settingsManager.tmdbApiKey.first()
                             val tvShowImages = settingsManager.tvShowImages.first()
                             val showCast = settingsManager.tvShowCast.first()
+                            val nhlAlerts = settingsManager.nhlPlayAlerts.first()
+                            val nhlDelay = settingsManager.nhlPlayDelaySeconds.first()
                             val youTubeThumbs = settingsManager.youTubeThumbnails.first()
                             val youTubeKey = settingsManager.youTubeApiKey.first()
                             val youTubeQuotaReached = youTubeThumbs && settingsManager.youTubeUsage.first().quotaReached
@@ -780,6 +783,11 @@ class SonosDashboardManager private constructor(context: Context) {
                             if (haMedia.isNotBlank()) {
                                 haManager.fetchHAMediaPlayer(url, token, haMedia) { haTrack ->
                                     maybeAutoUnmuteAfterAds(haTrack, speaker, muted, autoUnmute)
+                                    if (nhlAlerts) {
+                                        nhlWatcher.follow(listOf(haTrack.title, haTrack.artist, haTrack.album, haTrack.seriesTitle), nhlDelay)
+                                    } else {
+                                        nhlWatcher.stop()
+                                    }
                                     val showLogo = if (tvShowImages) tvShowLogoFor(haTrack, tmdbKey) else null
                                     val cast = if (showCast) tvCastFor(haTrack, tmdbKey) else emptyList()
                                     val art = haTrack.albumArtUrl.ifBlank {
@@ -808,6 +816,7 @@ class SonosDashboardManager private constructor(context: Context) {
                                     )}
                                 }
                             } else {
+                                nhlWatcher.stop()
                                 _trackState.update { it.copy(
                                     title = "TV Mode",
                                     artist = "Select HA Entity",
@@ -829,6 +838,7 @@ class SonosDashboardManager private constructor(context: Context) {
                             }
                         } else {
                             lastTvRemainingSeconds = null
+                            nhlWatcher.stop()
                             val title = pyDict[PyObject.fromJava("title")]?.toString() ?: ""
                             val artist = pyDict[PyObject.fromJava("artist")]?.toString() ?: ""
                             val album = pyDict[PyObject.fromJava("album")]?.toString() ?: ""
@@ -1003,6 +1013,13 @@ class SonosDashboardManager private constructor(context: Context) {
     private val tvArtwork = TvArtworkStore.getInstance(appContext)
     private val tvShowLogos = TvShowLogos(tvArtwork)
     private val tvShowCast = TvShowCast.getInstance(appContext)
+
+    // Experimental: the NHL game on TV's goals and penalties (see NhlGames).
+    private val nhlWatcher = NhlGameWatcher(scope)
+    val nhlCard: StateFlow<NhlCard?> = nhlWatcher.card
+    val nhlGameOn: StateFlow<Boolean> = nhlWatcher.gameOn
+    val nhlScore: StateFlow<NhlScore?> = nhlWatcher.score
+    fun dismissNhlCard() = nhlWatcher.dismiss()
 
     // The cast of the TV show in this HA track, for the TV screensaver, if
     // one's recognised and already looked up - the season's own (from TMDB,

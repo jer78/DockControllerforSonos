@@ -466,6 +466,9 @@ fun SettingsModal(
     var gridRecentlyPlayed by remember { mutableStateOf(true) }
     var coverFlowMotionSensor by remember { mutableStateOf("") }
     var autoUnmuteAfterAds by remember { mutableStateOf(false) }
+    var nhlPlayAlerts by remember { mutableStateOf(false) }
+    var nhlPlayDelaySeconds by remember { mutableIntStateOf(0) }
+    var pendingNhlDelay by remember { mutableStateOf<Job?>(null) }
     var tvShowImages by remember { mutableStateOf(true) }
     var tvShowCast by remember { mutableStateOf(true) }
     var continueWithRandomAlbum by remember { mutableStateOf(false) }
@@ -560,6 +563,8 @@ fun SettingsModal(
         gridRecentlyPlayed = settingsManager.gridRecentlyPlayed.first()
         coverFlowMotionSensor = settingsManager.coverFlowMotionSensor.first()
         autoUnmuteAfterAds = settingsManager.autoUnmuteAfterAds.first()
+        nhlPlayAlerts = settingsManager.nhlPlayAlerts.first()
+        nhlPlayDelaySeconds = settingsManager.nhlPlayDelaySeconds.first()
         tvShowImages = settingsManager.tvShowImages.first()
         tvShowCast = settingsManager.tvShowCast.first()
         continueWithRandomAlbum = settingsManager.continueWithRandomAlbum.first()
@@ -1388,6 +1393,41 @@ fun SettingsModal(
                                         fontSize = 12.sp,
                                         color = Color.Gray
                                     )
+                                    SettingsToggleRow("NHL Goals & Penalties", nhlPlayAlerts) {
+                                        nhlPlayAlerts = it
+                                        scope.launch { settingsManager.setNhlPlayAlerts(it) }
+                                    }
+                                    Text(
+                                        "When what's on has \"vs\" in it and the teams match one of today's NHL games, each goal " +
+                                            "(the scorer, assists and their season stats) and penalty (the player, the call " +
+                                            "and their penalty minutes) is shown as it happens - until the next one, the penalty " +
+                                            "ends, or you close it. Uses the NHL's unofficial API, which can be ahead of or behind " +
+                                            "the broadcast.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                    if (nhlPlayAlerts) {
+                                        Text(
+                                            if (nhlPlayDelaySeconds == 0) "Delay: none - goals can show before the stream does"
+                                            else "Delay: $nhlPlayDelaySeconds seconds - everything shows that much later, to match the stream",
+                                            fontSize = 12.sp,
+                                            color = Color.Gray
+                                        )
+                                        Slider(
+                                            value = nhlPlayDelaySeconds.toFloat(),
+                                            onValueChange = {
+                                                nhlPlayDelaySeconds = (it.roundToInt() / 5) * 5
+                                                pendingNhlDelay?.cancel()
+                                                pendingNhlDelay = scope.launch {
+                                                    delay(300)
+                                                    settingsManager.setNhlPlayDelaySeconds(nhlPlayDelaySeconds)
+                                                }
+                                            },
+                                            valueRange = 0f..SettingsManager.NHL_PLAY_DELAY_MAX_SECONDS.toFloat(),
+                                            // One tick per 5s step.
+                                            steps = SettingsManager.NHL_PLAY_DELAY_MAX_SECONDS / 5 - 1
+                                        )
+                                    }
                                     SettingsToggleRow("YouTube Thumbnails", youTubeThumbnails) {
                                         youTubeThumbnails = it
                                         scope.launch { settingsManager.setYouTubeThumbnails(it) }
